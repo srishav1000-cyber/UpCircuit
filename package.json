@@ -1,0 +1,42 @@
+{
+  "name": "upcircuit",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "prebuild": "node scripts/copy-ocr-assets.mjs && node scripts/sync-instruments.mjs",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "typecheck": "tsc --noEmit",
+    "sync:instruments": "node scripts/sync-instruments.mjs --force",
+    "test": "tsx scripts/verify.ts && tsx scripts/verify-auth.ts",
+    "postinstall": "node scripts/copy-ocr-assets.mjs",
+    "relay": "tsx scripts/angel-relay.ts"
+  },
+  "dependencies": {
+    "lightweight-charts": "^4.2.0",
+    "next": "^14.2.15",
+    "next-themes": "^0.4.6",
+    "pdfjs-dist": "^3.11.174",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "tesseract.js": "^5.1.1",
+    "vader-sentiment": "^1.1.3",
+    "ws": "^8.22.0"
+  },
+  "devDependencies": {
+    "@tesseract.js-data/eng": "^1.0.0",
+    "@types/node": "^20.14.0",
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
+    "@types/ws": "^8.18.2",
+    "autoprefixer": "^10.4.19",
+    "eslint": "^8.57.0",
+    "eslint-config-next": "^14.2.15",
+    "postcss": "^8.4.38",
+    "tailwindcss": "^3.4.4",
+    "tsx": "^4.23.15",
+    "typescript": "^5.5.0"
+  }
+}

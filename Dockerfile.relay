@@ -1,0 +1,10 @@
+FROM node:20-slim
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci --ignore-scripts
+COPY tsconfig.json ./
+COPY lib ./lib
+COPY scripts/angel-relay.ts ./scripts/angel-relay.ts
+ENV NODE_ENV=production
+EXPOSE 8787
+CMD ["npx", "tsx", "scripts/angel-relay.ts"]

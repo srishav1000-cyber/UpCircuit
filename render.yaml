@@ -1,0 +1,19 @@
+# Render Blueprint — the SmartAPI WebSocket relay. Free instances sleep after ~15 min idle (fine for demos; use an always-on host during market hours).
+services:
+  - type: web
+    name: upcircuit-relay
+    runtime: docker
+    dockerfilePath: ./Dockerfile.relay
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: RELAY_ALLOWED_ORIGIN
+        value: https://YOUR-APP-DOMAIN        # comma-separate several origins
+      - key: SMARTAPI_API_KEY
+        sync: false
+      - key: SMARTAPI_CLIENT_CODE
+        sync: false
+      - key: SMARTAPI_PASSWORD
+        sync: false
+      - key: SMARTAPI_TOTP_SECRET
+        sync: false
