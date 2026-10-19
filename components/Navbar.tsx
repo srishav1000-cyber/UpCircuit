@@ -5,6 +5,7 @@ import type { IndexQuote, Instrument } from '@/lib/types';
 import { FEED_BADGE, smartApiStatus, type FeedConn, type FeedMode, type FeedSource, type Health } from '@/lib/market';
 import type { Persona } from '@/lib/personas';
 import { useDismiss } from '@/hooks/useClickOutside';
+import { testChime } from '@/lib/chime';
 import { AnalysisActions } from './AnalysisActions';
 import { IndexCard } from './IndexCard';
 import { SearchBox } from './SearchBox';
@@ -21,6 +22,12 @@ interface Props {
   onPersona: (p: Persona) => void;
   /** open the plans dialog */
   onPlans?: () => void;
+  /** 🔔 circuit-alert chimes */
+  audioOn?: boolean;
+  onToggleAudio?: () => void;
+  /** circuit hits this session (badge on the sound/log menu) */
+  circuitCount?: number;
+  onOpenCircuitLog?: () => void;
   indices: IndexQuote[];
   instruments: Instrument[];
   /** a stock was chosen from universal search → open research */
@@ -67,6 +74,46 @@ function UploadButton({ onClick, className = '' }: { onClick: () => void; classN
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
         <path d="M12 16V4m0 0-4 4m4-4 4 4M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3" />
       </svg>
+    </button>
+  );
+}
+
+/** 🔊 sound-test + circuit-log menu: verify speakers / pitch before market open without waiting for a real breach. */
+export function SoundMenu({ count, onOpenLog }: { count: number; onOpenLog?: () => void }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  const close = useCallback(() => setOpen(false), []);
+  useDismiss(ref, open, close);
+  const item = 'block w-full px-3 py-1.5 text-left text-ink hover:bg-line';
+  return (
+    <div ref={ref} className="relative shrink-0" data-testid="sound-menu">
+      <button onClick={() => setOpen((o) => !o)} aria-haspopup="menu" aria-expanded={open} aria-label="Sound test and circuit log" data-testid="sound-menu-trigger" className="flex h-8 items-center gap-1 rounded-md border border-line px-2 text-[11px] font-semibold text-muted hover:bg-line hover:text-ink">
+        <span aria-hidden>🔊</span>
+        {count > 0 && <span className="num rounded-full bg-accent/20 px-1.5 text-accent">{count}</span>}
+      </button>
+      {open && (
+        <div role="menu" className="absolute right-0 top-full z-50 mt-1 w-52 overflow-hidden rounded-md border border-line bg-panel text-[12px] shadow-xl">
+          <button role="menuitem" data-testid="menu-test-upper" className={item} onClick={() => void testChime('upper')}>▲ Test Upper Chime</button>
+          <button role="menuitem" data-testid="menu-test-lower" className={item} onClick={() => void testChime('lower')}>▼ Test Lower Chime</button>
+          <button role="menuitem" data-testid="menu-circuit-log" className={`${item} border-t border-line`} onClick={() => { close(); onOpenLog?.(); }}>📋 Circuit Hit Log ({count})</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function AudioToggle({ on, onToggle }: { on: boolean; onToggle: () => void }) {
+  return (
+    <button
+      onClick={onToggle}
+      aria-pressed={on}
+      data-testid="audio-toggle"
+      title={on ? 'Circuit alert chimes are on — click to mute' : 'Circuit alert chimes are muted — click to enable'}
+      className={`flex h-8 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border px-2 text-[11px] font-semibold transition ${on ? 'border-accent/60 bg-accent/10 text-accent' : 'border-line text-muted hover:bg-line'}`}
+    >
+      <span aria-hidden>{on ? '🔔' : '🔕'}</span>
+      <span className="hidden xl:inline">Audio Alerts {on ? 'ON' : 'OFF'}</span>
+      <span className="sr-only xl:hidden">Audio alerts {on ? 'on' : 'off'}</span>
     </button>
   );
 }
@@ -296,7 +343,7 @@ function AvatarMenu({ mode, onPlans }: { mode: FeedMode; onPlans?: () => void })
         <div role="menu" className="absolute right-0 top-full z-50 mt-2 w-60 rounded-md border border-line bg-panel py-1 text-[13px] shadow-2xl shadow-black/40">
           <div className="border-b border-line px-3 py-2">
             <div className="truncate font-semibold text-ink" data-testid="account-email">{email}</div>
-            <div className="text-[11px] text-muted" data-testid="account-plan">Tier {planOf(user?.plan).tier} · {planOf(user?.plan).name} · {mode === 'live' ? 'Live feed' : mode === 'snapshot' ? 'Off-market · relay data' : mode === 'replay' ? 'Off-market replay' : 'Simulated feed'}</div>
+            <div className="text-[11px] text-muted" data-testid="account-plan">Tier {planOf(user?.plan).tier} · {planOf(user?.plan).name} · {mode === 'live' ? 'Live feed' : mode === 'snapshot' ? 'Off-market · relay data' : 'Real Yahoo data (delayed)'}</div>
           </div>
           <button role="menuitem" data-testid="account-plans" className="block w-full px-3 py-1.5 text-left text-ink hover:bg-line" onClick={() => { close(); onPlans?.(); }}>💳 Plans &amp; upgrade</button>
           {required && (
@@ -309,7 +356,7 @@ function AvatarMenu({ mode, onPlans }: { mode: FeedMode; onPlans?: () => void })
 }
 
 
-export function Navbar({ view, onView, persona, onPersona, onPlans, indices, instruments, onSelect, onOpenIndex, symbol, watchlisted, activeAlerts, onDeepResearch, onToggleWatchlist, onSetAlert, searchRef, mode, source, conn, onOpenWatchlist, priceOf, onOpenImport, onAsk }: Props) {
+export function Navbar({ view, onView, persona, onPersona, onPlans, audioOn = true, onToggleAudio, circuitCount = 0, onOpenCircuitLog, indices, instruments, onSelect, onOpenIndex, symbol, watchlisted, activeAlerts, onDeepResearch, onToggleWatchlist, onSetAlert, searchRef, mode, source, conn, onOpenWatchlist, priceOf, onOpenImport, onAsk }: Props) {
   const actionProps = { symbol, watchlisted, activeAlerts, onDeepResearch, onToggleWatchlist, onSetAlert, onOpenWatchlist };
   return (
     <header className="relative">
@@ -337,6 +384,8 @@ export function Navbar({ view, onView, persona, onPersona, onPlans, indices, ins
         <PersonaDropdown persona={persona} onPersona={onPersona} className="hidden sm:block" />
         <UploadButton onClick={onOpenImport} className="hidden md:flex" />
         <AskButton onClick={onAsk} />
+        {onToggleAudio && <AudioToggle on={audioOn} onToggle={onToggleAudio} />}
+        {onToggleAudio && <SoundMenu count={circuitCount} onOpenLog={onOpenCircuitLog} />}
         <ThemeToggle />
         <ActionsMenu {...actionProps} className="hidden md:block min-[1400px]:hidden" />
         <div className="hidden items-center gap-2 min-[1400px]:flex">

@@ -142,10 +142,10 @@ const HEADERS = { 'User-Agent': 'Mozilla/5.0 (compatible; UpCircuit)', Accept: '
 const MODULES = 'summaryDetail,defaultKeyStatistics,financialData,price,incomeStatementHistory,incomeStatementHistoryQuarterly';
 const TS_TYPES = 'quarterlyTotalRevenue,quarterlyTotalExpenses,quarterlyEBITDA,quarterlyOperatingIncome,quarterlyNetIncome,quarterlyDilutedEPS,annualEBIT,annualTotalAssets,annualCurrentLiabilities';
 
-interface Session { cookie: string; crumb: string; exp: number }
+export interface Session { cookie: string; crumb: string; exp: number }
 let session: Session | null = null;
 
-async function getSession(base: string, cookieUrl: string, force = false, timeoutMs = 6000): Promise<Session | null> {
+export async function getSession(base: string, cookieUrl: string, force = false, timeoutMs = 6000): Promise<Session | null> {
   if (!force && session && session.exp > Date.now()) return session;
   try {
     const c = await fetch(cookieUrl, { headers: HEADERS, redirect: 'manual', signal: AbortSignal.timeout(timeoutMs) });

@@ -188,7 +188,7 @@ export function AskUpCircuitDrawer({ open, onClose, getContext, request, focusSy
           {msgs.length === 0 && (
             <div className="text-[12.5px] text-muted">
               <p className="mb-2">Ask about the market, a stock, or your portfolio — concentration, diversification, sector exposure, rebalancing, P&amp;L, news.</p>
-              <p className="text-[11px]">Answers use the live data on screen. Prices are simulated unless the feed badge says LIVE.</p>
+              <p className="text-[11px]">Answers use the live data on screen. Prices are real; they are delayed (~15 min) unless the feed badge says LIVE.</p>
             </div>
           )}
           {msgs.map((m) => (

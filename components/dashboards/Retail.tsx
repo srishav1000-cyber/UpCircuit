@@ -6,7 +6,7 @@ import { BarChart, CARD_GRID, Donut, LineChart, WIDE } from './charts';
 import { C, alpha } from '@/lib/theme';
 import { fmt, fmtInt, fmtPct, fmtSigned, fmtSignedRupee, tone } from '@/lib/format';
 import { cumulativeReturnPct, dividendForecast, portfolioDiagnostics, portfolioSummary, portfolioValueSeries, rsi14 } from '@/lib/analytics';
-import { IST_OFFSET, generateHistory } from '@/lib/market';
+import { IST_OFFSET } from '@/lib/market';
 import { ExportReport } from '../ExportReport';
 import type { DashboardProps } from './types';
 
@@ -28,15 +28,16 @@ export function RetailDashboard({ engine, quote, closes1D, holdings, favorites, 
   const [win, setWin] = useState<(typeof WINDOWS)[number]>(WINDOWS[2]);
   const [alloc, setAlloc] = useState<'stock' | 'sector'>('stock');
 
-  // per-holding daily history: fixed shape, last bar follows the live price
+  // per-holding REAL daily closes (Yahoo, ≈1 year); the last bar follows the live price
   const symKey = holdings.map((h) => h.symbol).join(',');
-  const bases = useMemo(() => {
-    const now = Date.now();
-    return Object.fromEntries(holdings.map((h) => [h.symbol, generateHistory(h.symbol, '1D', engine.touch(h.symbol)?.ltp ?? h.avg, now).map((c) => c.close)]));
+  const bases = useMemo(
+    () => Object.fromEntries(holdings.map((h) => [h.symbol, engine.closes(h.symbol)])),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [symKey, engine]);
+    [symKey, engine, engine.histVer],
+  );
   const nifty = engine.indices[0];
-  const niftyBase = useMemo(() => generateHistory('NIFTY 50', '1D', nifty.value, Date.now(), 'INDEX').map((c) => c.close), [nifty.value]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const niftyBase = useMemo(() => engine.closes('NIFTY'), [engine, engine.histVer]);
 
   const rows = holdings
     .map((h) => {
@@ -45,7 +46,7 @@ export function RetailDashboard({ engine, quote, closes1D, holdings, favorites, 
       const invested = h.qty * h.avg;
       const value = h.qty * q.ltp;
       const base = bases[h.symbol];
-      const rsi = base ? rsi14([...base.slice(0, -1), q.ltp]) : null;
+      const rsi = base && base.length > 15 ? rsi14([...base.slice(0, -1), q.ltp]) : null;
       const income = (value * q.dividendYield) / 100;
       return { h, q, invested, value, pnl: value - invested, day: h.qty * (q.ltp - q.prevClose), rsi, income, yoc: invested > 0 ? (income / invested) * 100 : 0 };
     })
@@ -62,7 +63,8 @@ export function RetailDashboard({ engine, quote, closes1D, holdings, favorites, 
 
   // cumulative return vs NIFTY 50 (holdings back-cast at today's quantities)
   const cmp = useMemo(() => {
-    const live = rows.filter((r) => bases[r.h.symbol]);
+    const live = rows.filter((r) => bases[r.h.symbol]?.length > 1);
+    if (niftyBase.length < 2) return null;
     if (live.length === 0) return null;
     const closes = live.map((r) => [...bases[r.h.symbol].slice(0, -1), r.q.ltp]);
     const val = portfolioValueSeries(closes, live.map((r) => r.h.qty));
@@ -95,7 +97,7 @@ export function RetailDashboard({ engine, quote, closes1D, holdings, favorites, 
         <Stat label="Current value" value={`₹${fmt(s.current)}`} sub={`Invested ₹${fmt(s.invested)}`} />
         <Stat label="Total P&L" value={fmtSignedRupee(s.pnl)} valueClass={tone(s.pnl)} sub={fmtPct(s.pnlPct)} hint="Σ(LTP × Qty) − Invested" />
         <Stat label="Today's gain / loss" value={fmtSignedRupee(s.dayPnl)} valueClass={tone(s.dayPnl)} sub={fmtPct(s.dayPct)} />
-        <Stat label="Dividend yield" value={portfolioYield.toFixed(2) + '%'} sub={`≈ ₹${fmt(income, 0)} / yr`} hint="Portfolio-weighted trailing yield (simulated)" />
+        <Stat label="Dividend yield" value={portfolioYield.toFixed(2) + '%'} sub={`≈ ₹${fmt(income, 0)} / yr`} hint="Portfolio-weighted trailing yield (Yahoo, estimated where missing)" />
         <Stat label="vs NIFTY 50" value={cmp ? <span className={tone(cmp.pEnd - cmp.bEnd)}>{fmtPct(cmp.pEnd - cmp.bEnd, 1)}</span> : '—'} sub={cmp ? `${win.k}: you ${fmtPct(cmp.pEnd, 1)} · index ${fmtPct(cmp.bEnd, 1)}` : undefined} hint="Back-cast of today's holdings vs the index over the selected window" />
         <Stat label="Diversification" value={diag ? `${diag.diversification}/100` : '—'} valueClass={diag ? (diag.diversification >= 55 ? 'text-up' : diag.diversification >= 35 ? 'text-warn' : 'text-down') : ''} sub={diag ? `${diag.diversificationLabel} · concentration ${diag.concentration}` : undefined} />
       </div>
@@ -181,7 +183,7 @@ export function RetailDashboard({ engine, quote, closes1D, holdings, favorites, 
               <span className="flex items-center gap-1.5"><span className="h-0.5 w-4" style={{ background: C.warn }} />NIFTY 50 <b className={tone(cmp.bEnd)}>{fmtPct(cmp.bEnd, 1)}</b></span>
               <span className="text-muted">Alpha <b className={tone(cmp.pEnd - cmp.bEnd)}>{fmtPct(cmp.pEnd - cmp.bEnd, 1)}</b></span>
             </div>
-            <p className="mt-1 text-[10px] text-muted">Today’s holdings back-cast over simulated history — not your actual trade-by-trade record.</p>
+            <p className="mt-1 text-[10px] text-muted">Today’s holdings back-cast over real price history — not your actual trade-by-trade record.</p>
           </>
         ) : (
           <p className="text-[12px] text-muted">Add holdings to compare with the benchmark.</p>
@@ -212,7 +214,7 @@ export function RetailDashboard({ engine, quote, closes1D, holdings, favorites, 
                 <li key={r.h.symbol} className="flex justify-between py-1"><span>{r.h.symbol}</span><span className="text-muted">{r.q.dividendYield.toFixed(2)}%</span><span className="text-ink">₹{fmt(r.income, 0)}</span></li>
               ))}
             </ul>
-            <p className="mt-2 text-[10px] text-muted">Simulated schedule: trailing yield split into payouts on deterministic months; real ex-dates differ.</p>
+            <p className="mt-2 text-[10px] text-muted">Estimated schedule: trailing yield split into payouts on deterministic months; real ex-dates differ.</p>
           </>
         )}
       </Card>

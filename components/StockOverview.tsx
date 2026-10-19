@@ -89,7 +89,8 @@ export function StockOverview({ quote: rawQuote, engine, instruments, onOpenPeer
   const f: Fundamentals = { marketCapCr: s.marketCapCr, pe: s.pe, bookValue: s.bookValue, dividendYield: s.dividendYield, roce: s.roce, roe: s.roe, debtToEquity: s.debtToEquity, promoterHolding: s.holding.promoters, eps: s.eps };
   const [qMode, setQMode] = useState<'values' | 'qoq'>('values');
 
-  const peers = useMemo(() => peerCandidates(instruments, quote.symbol, quote.sector, 5), [instruments, quote.symbol, quote.sector]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const peers = useMemo(() => peerCandidates(instruments, quote.symbol, quote.sector, 5, (s) => engine.quotes.get(s)?.mcapCr ?? 0), [instruments, quote.symbol, quote.sector, engine, engine.lastQuotesAt]);
   const peerRows = peers.flatMap((i) => {
     try {
       const pq = engine.touch(i.symbol);
@@ -250,7 +251,7 @@ export function StockOverview({ quote: rawQuote, engine, instruments, onOpenPeer
           </div>
         </div>
       </Card>
-      <p className="text-[10px] text-muted">Fundamentals are simulated from the live price, market cap and sector — for demonstration only, not investment advice.</p>
+      <p className="text-[10px] text-muted">Fundamentals come from Yahoo where available; otherwise they are labelled estimates. Not investment advice.</p>
     </div>
   );
 }

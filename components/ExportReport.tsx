@@ -49,7 +49,7 @@ const PRINT_CSS = `
 interface Ai { text: string; source: string }
 
 /** "Export Research Report" — CSV (fundamentals, ratios, quarterly) or a print-styled PDF layout with the Gemini senior-analyst summary. */
-export function ExportReport({ symbol, engine, holdings = [], mode = 'replay', className = '', compact = false }: Props) {
+export function ExportReport({ symbol, engine, holdings = [], mode = 'delayed', className = '', compact = false }: Props) {
   const quote = engine.touch(symbol);
   const live = useFundamentals(symbol, quote?.exch ?? 'NSE');
   const screener = useMemo(() => (quote ? mergeLive(getScreener(quote), live.data, quote.ltp) : null), [quote?.symbol, Math.round((quote?.ltp ?? 0) * 20), live.data]); // eslint-disable-line react-hooks/exhaustive-deps

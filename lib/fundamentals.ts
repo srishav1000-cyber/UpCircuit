@@ -1,5 +1,5 @@
 import type { Fundamentals, Quote } from './types';
-import { hashStr, mulberry32 } from './market';
+import { hashStr, mulberry32 } from './estimate';
 
 /**
  * Screener.in-style ratios. SIMULATED: Screener.in has no public API and its terms don't permit scraping,

@@ -7,6 +7,12 @@ import { AskUpCircuitDrawer, type AskRequest } from '@/components/AskUpCircuitDr
 import { PortfolioUploadModal } from '@/components/PortfolioUploadModal';
 import { PriceAlertDialog } from '@/components/PriceAlertDialog';
 import { CircuitBanner } from '@/components/CircuitBanner';
+import { CircuitAlerts } from '@/components/CircuitAlerts';
+import { useCircuitAlerts } from '@/hooks/useCircuitAlerts';
+import { useAudioAlerts } from '@/hooks/useAudioAlerts';
+import { appUrl } from '@/lib/appUrl';
+import { CircuitLogDrawer } from '@/components/CircuitLogDrawer';
+import { sendCircuitEmail } from '@/lib/alertEmail';
 import { HomePage } from '@/components/HomePage';
 import { ChartWorkspace } from '@/components/ChartWorkspace';
 import { StockResearchModal } from '@/components/StockResearchModal';
@@ -34,15 +40,37 @@ import { useFullscreen } from '@/hooks/useFullscreen';
 import { usePriceAlerts } from '@/hooks/usePriceAlerts';
 import { buildAskContext } from '@/lib/ask';
 import { fmt } from '@/lib/format';
-import { basePrice, generateHistory, hashStr, mulberry32, roundTick } from '@/lib/market';
 import { personaOf, type Persona } from '@/lib/personas';
-import type { Holding, Timeframe } from '@/lib/types';
+import type { Holding, Quote, Timeframe } from '@/lib/types';
+import type { DataState } from '@/hooks/useMarket';
 
-const DEMO_HOLDINGS: Holding[] = ['RELIANCE', 'TCS', 'HDFCBANK', 'INFY', 'ITC', 'SBIN'].map((symbol, i) => ({
-  symbol,
-  qty: [25, 10, 40, 30, 100, 60][i],
-  avg: roundTick(basePrice(symbol) * (0.88 + mulberry32(hashStr(symbol + ':avg'))() * 0.2)),
-}));
+/** Demo portfolio: quantities only. Cost basis is filled from each stock's REAL previous close once Yahoo has delivered it (avg 0 = "not priced yet"). */
+const DEMO_HOLDINGS: Holding[] = ['RELIANCE', 'TCS', 'HDFCBANK', 'INFY', 'ITC', 'SBIN'].map((symbol, i) => ({ symbol, qty: [25, 10, 40, 30, 100, 60][i], avg: 0 }));
+
+/** Never rendered: only keeps hooks below safe for the one render before the first real quote arrives (the data gate covers the screen). */
+const EMPTY_QUOTE = (symbol: string): Quote => ({ symbol, name: symbol, sector: 'Others', ltp: 0, prevClose: 1, open: 0, high: 0, low: 0, volume: 0, sumPV: 0, sumV: 0, mcapCr: 0, dividendYield: 0, avgVolume: 0, circuitBand: 20, upperCircuit: 0, lowerCircuit: 0 });
+
+function MarketGate({ state, onRetry }: { state: DataState; onRetry: () => void }) {
+  return (
+    <div data-testid="market-gate" className="flex h-screen flex-col items-center justify-center gap-3 bg-bg px-4 text-center text-[13px] text-muted">
+      {state === 'error' ? (
+        <>
+          <div className="text-[15px] font-semibold text-ink">Could not reach Yahoo Finance</div>
+          <p className="max-w-sm">UpCircuit shows only real market data and never fills gaps with simulated prices. Check your connection and try again.</p>
+          <button onClick={onRetry} data-testid="market-retry" className="rounded-md border border-accent px-3 py-1.5 font-semibold text-accent hover:bg-accent/10">Retry</button>
+        </>
+      ) : (
+        <span className="animate-pulse">Loading real market data from Yahoo Finance…</span>
+      )}
+    </div>
+  );
+}
+
+/** /terminal?symbol=XYZ (e-mail deep link) opens the Terminal view on that stock; plain / opens the Discovery Hub. Client-only (Terminal mounts after hydration). */
+function initialNav(): { view: View; symbol: string } {
+  const sym = new URLSearchParams(window.location.search).get('symbol')?.toUpperCase();
+  return { view: window.location.pathname.startsWith('/terminal') ? 'terminal' : 'home', symbol: sym && /^[A-Z0-9&._-]{1,24}$/.test(sym) ? sym : 'RELIANCE' };
+}
 
 function Terminal() {
   const instruments = useInstruments();
@@ -53,16 +81,17 @@ function Terminal() {
   /** symbol whose "Add to Watchlist" selector (checkbox per list) is open */
   const [pickFor, setPickFor] = useState<string | null>(null);
   const [rebalanceOpen, setRebalanceOpen] = useState(false);
-  const { holdings, setHoldings, resetHoldings } = useHoldings(DEMO_HOLDINGS);
+  const { holdings: rawHoldings, setHoldings, resetHoldings } = useHoldings(DEMO_HOLDINGS);
   const { focus, toggle: toggleFocus } = useFocus();
-  const { user, update: updateAccount } = useAuth();
+  const { user, update: updateAccount, getToken } = useAuth();
   const [plansFor, setPlansFor] = useState<Role | 'any' | null>(null);
   const { news, error: newsError } = useNews();
   const priceAlerts = usePriceAlerts();
   const dashFs = useFullscreen();
 
   // the app opens on the Angel One-style Discovery Hub; persona lenses are chosen from the Navbar dropdown
-  const [view, setView] = useState<View>('home');
+  const initial = useMemo(() => initialNav(), []);
+  const [view, setView] = useState<View>(initial.view);
   const [persona, setPersonaRaw] = useState<Persona>(() => coerceRole(user?.plan, user?.role));
   /** plan gate: a locked role opens the plans dialog instead of switching; allowed switches are saved as the primary role */
   const setPersona = useCallback(
@@ -73,7 +102,7 @@ function Terminal() {
     },
     [user, updateAccount],
   );
-  const [symbol, setSymbol] = useState('RELIANCE');
+  const [symbol, setSymbol] = useState(initial.symbol);
   /** when set, the terminal charts this index (engine id) instead of `symbol` */
   /** right-hand panel of the terminal: the inspected stock's fundamentals, or the persona dashboard */
   const [panel, setPanel] = useState<'overview' | 'dashboard'>('overview');
@@ -89,15 +118,32 @@ function Terminal() {
   const searchRef = useRef<HTMLInputElement>(null);
 
   const alertSymbols = useMemo(() => priceAlerts.alerts.filter((a) => !a.triggeredAt).map((a) => a.symbol), [priceAlerts.alerts]);
-  const focusCandidates = useMemo(() => [...new Set([...allWatched, ...holdings.map((h) => h.symbol)])], [allWatched, holdings]);
-  const watch = useMemo(() => [...allWatched, ...holdings.map((h) => h.symbol), ...alertSymbols], [allWatched, holdings, alertSymbols]);
-  const { engine, version, mode, conn, source } = useMarket(instruments, symbol, watch, focus);
+  const focusCandidates = useMemo(() => [...new Set([...allWatched, ...rawHoldings.map((h) => h.symbol)])], [allWatched, rawHoldings]);
+  const watch = useMemo(() => [...allWatched, ...rawHoldings.map((h) => h.symbol), ...alertSymbols], [allWatched, rawHoldings, alertSymbols]);
+  const { engine, version, mode, conn, source, state: dataState, retry: retryData } = useMarket(instruments, symbol, watch, focus);
 
-  const quote = engine.touch(symbol) ?? engine.touch('RELIANCE')!;
+  const audio = useAudioAlerts();
+  const [logOpen, setLogOpen] = useState(false);
+  const circuitSymbols = useMemo(() => [...new Set([...favs, ...focus])], [favs, focus]);
+  const circuit = useCircuitAlerts(engine, version, circuitSymbols, audio.on, (hit) => {
+    // e-mail the signed-in user (Supabase accounts only; the server uses the verified account address)
+    void getToken().then((t) => sendCircuitEmail(hit, t));
+  });
 
-  // daily closes for RSI / Sharpe — history shape is fixed per symbol, last bar tracks the live LTP
-  const dailyBase = useMemo(() => generateHistory(symbol, '1D', engine.touch(symbol)?.ltp ?? 100, Date.now()).map((c) => c.close), [symbol, engine]);
-  const closes1D = useMemo(() => [...dailyBase.slice(0, -1), quote.ltp], [dailyBase, quote.ltp]);
+  const quote = engine.touch(symbol) ?? engine.quotes.get('RELIANCE') ?? engine.quotes.values().next().value ?? EMPTY_QUOTE(symbol);
+  /** portfolio with real cost bases: a demo holding (avg 0) is costed at the stock's real previous close; unpriced ones wait for Yahoo */
+  const holdings = useMemo(
+    () => rawHoldings.map((h) => (h.avg > 0 ? h : { ...h, avg: engine.quotes.get(h.symbol)?.prevClose ?? 0 })).filter((h) => h.avg > 0),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [rawHoldings, engine, engine.lastQuotesAt],
+  );
+
+  // real daily closes (Yahoo) for RSI / Sharpe — the last bar tracks the live LTP
+  const closes1D = useMemo(() => {
+    const c = engine.closes(symbol);
+    return c.length ? [...c.slice(0, -1), quote.ltp] : [];
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [symbol, engine, engine.histVer, quote.ltp]);
 
   const flash = useCallback((msg: string, ms = 3200) => {
     setToast(msg);
@@ -176,8 +222,8 @@ function Terminal() {
   );
 
   useEffect(() => {
-    document.title = `${quote.ltp.toFixed(2)} ${quote.symbol} · UpCircuit`;
-  }, [quote.ltp, quote.symbol]);
+    if (engine.ready) document.title = `${quote.ltp.toFixed(2)} ${quote.symbol} · UpCircuit`;
+  }, [quote.ltp, quote.symbol, engine.ready]);
 
   // price alerts are checked on every market render
   useEffect(() => {
@@ -191,24 +237,6 @@ function Terminal() {
   useEffect(() => {
     if (view !== 'terminal') exitFs();
   }, [view, exitFs]);
-
-  /** off-market: ▶ replay the previous session of the charted stock (real Yahoo 1-minute bars when available, else the deterministic series) */
-  const [replayBusy, setReplayBusy] = useState(false);
-  const toggleReplay = useCallback(async () => {
-    if (engine.replaying) return engine.stopSessionReplay();
-    setReplayBusy(true);
-    let bars: { open: number; high: number; low: number; close: number; volume: number }[] | undefined;
-    try {
-      const inst = instruments.find((i) => i.symbol === symbol);
-      const res = await fetch(`/api/session/${encodeURIComponent(symbol)}?exch=${inst?.exch ?? 'NSE'}`, { signal: AbortSignal.timeout(7000) });
-      const j = res.ok ? await res.json() : null;
-      if (j?.ok && Array.isArray(j.bars)) bars = j.bars;
-    } catch {
-      /* no real bars → deterministic series */
-    }
-    setReplayBusy(false);
-    if (engine.startSessionReplay(symbol, bars)) flash(bars ? `▶ Replaying the last session of ${symbol} (real 1-minute bars)` : `▶ Replaying a simulated last session of ${symbol}`);
-  }, [engine, symbol, instruments, flash]);
 
   const getAskContext = useCallback(() => buildAskContext(engine, holdings, research ?? symbol, mode), [engine, holdings, research, symbol, mode]);
 
@@ -238,6 +266,8 @@ function Terminal() {
   const actions = { symbol, watchlisted: inAnyList(symbol), activeAlerts, onDeepResearch: deepResearch, onToggleWatchlist: toggleWatchlist, onSetAlert: setAlert };
   const alertTarget = alertFor ? engine.touch(alertFor) : undefined;
 
+  if (!engine.ready) return <MarketGate state={dataState} onRetry={retryData} />;
+
   return (
     <div className={`flex min-h-screen flex-col bg-bg ${view === 'terminal' ? 'lg:h-screen' : ''}`}>
       <div className="sticky top-0 z-50 shrink-0">
@@ -247,6 +277,10 @@ function Terminal() {
           onView={setView}
           persona={persona}
           onPlans={() => setPlansFor('any')}
+          audioOn={audio.on}
+          onToggleAudio={audio.toggle}
+          circuitCount={circuit.log.length}
+          onOpenCircuitLog={() => setLogOpen(true)}
           onPersona={(x) => {
             setPersona(x);
             setPanel('dashboard');
@@ -266,6 +300,8 @@ function Terminal() {
           onOpenImport={() => setImportOpen(true)}
           onAsk={() => openAsk()}
         />
+        <CircuitAlerts log={circuit.log} glow={circuit.glow} audio={audio} onOpen={openChart} onOpenLog={() => setLogOpen(true)} />
+        <CircuitLogDrawer open={logOpen} onClose={() => setLogOpen(false)} log={circuit.log} onOpen={openChart} onClear={circuit.clearLog} />
       </div>
 
       {view === 'home' ? (
@@ -284,8 +320,8 @@ function Terminal() {
               onToggleFavorite={toggleWatchlist}
               onSetAlert={setAlert}
               activeAlerts={activeAlerts}
+              live={mode === 'live'}
               index={chartIndex ? engine.indices.find((i) => i.id === chartIndex) ?? null : null}
-              replay={mode === 'replay' ? { active: engine.replaying?.symbol === symbol, real: !!engine.replaying?.real, progress: engine.replaying?.progress ?? 0, busy: replayBusy, onToggle: toggleReplay } : undefined}
             />
           </section>
           <section
@@ -335,7 +371,7 @@ function Terminal() {
             {/* keyed on persona: each lens switch remounts the view and replays the 300 ms fade + scale-in */}
             <div key={persona} data-testid="persona-view" className={`animate-fade-in ${dashFs.fs ? 'p-3 sm:p-5' : ''}`}>
               {canUse(user?.plan, persona) && (persona === 'day' || persona === 'retail') && (
-                <FocusBoard persona={persona} engine={engine} version={version} focus={focus} candidates={focusCandidates} holdings={holdings} onSelect={setSymbol} onToggle={(sym) => { const r = toggleFocus(sym); return r.ok ? null : r.error; }} />
+                <FocusBoard persona={persona} engine={engine} version={version} focus={focus} glow={circuit.glow} candidates={focusCandidates} holdings={holdings} onSelect={setSymbol} onToggle={(sym) => { const r = toggleFocus(sym); return r.ok ? null : r.error; }} />
               )}
               {canUse(user?.plan, persona) && persona === 'day' && <DayTraderDashboard {...dash} />}
               {canUse(user?.plan, persona) && persona === 'retail' && <RetailDashboard {...dash} />}
@@ -353,7 +389,7 @@ function Terminal() {
           {instruments.length.toLocaleString('en-IN')} instruments indexed
           {bseOnly > 0 && <> · NSE {(instruments.length - bseOnly).toLocaleString('en-IN')} + BSE-only {bseOnly.toLocaleString('en-IN')}</>}
         </span>
-        <span className="ml-auto hidden sm:inline">{mode === 'live' ? 'Prices streamed via Angel One SmartAPI; ratios are simulated.' : 'Prices, depth and ratios are synthetic and for demonstration only.'} Not investment advice.</span>
+        <span className="ml-auto hidden sm:inline">{mode === 'live' ? 'Prices streamed via Angel One SmartAPI; some ratios are estimates.' : 'Prices are real, delayed Yahoo Finance data; some ratios are estimates.'} Not investment advice.</span>
       </footer>
 
       {research && (
@@ -476,6 +512,14 @@ export default function Page() {
 function Gate() {
   const { user, ready } = useAuth();
   if (!ready) return <div className="flex h-screen items-center justify-center bg-bg text-[13px] text-muted"><span className="animate-pulse">Starting UpCircuit…</span></div>;
-  if (!user) return <AuthScreen />;
+  if (!user) {
+    // deep links (/terminal?symbol=…) go through /login and come back after sign-in; every redirect resolves via NEXT_PUBLIC_APP_URL
+    const p = window.location.pathname;
+    if (p !== '/' && p !== '/login') {
+      window.location.replace(appUrl(`/login?next=${encodeURIComponent(p + window.location.search)}`));
+      return null;
+    }
+    return <AuthScreen />;
+  }
   return <Terminal key={user.id} />;
 }

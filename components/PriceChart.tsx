@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTheme } from 'next-themes';
 import { ColorType, CrosshairMode, createChart, type IChartApi, type ISeriesApi, type UTCTimestamp } from 'lightweight-charts';
 import type { Candle, Timeframe } from '@/lib/types';
-import { TF_CONFIG, bucketTime, generateHistory, indexHistory } from '@/lib/market';
+import { TF_CONFIG, bucketTime, isMarketOpen } from '@/lib/market';
 import { resolveIndex } from '@/lib/instruments';
 import { parseDrawings, type Drawing, type Tool } from '@/lib/drawings';
 import { DrawingToolbar } from './DrawingToolbar';
@@ -32,9 +32,16 @@ interface Props {
   tf: Timeframe;
   onTf: (tf: Timeframe) => void;
   className?: string;
+  /** true while SmartAPI ticks stream: the last candle then follows the LTP. On Yahoo data the candles are the real bars, refreshed every minute. */
+  live?: boolean;
 }
 
-export function PriceChart({ symbol, ltp, volume, tf, onTf, className = '' }: Props) {
+export function PriceChart({ symbol, ltp, volume, tf, onTf, className = '', live = false }: Props) {
+  const [dataState, setDataState] = useState<'loading' | 'ok' | 'empty'>('loading');
+  const [reload, setReload] = useState(0);
+  const loadedKey = useRef('');
+  const liveRef = useRef(live);
+  liveRef.current = live;
   const { resolvedTheme } = useTheme();
   // index tickers (NIFTY 50 / SENSEX / BANK NIFTY / INDIA VIX) have no volume or depth — synthesised candles, no volume pane
   const index = resolveIndex(symbol);
@@ -161,29 +168,66 @@ export function PriceChart({ symbol, ltp, volume, tf, onTf, className = '' }: Pr
     const vol = volRef.current;
     const chart = chartRef.current;
     if (!candles || !vol || !chart) return;
-    const hist = index ? indexHistory(index.label, tf, ltpRef.current, ltpRef.current, Date.now()) : generateHistory(symbol, tf, ltpRef.current, Date.now());
-    candles.setData(hist.map(toBar));
-    vol.setData(index ? [] : hist.map((c) => toVol(c, thRef.current)));
-    candles.priceScale().applyOptions({ scaleMargins: { top: 0.06, bottom: index ? 0.06 : 0.26 } });
-    candles.applyOptions({ priceFormat: { type: 'price', precision: 2, minMove: index ? 0.01 : 0.05 } });
-    byTime.current = new Map(hist.map((c) => [c.time, c]));
-    barsRef.current = hist;
-    last.current = hist[hist.length - 1];
-    setLiveBar(last.current);
-    prevVolume.current = volume;
-    chart.applyOptions({ timeScale: { timeVisible: TF_CONFIG[tf].kind === 'intraday' } });
-    if (tf === '1D') chart.timeScale().setVisibleLogicalRange({ from: hist.length - 130, to: hist.length + 6 });
-    else chart.timeScale().fitContent();
-    setHover(null);
+    let cancelled = false;
+    const key = `${symbol}|${tf}`;
+    const first = loadedKey.current !== key;
+    if (first) {
+      setDataState('loading');
+      candles.setData([]);
+      vol.setData([]);
+      last.current = null;
+    }
+    (async () => {
+      let hist: Candle[] = [];
+      try {
+        // REAL Yahoo Finance bars — nothing is generated locally
+        const r = await fetch(`/api/bars/${encodeURIComponent(index ? index.id : symbol)}?tf=${tf}`, { cache: 'no-store', signal: AbortSignal.timeout(15000) });
+        if (r.ok) hist = ((await r.json()) as { bars?: Candle[] }).bars ?? [];
+      } catch {
+        /* leave empty */
+      }
+      if (cancelled || !candleRef.current) return;
+      const keepRange = !first;
+      const range = keepRange ? chart.timeScale().getVisibleLogicalRange() : null;
+      candles.setData(hist.map(toBar));
+      vol.setData(index ? [] : hist.map((c) => toVol(c, thRef.current)));
+      candles.priceScale().applyOptions({ scaleMargins: { top: 0.06, bottom: index ? 0.06 : 0.26 } });
+      candles.applyOptions({ priceFormat: { type: 'price', precision: 2, minMove: index ? 0.01 : 0.05 } });
+      byTime.current = new Map(hist.map((c) => [c.time, c]));
+      barsRef.current = hist;
+      last.current = hist[hist.length - 1] ?? null;
+      setLiveBar(last.current);
+      prevVolume.current = volume;
+      setDataState(hist.length ? 'ok' : 'empty');
+      loadedKey.current = key;
+      if (first) {
+        chart.applyOptions({ timeScale: { timeVisible: TF_CONFIG[tf].kind === 'intraday' } });
+        if (tf === '1D') chart.timeScale().setVisibleLogicalRange({ from: hist.length - 130, to: hist.length + 6 });
+        else chart.timeScale().fitContent();
+        setHover(null);
+      } else if (range) chart.timeScale().setVisibleLogicalRange(range);
+    })();
+    return () => {
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [symbol, tf]);
+  }, [symbol, tf, reload]);
+
+  // while the market is open, refetch the real bars every minute (Yahoo's latest candle keeps forming)
+  useEffect(() => {
+    const id = setInterval(() => {
+      if (!liveRef.current && isMarketOpen(Date.now()) && !document.hidden) setReload((n) => n + 1);
+    }, 60_000);
+    return () => clearInterval(id);
+  }, []);
+
 
   // live tick → update / roll the last candle
   useEffect(() => {
     const candles = candleRef.current;
     const vol = volRef.current;
     const cur = last.current;
-    if (!candles || !vol || !cur) return;
+    if (!candles || !vol || !cur || !liveRef.current) return; // Yahoo data: candles are the real bars, never extended locally
     const dv = Math.max(0, volume - prevVolume.current);
     prevVolume.current = volume;
     const bucket = bucketTime(tf, Date.now());
@@ -260,6 +304,11 @@ export function PriceChart({ symbol, ltp, volume, tf, onTf, className = '' }: Pr
         />
         <div className="relative min-h-[240px] min-w-0 flex-1">
           <div ref={host} className="absolute inset-0" />
+          {dataState !== 'ok' && (
+            <div data-testid="chart-status" className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center text-[12px] text-muted">
+              {dataState === 'loading' ? <span className="animate-pulse">Loading real Yahoo Finance bars…</span> : <span>No Yahoo Finance bars for this symbol / timeframe.</span>}
+            </div>
+          )}
           <button
             onClick={() => setMax((m) => !m)}
             aria-pressed={max}

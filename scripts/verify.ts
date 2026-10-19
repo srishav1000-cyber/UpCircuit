@@ -1,7 +1,9 @@
 /* Core logic checks — run with `npm test`. No framework: plain assertions, exits non-zero on failure. */
 import assert from 'node:assert/strict';
 import { SEED_INSTRUMENTS } from '../lib/instruments';
-import { MarketEngine, TIMEFRAMES, TF_CONFIG, generateHistory } from '../lib/market';
+import { hashStr } from '../lib/estimate';
+import { MarketEngine, TIMEFRAMES, TF_CONFIG } from '../lib/market';
+import { ingestFixture, fixtureCandles } from './fixtures';
 import {
   capClass, correlationMatrix, hhi, longTermOutlook, pearson, pivotLevels, portfolioSummary, rsi14, sharpe, shortTermOutlook, sma, topMovers, vwap, macd,
 } from '../lib/analytics';
@@ -24,14 +26,16 @@ import { smartApiStatus } from '../lib/market';
 import { pickEquities } from './sync-instruments.mjs';
 
 let passed = 0;
-const t = (name: string, fn: () => void) => {
+const pending: Promise<void>[] = [];
+const t = (name: string, fn: () => void | Promise<void>) => {
+  const ok = () => { passed++; console.log('  ✓', name); };
+  const bad = (e: unknown) => { console.error('  ✗', name, '\n   ', (e as Error).message); process.exitCode = 1; };
   try {
-    fn();
-    passed++;
-    console.log('  ✓', name);
+    const r = fn();
+    if (r && typeof (r as Promise<void>).then === 'function') pending.push((r as Promise<void>).then(ok, bad));
+    else ok();
   } catch (e) {
-    console.error('  ✗', name, '\n   ', (e as Error).message);
-    process.exitCode = 1;
+    bad(e);
   }
 };
 const near = (a: number, b: number, eps = 1e-9) => assert.ok(Math.abs(a - b) <= eps, `${a} ≉ ${b}`);
@@ -122,77 +126,14 @@ t('headline sentiment direction', () => {
 });
 
 console.log('market engine');
-t('history: all 10 timeframes well-formed', () => {
-  const now = Date.UTC(2026, 9, 9, 6, 0, 0); // a Friday
-  for (const tf of TIMEFRAMES) {
-    const h = generateHistory('RELIANCE', tf, 1234.5, now);
-    assert.equal(h.length, TF_CONFIG[tf].bars, tf + ' length');
-    near(h[h.length - 1].close, 1234.5, 0.01);
-    for (let i = 0; i < h.length; i++) {
-      const b = h[i];
-      assert.ok(b.high >= Math.max(b.open, b.close) - 1e-9 && b.low <= Math.min(b.open, b.close) + 1e-9, `${tf} OHLC @${i}`);
-      assert.ok(b.volume > 0);
-      if (i > 0) assert.ok(b.time > h[i - 1].time, `${tf} time order @${i}`);
-    }
-    if (tf === '1W' || tf === '5Y') assert.equal(new Date(h[h.length - 1].time * 1000).getUTCDay(), 1, 'weeks start Monday');
-    if (tf === '1M' || tf === '10Y') assert.equal(new Date(h[h.length - 1].time * 1000).getUTCDate(), 1, 'months start on the 1st');
-    if (tf === '1D' || tf === '1Y') h.forEach((b) => assert.ok(![0, 6].includes(new Date(b.time * 1000).getUTCDay()), 'no weekend bars'));
-  }
-});
-t('history is deterministic', () => {
-  const a = generateHistory('TCS', '1D', 100, 1.7e12), b = generateHistory('TCS', '1D', 100, 1.7e12);
-  assert.deepEqual(a, b);
-});
-t('same-sector pairs correlate more than cross-sector pairs', () => {
-  const now = Date.UTC(2026, 9, 9, 6);
-  const close = (s: string) => generateHistory(s, '1D', 100, now).map((c) => c.close);
-  const same = ['HDFCBANK', 'ICICIBANK', 'SBIN', 'AXISBANK', 'KOTAKBANK'];
-  const other = ['TCS', 'ITC', 'MARUTI', 'SUNPHARMA', 'DLF'];
-  const avg = (pairs: [string, string][]) => pairs.reduce((a, [x, y]) => a + correlationMatrix({ [x]: close(x), [y]: close(y) }).matrix[0][1], 0) / pairs.length;
-  const sp: [string, string][] = []; const cp: [string, string][] = [];
-  for (let i = 0; i < same.length; i++) for (let j = i + 1; j < same.length; j++) sp.push([same[i], same[j]]);
-  for (let i = 0; i < same.length; i++) cp.push([same[i], other[i]]);
-  const a = avg(sp), b = avg(cp);
-  assert.ok(a > b + 0.05, `same ${a.toFixed(2)} should exceed cross ${b.toFixed(2)}`);
-  assert.ok(b > 0.05, 'cross-sector corr should be positive (market factor) — got ' + b.toFixed(2));
-});
-t('engine: 5 min of ticks → prices stay inside circuits, alerts fire, kinds valid', () => {
-  const e = new MarketEngine(SEED_INSTRUMENTS); e.setMode('simulated'); // market-hours simulation (a closed market is calm — tested below)
-  let now = Date.now();
-  for (let i = 0; i < 4800; i++) { e.step('RELIANCE', now); now += 250; } // 20 simulated minutes
-  e.quotes.forEach((q) => {
-    assert.ok(q.ltp <= q.upperCircuit && q.ltp >= q.lowerCircuit, `${q.symbol} outside band`);
-    assert.ok(q.high >= q.ltp && q.low <= q.ltp);
-  });
-  assert.ok(e.alerts.length > 0, 'expected simulated alerts');
-  const kinds = new Set(e.alerts.map((a) => a.kind));
-  console.log('      alert kinds seen:', [...kinds].join(', '), `(${e.alerts.length})`);
-  e.alerts.forEach((a) => assert.ok(['UPPER_CIRCUIT', 'LOWER_CIRCUIT', 'PRICE_SURGE', 'VOLUME_SURGE'].includes(a.kind)));
-  const ids = e.alerts.map((a) => a.id); assert.equal(new Set(ids).size, ids.length, 'unique alert ids');
-  // cooldown: no (symbol, kind) twice within 5 min
-  const seen = new Map<string, number>();
-  [...e.alerts].reverse().forEach((a) => { const k = a.symbol + a.kind; if (seen.has(k)) assert.ok(a.time - seen.get(k)! >= 300_000, 'cooldown ' + k); seen.set(k, a.time); });
-});
-t('engine: volume spike detection needs >3× baseline', () => {
-  const e = new MarketEngine(SEED_INSTRUMENTS); e.simulateEvents = false;
-  let now = Date.now();
-  for (let i = 0; i < 400; i++) { e.step('TCS', now); now += 250; }
-  assert.equal(e.alerts.filter((a) => a.kind === 'VOLUME_SURGE').length, 0, 'no spikes without injected events');
-});
-t('engine: rolling VWAP lies within the recent price range', () => {
-  const e = new MarketEngine(SEED_INSTRUMENTS); e.setMode('simulated'); e.simulateEvents = false;
-  for (let i = 0; i < 200; i++) e.step('INFY', Date.now());
-  const v = e.rollingVwap(60_000)!; const q = e.quotes.get('INFY')!;
-  assert.ok(v >= q.low && v <= q.high, `vwap ${v} not within ${q.low}..${q.high}`);
-});
 t('market-cap buckets are all populated across the seed universe', () => {
-  const e = new MarketEngine(SEED_INSTRUMENTS);
+  const e = ingestFixture(new MarketEngine(SEED_INSTRUMENTS));
   const c = { Large: 0, Mid: 0, Small: 0 }; e.quotes.forEach((q) => c[capClass(q.mcapCr)]++);
   console.log('      Large/Mid/Small:', c.Large, c.Mid, c.Small);
   assert.ok(c.Large >= 10 && c.Mid >= 10 && c.Small >= 10);
 });
 t('top movers ordering', () => {
-  const e = new MarketEngine(SEED_INSTRUMENTS); const all = [...e.quotes.values()];
+  const e = ingestFixture(new MarketEngine(SEED_INSTRUMENTS)); const all = [...e.quotes.values()];
   const g = topMovers(all, 'gainers', 5), l = topMovers(all, 'losers', 5), v = topMovers(all, 'volume', 5);
   const pct = (q: (typeof all)[0]) => q.ltp / q.prevClose - 1;
   assert.ok(pct(g[0]) >= pct(g[4]) && pct(l[0]) <= pct(l[4]));
@@ -211,9 +152,9 @@ t('"south" → SOUTHBANK first; "sr" → SRF first', () => {
 
 console.log('fundamentals + copilot');
 const mkCtx = (symbol = 'TCS'): CopilotContext => {
-  const e = new MarketEngine(SEED_INSTRUMENTS); const q = e.quotes.get(symbol)!;
-  const closes = generateHistory(symbol, '1D', q.ltp, Date.now()).map((c) => c.close);
-  const prev = generateHistory(symbol, '1D', q.ltp, Date.now()).slice(-2)[0];
+  const e = ingestFixture(new MarketEngine(SEED_INSTRUMENTS)); const q = e.quotes.get(symbol)!;
+  const closes = fixtureCandles(symbol).map((c) => c.close);
+  const prev = fixtureCandles(symbol).slice(-2)[0];
   const s = shortTermOutlook(closes), l = longTermOutlook(closes);
   return {
     symbol, name: q.name, sector: q.sector,
@@ -224,7 +165,7 @@ const mkCtx = (symbol = 'TCS'): CopilotContext => {
   };
 };
 t('fundamentals are consistent (BV = EPS/ROE, banks have no D/E)', () => {
-  const e = new MarketEngine(SEED_INSTRUMENTS);
+  const e = ingestFixture(new MarketEngine(SEED_INSTRUMENTS));
   const f = getFundamentals(e.quotes.get('TCS')!);
   near(f.bookValue, f.eps / (f.roe / 100), f.bookValue * 0.01); // 1 % slack: inputs are rounded for display
   assert.ok(f.pe > 0 && f.promoterHolding >= 0 && f.promoterHolding <= 100);
@@ -232,7 +173,7 @@ t('fundamentals are consistent (BV = EPS/ROE, banks have no D/E)', () => {
   assert.deepEqual(getFundamentals(e.quotes.get('TCS')!), getFundamentals(e.quotes.get('TCS')!));
 });
 t('outlooks produce labelled signals', () => {
-  const closes = generateHistory('INFY', '1D', 1500, Date.now()).map((c) => c.close);
+  const closes = fixtureCandles('INFY').map((c) => c.close);
   const s = shortTermOutlook(closes)!, l = longTermOutlook(closes)!;
   assert.equal(s.signals.length, 4); assert.equal(l.signals.length, 5);
   assert.ok(s.score >= -100 && s.score <= 100 && ['Bullish', 'Bearish', 'Neutral'].includes(l.label));
@@ -249,7 +190,7 @@ t('local answers: every intent returns text with the disclaimer and real numbers
   const ctx = mkCtx();
   for (const q of ['Is it expensive?', 'How are ROE and ROCE?', 'debt?', 'dividend?', 'support resistance?', 'news sentiment?', 'key risks?', 'should I invest?', 'hi']) {
     const a = answerLocally(q, ctx, []);
-    assert.match(a, /not investment advice/); assert.match(a, /simulated/);
+    assert.match(a, /not investment advice/); assert.match(a, /estimates/);
     assert.ok(a.length > 80, q);
   }
   assert.match(answerLocally('Is it expensive?', ctx, []), new RegExp(ctx.ratios.pe.toFixed(1)));
@@ -357,7 +298,7 @@ t('SmartApiFeed: subscribes the diff, applies tick + index messages, ignores jun
   f.setSymbols(['TCS']); f.connect(); fake.onopen!();
   f.setSymbols(['TCS', 'INFY']);
   assert.deepEqual(sent.map((m) => JSON.parse(m).symbols), [['TCS'], ['INFY']]);
-  fake.onmessage!({ data: JSON.stringify({ t: 'tick', symbol: 'TCS', ltp: 4123.5 }) });
+  fake.onmessage!({ data: JSON.stringify({ t: 'tick', symbol: 'TCS', ltp: 4123.5, close: 4100 }) });
   fake.onmessage!({ data: JSON.stringify({ t: 'index', id: 'NIFTY', value: 25000, prev: 24900 }) });
   fake.onmessage!({ data: 'not json' }); fake.onmessage!({ data: JSON.stringify({ t: 'tick', symbol: 'TCS', ltp: 'x' }) });
   assert.equal(e.quotes.get('TCS')!.ltp, 4123.5); assert.equal(f.ticks, 1);
@@ -391,13 +332,13 @@ t('alerts fire once, on the right side, and survive bad storage', () => {
   assert.deepEqual(parseAlerts('garbage'), []); assert.deepEqual(parseAlerts('[{"id":1}]'), []); assert.equal(parseAlerts(JSON.stringify(al)).length, 2);
 });
 t('SmartAPI link status: every state is distinguishable and honest', () => {
-  const st = (mode: 'live' | 'replay' | 'simulated', conn: 'idle' | 'connecting' | 'open' | 'closed', relayConfigured: boolean, serverCreds = false) => smartApiStatus({ mode, conn, relayConfigured, serverCreds });
+  const st = (mode: 'live' | 'snapshot' | 'delayed', conn: 'idle' | 'connecting' | 'open' | 'closed', relayConfigured: boolean, serverCreds = false) => smartApiStatus({ mode, conn, relayConfigured, serverCreds });
   assert.equal(st('live', 'open', true).health, 'ok');
-  assert.equal(st('replay', 'open', true).label, 'Relay ready');
-  assert.equal(st('simulated', 'open', true).health, 'warn');
-  assert.equal(st('simulated', 'closed', true).label, 'Relay offline');
-  assert.equal(st('replay', 'idle', false).health, 'off');
-  assert.equal(st('replay', 'idle', false, true).label, 'Relay not linked');
+  assert.equal(st('snapshot', 'open', true).label, 'Relay connected');
+  assert.equal(st('delayed', 'open', true).label, 'Relay ready');
+  assert.equal(st('delayed', 'closed', true).label, 'Relay offline');
+  assert.equal(st('snapshot', 'idle', false).health, 'off');
+  assert.equal(st('snapshot', 'idle', false, true).label, 'Relay not linked');
 });
 t('instrument sync: NSE + BSE cash equities only, NSE wins duplicates', () => {
   const rows = [
@@ -410,27 +351,19 @@ t('instrument sync: NSE + BSE cash equities only, NSE wins duplicates', () => {
 });
 
 import { resolveIndex } from '../lib/instruments';
-import { indexHistory, basePrice } from '../lib/market';
 import { BUDGET_BANDS, budgetCandidates, inBand } from '../lib/discovery';
 t('resolveIndex maps tickers + aliases, rejects equities', () => {
   for (const [s, id] of [['NIFTY 50', 'NIFTY'], ['nifty50', 'NIFTY'], ['SENSEX', 'SENSEX'], ['BANK NIFTY', 'BANKNIFTY'], ['Nifty Bank', 'BANKNIFTY'], ['INDIA VIX', 'INDIAVIX'], ['VIX', 'INDIAVIX']] as const) assert.equal(resolveIndex(s)?.id, id, s);
   assert.equal(resolveIndex('RELIANCE'), undefined); assert.equal(resolveIndex(''), undefined); assert.equal(resolveIndex(null), undefined);
 });
-t('indexHistory: valid OHLC for every timeframe, even with a bad value', () => {
-  for (const tf of TIMEFRAMES) for (const v of [24850.4, NaN, 0, -5]) {
-    const h = indexHistory('NIFTY 50', tf, v, 24850.4, Date.UTC(2026, 9, 14, 6));
-    assert.equal(h.length, TF_CONFIG[tf].bars);
-    for (const c of h) { assert.ok([c.open, c.high, c.low, c.close].every(Number.isFinite)); assert.ok(c.high >= Math.max(c.open, c.close) && c.low <= Math.min(c.open, c.close)); assert.equal(c.volume, 0); }
-    if (Number.isFinite(v) && v > 0) assert.ok(Math.abs(h[h.length - 1].close - v) < 0.01);
-  }
-});
+const bp = (s: string) => 1 + (hashStr(s) % 9000) / 10; // test price oracle
 t('budget bands: exclusive upper bound, candidates filtered + capped', () => {
   const [a, b, c] = BUDGET_BANDS;
   assert.ok(inBand(49.95, a) && !inBand(50, a) && inBand(50, b) && inBand(100, c) && !inBand(500, c) && !inBand(NaN, a));
   const big = Array.from({ length: 3000 }, (_, i) => ({ symbol: 'S' + i, name: 'S' + i, sector: 'Others' }));
   for (const band of BUDGET_BANDS) {
-    const r = budgetCandidates(big, band, basePrice, 20);
-    assert.ok(r.length > 0 && r.length <= 20); assert.ok(r.every((i) => inBand(basePrice(i.symbol), band)));
+    const r = budgetCandidates(big, band, bp, 20);
+    assert.ok(r.length > 0 && r.length <= 20); assert.ok(r.every((i) => inBand(bp(i.symbol), band)));
   }
 });
 t('feed modes: snapshot badge + status', () => {
@@ -499,7 +432,7 @@ t('screener: consistent fundamentals for every sector / any symbol', () => {
   assert.deepEqual(quarterLabels(new Date('2026-10-15T00:00:00Z')), ['Sep 2025', 'Dec 2025', 'Mar 2026', 'Jun 2026', 'Sep 2026']);
   assert.deepEqual(quarterLabels(new Date('2026-09-15T00:00:00Z')).slice(-1), ['Jun 2026']); assert.deepEqual(quarterLabels(new Date('2026-01-10T00:00:00Z')).slice(-1), ['Dec 2025']);
   const sectors = ['Banking', 'IT', 'Energy', 'Auto', 'FMCG', 'Pharma', 'Metals', 'Financials', 'Infra', 'Telecom', 'Consumer', 'Cement', 'Realty', 'Chemicals', 'Others', 'Unknown'];
-  const eng = new MarketEngine(SEED_INSTRUMENTS);
+  const eng = ingestFixture(new MarketEngine(SEED_INSTRUMENTS));
   for (let i = 0; i < 400; i++) {
     const sym = 'TST' + i; const sector = sectors[i % sectors.length]; const ltp = [3.2, 18, 55, 240, 1900, 4800][i % 6]; const mcap = [40, 900, 12000, 250000][i % 4];
     const s = getScreener({ symbol: sym, sector, ltp, prevClose: ltp * 0.99, mcapCr: mcap, dividendYield: 1.2, high: ltp * 1.01, low: ltp * 0.98 }, new Date('2026-10-15T00:00:00Z'));
@@ -595,7 +528,7 @@ t('circuit & anomaly desk: near/locked bands, volume surge > 3x', () => {
   const now = 1_000_000; const bq: Record<string, any> = { BURST: mk('BURST', 1, 20, 1.2, 1), V4: qs[7], OLD: mk('OLD', 1, 20, 1, 1) };
   const merged = withBursts(r.surge, [{ kind: 'VOLUME_SURGE', symbol: 'BURST', time: now - 1000, value: 5.5 }, { kind: 'VOLUME_SURGE', symbol: 'V4', time: now, value: 9 }, { kind: 'VOLUME_SURGE', symbol: 'OLD', time: now - 3_600_000, value: 8 }, { kind: 'UPPER_CIRCUIT', symbol: 'U5', time: now, value: 5 }, { kind: 'VOLUME_SURGE', symbol: 'NOPE', time: now, value: 8 }, { kind: 'VOLUME_SURGE', symbol: 'BURST', time: now, value: 2 }], (s) => bq[s], now);
   assert.deepEqual(merged.map((x) => x.symbol), ['BURST', 'V4']); assert.equal(merged[0].burst, true); assert.equal(merged[0].volMultiple, 5.5); assert.equal(merged[1].burst, undefined); // stale / unknown / <3× / already-listed ignored
-  const eng = new MarketEngine(SEED_INSTRUMENTS); SEED_INSTRUMENTS.slice(0, 60).forEach((i) => eng.touch(i.symbol)); const live = classifyAnomalies(eng.quotes.values()); assert.ok(Array.isArray(live.upper) && Array.isArray(live.surge));
+  const eng = ingestFixture(new MarketEngine(SEED_INSTRUMENTS)); SEED_INSTRUMENTS.slice(0, 60).forEach((i) => eng.touch(i.symbol)); const live = classifyAnomalies(eng.quotes.values()); assert.ok(Array.isArray(live.upper) && Array.isArray(live.surge));
 });
 t('rebalance: sliders sum to 100, cash released/required, per-stock trims, apply', () => {
   const t1 = setTarget({ Banking: 70, IT: 20, FMCG: 10 }, 'Banking', 25); assert.equal(t1.Banking, 25); assert.ok(Math.abs(Object.values(t1).reduce((a, b) => a + b, 0) - 100) < 1e-9); assert.ok(t1.IT > 20 && t1.FMCG > 10 && Math.abs(t1.IT / t1.FMCG - 2) < 0.1);
@@ -628,36 +561,102 @@ t('report: CSV escaping + injection guard + sections', () => {
   const m = buildReport(q, sc, new Date('2026-10-15T05:00:00Z')); assert.equal(m.changePct, 10); assert.equal(m.grid.length, 10); assert.ok(m.grid.some((g) => g.label.startsWith('ROCE'))); assert.equal(reportFileName('M&M', 'csv', new Date('2026-10-15T05:00:00Z')), 'UpCircuit_MM_report_2026-10-15.csv');
 });
 
-import { parseYahooSession } from '../lib/yahoo';
-t('off-market engine: calm (no random ticks / events), ▶ session replay follows 1-minute bars then rests at the close', () => {
-  const e = new MarketEngine(SEED_INSTRUMENTS); // default mode = replay (market closed)
-  assert.equal(e.mode, 'replay');
-  let now = Date.now(); e.step('RELIANCE', now);
-  const snap = () => JSON.stringify([...e.quotes.values()].map((q) => [q.symbol, q.ltp, q.high, q.low, q.volume])) + JSON.stringify(e.indices.map((i) => i.value));
-  const before = snap(); const alerts0 = e.alerts.length;
-  for (let i = 0; i < 2400; i++) { now += 250; e.step('RELIANCE', now); } // 10 simulated minutes of a CLOSED market
-  assert.equal(snap(), before, 'closed market must not move any price, volume or index');
-  assert.equal(e.alerts.length, alerts0, 'no synthetic alerts while closed');
-  // session replay of one symbol
-  const q = e.quotes.get('RELIANCE')!; const close = q.ltp;
-  assert.ok(e.startSessionReplay('RELIANCE', undefined, now));
-  assert.equal(e.replaying?.symbol, 'RELIANCE'); assert.equal(q.volume, 0);
-  const other = e.quotes.get('TCS')!.ltp; let maxStep = 0, prev = q.ltp; const t0 = now;
-  for (let i = 0; i < 4 * 380; i++) { now += 250; e.step('RELIANCE', now); maxStep = Math.max(maxStep, Math.abs(q.ltp / prev - 1)); prev = q.ltp; if (i === 400) assert.ok(q.volume > 0 && e.replaying!.progress > 0.2); }
-  assert.equal(e.replaying, null, 'replay ends after the last bar'); assert.equal(q.ltp, close, 'rests at the previous close');
-  assert.ok(maxStep < 0.01, `no spikes: max step ${maxStep}`); assert.ok(q.high >= close && q.low <= close && q.high > q.low);
-  assert.equal(e.quotes.get('TCS')!.ltp, other, 'other symbols stay frozen'); assert.ok(q.volume > 0 && q.sumV > 0);
-  // real bars are scaled onto the resting price and used as-is in shape
-  const real = Array.from({ length: 60 }, (_, i) => { const c = 1000 + i; return { open: c - 0.5, high: c + 1, low: c - 1, close: c, volume: 100 }; });
-  e.startSessionReplay('INFY', real, now); const iq = e.quotes.get('INFY')!; const iclose = e.replaying && iq.ltp; assert.ok((e.replaying as { real: boolean } | null)?.real && iclose);
-  e.stopSessionReplay(); assert.equal(e.replaying, null);
-  const live = new MarketEngine(SEED_INSTRUMENTS); live.setMode('live'); assert.equal(live.startSessionReplay('RELIANCE'), false, 'no replay in live mode');
-  // yahoo session parser: picks the LAST IST date with ≥ 30 bars
-  const day = (d: string, n: number, base: number) => Array.from({ length: n }, (_, i) => ({ t: Date.parse(d + 'T03:45:00Z') / 1000 + i * 60, o: base + i, c: base + i + 0.5 }));
-  const mk = (...days: ReturnType<typeof day>[]) => { const all = days.flat(); return { chart: { result: [{ timestamp: all.map((x) => x.t), indicators: { quote: [{ open: all.map((x) => x.o), high: all.map((x) => x.c + 1), low: all.map((x) => x.o - 1), close: all.map((x) => x.c), volume: all.map(() => 500) }] } }] } }; };
-  const ps = parseYahooSession(mk(day('2026-10-14', 375, 100), day('2026-10-15', 375, 200), day('2026-10-16', 10, 300)));
-  assert.equal(ps?.date, '2026-10-15'); assert.equal(ps?.bars.length, 375); assert.equal(ps?.bars[0].open, 200); assert.ok(ps!.bars.every((b) => b.high >= Math.max(b.open, b.close) && b.low <= Math.min(b.open, b.close)));
-  assert.equal(parseYahooSession(mk(day('2026-10-15', 10, 1))), null); assert.equal(parseYahooSession(null), null);
+import { circuitHit, nearCircuit, limitPrice, CircuitTracker } from '../lib/circuit';
+import { CHIME_FREQ } from '../lib/chime';
+import { appUrl, terminalUrl, smartApiCallbackUrl, APP_URL } from '../lib/appUrl';
+import { buildCircuitEmail, sendEmail, esc } from '../lib/email';
+import { parseQuoteRows } from '../lib/yahooData';
+console.log('real-data engine · circuits · alerts · email');
+t('engine has NO quotes until Yahoo delivers them; touch() queues the symbol', () => {
+  const e = new MarketEngine(SEED_INSTRUMENTS);
+  assert.equal(e.quotes.size, 0); assert.equal(e.ready, false);
+  assert.equal(e.touch('TCS'), undefined); assert.ok(e.wantedQuotes().includes('TCS'));
+  e.step('TCS', Date.now()); assert.equal(e.quotes.size, 0, 'stepping must not invent prices');
+  e.ingestRows([{ symbol: 'TCS', ltp: 4000, prevClose: 3950 }]);
+  assert.equal(e.quotes.get('TCS')!.ltp, 4000); assert.equal(e.ready, true);
+});
+t('Yahoo quote payload parses to rows; junk and non-positive prices are dropped', () => {
+  const rows = parseQuoteRows({ quoteResponse: { result: [{ symbol: 'TCS.NS', regularMarketPrice: 4000, regularMarketPreviousClose: 3950, regularMarketVolume: 10 }, { symbol: 'BAD.NS', regularMarketPrice: 0, regularMarketPreviousClose: 5 }, { symbol: 'X.NS' }] } });
+  assert.equal(rows.length, 1); assert.equal(rows[0].symbol, 'TCS'); assert.equal(rows[0].prevClose, 3950);
+});
+t('real bars are stored per timeframe and drive session VWAP', () => {
+  const e = new MarketEngine(SEED_INSTRUMENTS); e.ingestRows([{ symbol: 'INFY', ltp: 1500, prevClose: 1490 }]);
+  const day = 1_760_000_000 - (1_760_000_000 % 86400);
+  const bars = Array.from({ length: 30 }, (_, i) => ({ time: day + 60 * i, open: 1500, high: 1502, low: 1498, close: 1500, volume: 100 }));
+  assert.deepEqual(e.historyOf('INFY', '1m'), []); e.ingestBars('INFY', '1m', bars);
+  assert.equal(e.historyOf('INFY', '1m').length, 30); near(e.quotes.get('INFY')!.sumPV / e.quotes.get('INFY')!.sumV, 1500, 0.01);
+});
+t('circuit detection: ±5/10/20 % limit prices (tick-rounded), nothing in between', () => {
+  const q = (ltp: number) => ({ symbol: 'ABC', ltp, prevClose: 200, circuitBand: 20, upperCircuit: 240, lowerCircuit: 160, bandKnown: false });
+  assert.equal(limitPrice(200, 10, 'upper'), 220); assert.equal(limitPrice(200, 5, 'lower'), 190);
+  assert.deepEqual([circuitHit(q(220))?.dir, circuitHit(q(220))?.band], ['upper', 10]);
+  assert.deepEqual([circuitHit(q(190))?.dir, circuitHit(q(190))?.band], ['lower', 5]);
+  assert.equal(circuitHit(q(160))?.band, 20); assert.equal(circuitHit(q(205)), null); assert.equal(circuitHit(q(219.5)), null);
+  assert.ok(nearCircuit(q(219.5), 1));
+});
+t('CircuitTracker: inferred bands need a 2nd observation ≥ 8 s later; exchange-known fire at once; clears when price leaves', () => {
+  const tr = new CircuitTracker(8000); const at = { symbol: 'ABC', ltp: 220, prevClose: 200, circuitBand: 10, upperCircuit: 220, lowerCircuit: 180, bandKnown: false };
+  tr.observe(at, 0); assert.equal(tr.active().length, 0); tr.observe(at, 3000); assert.equal(tr.active().length, 0);
+  tr.observe(at, 9000); assert.equal(tr.active().length, 1);
+  tr.observe({ ...at, ltp: 205 }, 12000); assert.equal(tr.active().length, 0);
+  const t2 = new CircuitTracker(8000); t2.observe({ ...at, bandKnown: true }, 0); assert.equal(t2.active().length, 1);
+});
+t('chime: upper ascends 880→1760 Hz, lower descends 440→220 Hz', () => {
+  assert.deepEqual(CHIME_FREQ.upper, [880, 1760]); assert.deepEqual(CHIME_FREQ.lower, [440, 220]);
+});
+t('app URLs resolve from NEXT_PUBLIC_APP_URL (default https://upcircuit.vercel.app)', () => {
+  assert.ok(APP_URL.startsWith('http') && !APP_URL.endsWith('/'));
+  assert.equal(appUrl('/login'), APP_URL + '/login'); assert.equal(terminalUrl('M&M'), APP_URL + '/terminal?symbol=M%26M'); assert.equal(smartApiCallbackUrl(), APP_URL + '/api/smartapi/callback');
+  if (!process.env.NEXT_PUBLIC_APP_URL) assert.equal(APP_URL, 'https://upcircuit.vercel.app');
+});
+t('circuit e-mail: ticker, event, LTP, band limit, terminal link; HTML-escaped', async () => {
+  const m = buildCircuitEmail({ symbol: 'XYZ', dir: 'upper', ltp: 220.05, limit: 220, band: 10, pct: 10.02 });
+  assert.match(m.subject, /XYZ Upper Circuit Hit/); assert.ok(m.html.includes('Upper Circuit Hit') && m.html.includes('XYZ') && m.html.includes('₹220.05') && m.html.includes('10% circuit limit'));
+  assert.ok(m.html.includes(`href="${APP_URL}/terminal?symbol=XYZ"`)); assert.match(m.text, /Open in the terminal: .*\/terminal\?symbol=XYZ/);
+  assert.match(buildCircuitEmail({ symbol: 'ABC', dir: 'lower', ltp: 90, limit: 90, band: 10, pct: -10 }).subject, /Lower Circuit Hit/);
+  assert.equal(esc('<a href="x">&\''), '&lt;a href=&quot;x&quot;&gt;&amp;&#39;');
+  assert.ok(!buildCircuitEmail({ symbol: '<b>', dir: 'upper', ltp: 1, limit: 1, band: 5, pct: 5 }).html.includes('<b>'));
+});
+t('sendEmail: Resend request shape, missing key, provider failure', async () => {
+  let seen: { url: string; init: RequestInit } | null = null;
+  const ok = (async (url: string, init: RequestInit) => { seen = { url, init }; return new Response(JSON.stringify({ id: 'e1' }), { status: 200 }); }) as unknown as typeof fetch;
+  const r = await sendEmail({ to: 'a@b.co', subject: 's', html: 'h', text: 't' }, { apiKey: 'k', from: 'UpCircuit <a@x.io>' }, ok);
+  assert.deepEqual(r, { ok: true, id: 'e1' }); const s = seen as unknown as { url: string; init: RequestInit };
+  assert.equal(s.url, 'https://api.resend.com/emails'); assert.equal((s.init.headers as Record<string, string>).Authorization, 'Bearer k'); assert.deepEqual(JSON.parse(s.init.body as string).to, ['a@b.co']);
+  assert.equal((await sendEmail({ to: 'a@b.co', subject: 's', html: 'h', text: 't' }, {})).ok, false);
+  const bad = (async () => new Response(JSON.stringify({ message: 'nope' }), { status: 422 })) as unknown as typeof fetch;
+  assert.deepEqual(await sendEmail({ to: 'a@b.co', subject: 's', html: 'h', text: 't' }, { apiKey: 'k' }, bad), { ok: false, error: 'nope', status: 422 });
 });
 
-console.log(`\n${passed} checks passed${process.exitCode ? ' — WITH FAILURES' : ''}`);
+
+import { playChime, unlockAudioContext, audioState, testChime, SWEEP_SEC, FIFTH } from '../lib/chime';
+import { logLine, istTime } from '../components/CircuitLogDrawer';
+t('chime sweeps: upper 880→1760 Hz, lower 440→220 Hz over 0.35 s; locked until unlockAudioContext()', async () => {
+  const rec: { type: string; set: [number, number][]; ramp: [number, number][] }[] = [];
+  class FakeCtx {
+    state = 'suspended'; currentTime = 10; destination = {};
+    addEventListener() {}
+    async resume() { this.state = 'running'; }
+    createGain() { const g = { gain: { setValueAtTime() {}, exponentialRampToValueAtTime() {} }, connect: () => g }; return g; }
+    createOscillator() { const o = { type: '', set: [] as [number, number][], ramp: [] as [number, number][], frequency: { setValueAtTime: (v: number, at: number) => o.set.push([v, at]), exponentialRampToValueAtTime: (v: number, at: number) => o.ramp.push([v, at]) }, connect: (x: unknown) => x, start() {}, stop() {} }; rec.push(o); return o; }
+  }
+  (globalThis as unknown as { window: unknown }).window = { AudioContext: FakeCtx };
+  assert.equal(audioState(), 'suspended'); assert.equal(playChime('upper'), false, 'locked before a gesture');
+  assert.equal(await unlockAudioContext(), 'running'); assert.equal(audioState(), 'running');
+  assert.equal(playChime('upper'), true);
+  near(rec[0].set[0][0], 880, 0); near(rec[0].ramp[0][0], 1760, 0); near(rec[0].ramp[0][1] - rec[0].set[0][1], SWEEP_SEC, 1e-9); near(rec[1].set[0][0], 880 * FIFTH, 0);
+  rec.length = 0; assert.equal(await testChime('lower'), true);
+  near(rec[0].set[0][0], 440, 0); near(rec[0].ramp[0][0], 220, 0); near(rec[0].ramp[0][1] - rec[0].set[0][1], SWEEP_SEC, 1e-9);
+  delete (globalThis as unknown as { window?: unknown }).window;
+});
+t('circuit log line: [HH:MM:SS] | SYMBOL | TYPE | ₹price | %change (IST)', () => {
+  const at = Date.parse('2026-10-19T09:45:07+05:30');
+  assert.equal(istTime(at), '09:45:07');
+  assert.equal(logLine({ at, symbol: 'ABC', dir: 'upper', ltp: 220.05, pct: 10.02 }), '[09:45:07] | ABC | UPPER | ₹220.05 | +10.02%');
+  assert.match(logLine({ at, symbol: 'XYZ', dir: 'lower', ltp: 90, pct: -10 }), /^\[09:45:07\] \| XYZ \| LOWER \| ₹90\.00 \| [-−]10\.00%$/);
+});
+
+void Promise.all(pending).then(() => {
+  console.log(`\n${passed} checks passed${process.exitCode ? ' — WITH FAILURES' : ''}`);
+  process.exit(process.exitCode ?? 0); // some modules keep timers alive
+});

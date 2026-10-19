@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { FeedMode, MarketEngine } from '@/lib/market';
-import { generateHistory } from '@/lib/market';
 import type { Fundamentals, Holding, Timeframe } from '@/lib/types';
 import { useFullscreen } from '@/hooks/useFullscreen';
 import { macd, pivotLevels, rsi14, shortTermOutlook, longTermOutlook, sma, type Outlook } from '@/lib/analytics';
@@ -85,8 +84,9 @@ export function StockResearchModal({ symbol, engine, favorite, onToggleFavorite,
 
   const quote = engine.touch(symbol);
 
-  // daily history: fixed shape per symbol; last close tracks the live LTP
-  const base = useMemo(() => generateHistory(symbol, '1D', engine.touch(symbol)?.ltp ?? 100, Date.now()), [symbol, engine]);
+  // REAL daily bars (Yahoo, ≈1 year); the last close tracks the live LTP
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const base = useMemo(() => engine.historyOf(symbol, '1Y'), [symbol, engine, engine.histVer]);
 
   /* ── dialog behaviour: focus, Esc, focus trap, scroll lock ── */
   const onCloseRef = useRef(onClose);
@@ -118,9 +118,10 @@ export function StockResearchModal({ symbol, engine, favorite, onToggleFavorite,
     };
   }, []);
 
-  const closes = useMemo(() => [...base.slice(0, -1).map((c) => c.close), quote?.ltp ?? base[base.length - 1].close], [base, quote?.ltp]);
+  const closes = useMemo(() => (base.length ? [...base.slice(0, -1).map((c) => c.close), quote?.ltp ?? base[base.length - 1].close] : []), [base, quote?.ltp]);
   const prevBar = base[base.length - 2];
-  const pivots = useMemo(() => pivotLevels(prevBar.high, prevBar.low, prevBar.close), [prevBar]);
+  // pivots need the previous real session's H/L/C — until Yahoo delivers it they are zeros shown as '—'
+  const pivots = useMemo(() => (prevBar ? pivotLevels(prevBar.high, prevBar.low, prevBar.close) : { p: 0, r1: 0, r2: 0, s1: 0, s2: 0 }), [prevBar]);
   const rsi = rsi14(closes);
   const sma50 = sma(closes, 50);
   const sma200 = sma(closes, 200);
@@ -154,7 +155,7 @@ export function StockResearchModal({ symbol, engine, favorite, onToggleFavorite,
     { k: 'S1', v: pivots.s1, c: 'text-up' },
     { k: 'S2', v: pivots.s2, c: 'text-up' },
     { k: 'LTP', v: quote.ltp, c: 'text-accent' },
-  ].sort((a, b) => b.v - a.v);
+  ].filter((x) => x.v > 0).sort((a, b) => b.v - a.v);
 
   return (
     <div className={`fixed inset-0 bg-black/60 ${full.fs ? 'z-[66]' : 'z-[55] md:p-4'}`} onMouseDown={full.fs ? undefined : onClose}>
@@ -169,7 +170,7 @@ export function StockResearchModal({ symbol, engine, favorite, onToggleFavorite,
               <h2 className="text-[18px] font-bold text-ink">{symbol}</h2>
               <Badge>{quote.exch ?? 'NSE'} · EQ</Badge>
               <Badge tone="accent">{quote.sector}</Badge>
-              <Badge tone="warn" className="hidden sm:inline-flex">Simulated data</Badge>
+              <Badge tone="warn" className="hidden sm:inline-flex">Delayed Yahoo data</Badge>
             </div>
             <div className="truncate text-[12px] text-muted">{quote.name}</div>
           </div>
@@ -203,10 +204,10 @@ export function StockResearchModal({ symbol, engine, favorite, onToggleFavorite,
           <div className="grid gap-4 p-4 lg:h-full lg:grid-cols-[minmax(0,1fr)_380px] [.fs_&]:xl:grid-cols-[minmax(0,1fr)_460px]">
             <div className="min-w-0 space-y-4 lg:h-full lg:overflow-y-auto lg:pr-1">
               <div className="overflow-hidden rounded-md border border-line">
-                <PriceChart symbol={symbol} ltp={quote.ltp} volume={quote.volume} tf={tf} onTf={setTf} className={full.fs ? 'h-[min(62vh,720px)] min-h-[400px]' : 'h-[400px]'} />
+                <PriceChart symbol={symbol} ltp={quote.ltp} volume={quote.volume} tf={tf} onTf={setTf} live={engine.mode === 'live'} className={full.fs ? 'h-[min(62vh,720px)] min-h-[400px]' : 'h-[400px]'} />
               </div>
 
-              <Card title="Key ratios" right={<span className="text-[10px] text-muted">Screener-style · simulated</span>}>
+              <Card title="Key ratios" right={<span className="text-[10px] text-muted">Screener-style · estimates flagged</span>}>
                 <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 [.fs_&]:min-[1500px]:grid-cols-8">
                   <Ratio label="Market Cap" value={fmtCr(f.marketCapCr)} tone="na" hint="Share price × shares outstanding" />
                   <Ratio label="Stock P/E" value={f.pe.toFixed(1)} sub={`sector ≈ ${typicalPe}`} tone={ratioTone('pe', f, quote.sector)} hint="Price ÷ earnings per share. Compared with the sector's typical multiple." />
@@ -242,7 +243,7 @@ export function StockResearchModal({ symbol, engine, favorite, onToggleFavorite,
                   <OutlookCard title="Long-term outlook" horizon="6–12 months" o={long} />
                 </div>
               </div>
-              <p className="pb-2 text-[10px] text-muted">Prices, ratios and indicators here are computed from simulated data for demonstration. Educational only; not investment advice.</p>
+              <p className="pb-2 text-[10px] text-muted">Prices, ratios and indicators here use real delayed Yahoo prices; ratios marked “estimated” are approximations. Educational only; not investment advice.</p>
             </div>
 
             <div className="h-[560px] min-h-0 lg:h-full">

@@ -4,10 +4,10 @@ import { useState } from 'react';
 import { PLANS, ROLES, canUse, coerceRole, planOf, validateCredentials, type PlanId, type Role } from '@/lib/auth';
 import { useAuth } from '@/hooks/useAuth';
 
-const field = 'h-9 w-full rounded-md border border-line bg-bg px-3 text-[13px] text-ink outline-none placeholder:text-muted focus:border-accent';
+const field = 'h-9 w-full rounded-md border border-line bg-bg/70 px-3 text-[13px] text-ink outline-none placeholder:text-muted focus:border-accent';
 
 /** Email + password login / sign-up. On sign-up the user picks a plan (Tier 1–3) and a primary role with radio buttons. */
-export function AuthScreen() {
+export function AuthScreen({ onDone }: { onDone?: () => void } = {}) {
   const { signIn, signUp, backend } = useAuth();
   const [mode, setMode] = useState<'login' | 'signup'>('signup');
   const [email, setEmail] = useState('');
@@ -16,6 +16,9 @@ export function AuthScreen() {
   const [role, setRole] = useState<Role>('retail');
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [show, setShow] = useState(false);
+  const [touched, setTouched] = useState(false);
+  const inline = touched ? validateCredentials(email, password) : null;
 
   const pickPlan = (p: PlanId) => {
     setPlan(p);
@@ -23,6 +26,7 @@ export function AuthScreen() {
   };
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setTouched(true);
     const bad = validateCredentials(email, password);
     if (bad) return setErr(bad);
     setBusy(true);
@@ -30,11 +34,12 @@ export function AuthScreen() {
     const r = mode === 'login' ? await signIn(email, password) : await signUp({ email, password, role, plan });
     setBusy(false);
     if (!r.ok) setErr(r.error);
+    else onDone?.();
   };
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-bg p-4">
-      <form onSubmit={submit} noValidate data-testid="auth-form" className="w-full max-w-md space-y-4 rounded-xl border border-line bg-panel/90 p-5 shadow-2xl shadow-black/30 backdrop-blur">
+    <div className="flex min-h-screen items-center justify-center bg-bg bg-[radial-gradient(ellipse_at_top,rgba(59,130,246,0.12),transparent_60%)] p-4">
+      <form onSubmit={submit} noValidate data-testid="auth-form" className="w-full max-w-md space-y-4 rounded-xl border border-line bg-panel/60 p-5 shadow-2xl shadow-black/40 ring-1 ring-white/5 backdrop-blur-xl">
         <div>
           <h1 className="text-lg font-bold text-ink">Up<span className="text-accent">Circuit</span></h1>
           <p className="text-[12px] text-muted">{mode === 'login' ? 'Log in to your workspace' : 'Create your account'}</p>
@@ -50,7 +55,7 @@ export function AuthScreen() {
           <input data-testid="auth-email" type="email" autoComplete="email" value={email} onChange={(e) => setEmail(e.target.value)} className={`${field} mt-1`} placeholder="you@example.com" />
         </label>
         <label className="block text-[12px] font-medium text-ink">Password
-          <input data-testid="auth-password" type="password" autoComplete={mode === 'login' ? 'current-password' : 'new-password'} value={password} onChange={(e) => setPassword(e.target.value)} className={`${field} mt-1`} placeholder="At least 8 characters" />
+          <span className="relative mt-1 block"><input data-testid="auth-password" type={show ? 'text' : 'password'} autoComplete={mode === 'login' ? 'current-password' : 'new-password'} value={password} onChange={(e) => setPassword(e.target.value)} className={`${field} pr-14`} placeholder="At least 8 characters" /><button type="button" onClick={() => setShow((s) => !s)} aria-label={show ? 'Hide password' : 'Show password'} data-testid="auth-show" className="absolute right-2 top-1/2 -translate-y-1/2 text-[11px] text-muted hover:text-ink">{show ? 'Hide' : 'Show'}</button></span>
         </label>
 
         {mode === 'signup' && (
@@ -83,6 +88,7 @@ export function AuthScreen() {
           </>
         )}
 
+        {(err ?? inline) && !err && <p data-testid="auth-inline" className="text-[11px] text-down">{inline}</p>}
         {err && <p role="alert" data-testid="auth-error" className="rounded-md bg-down/10 px-3 py-2 text-[12px] text-down">{err}</p>}
         <button type="submit" disabled={busy} data-testid="auth-submit" className="h-9 w-full rounded-md bg-accent text-[13px] font-bold text-white hover:brightness-110 disabled:opacity-60">
           {busy ? 'Please wait…' : mode === 'login' ? 'Log in' : 'Create account'}

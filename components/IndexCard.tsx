@@ -10,10 +10,8 @@ export function IndexCard({ ix, onOpen }: { ix: IndexQuote; onOpen?: (id: string
         <span className={`text-[8px] ${tone(ix.pct)}`}>{dir}</span>
       </div>
       <div className="num flex items-baseline gap-2">
-        <span className="text-[13px] font-semibold text-ink">{fmt(ix.value)}</span>
-        <span className={`text-[11px] ${tone(ix.pct)}`}>
-          {fmtSigned(ix.change)} ({fmtPct(ix.pct)})
-        </span>
+        <span className="text-[13px] font-semibold text-ink">{ix.loaded === false ? '—' : fmt(ix.value)}</span>
+        <span className={`text-[11px] ${tone(ix.pct)}`}>{ix.loaded === false ? 'loading' : `${fmtSigned(ix.change)} (${fmtPct(ix.pct)})`}</span>
       </div>
     </button>
   );

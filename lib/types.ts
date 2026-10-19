@@ -26,6 +26,12 @@ export interface Quote extends Instrument {
   circuitBand: number;
   upperCircuit: number;
   lowerCircuit: number;
+  /** true when upper/lower came from the exchange (SmartAPI); false = inferred (Yahoo has no per-stock band) */
+  bandKnown?: boolean;
+  /** epoch ms the quote was last refreshed from Yahoo / the relay */
+  fetchedAt?: number;
+  /** exchange time of the last trade (epoch ms), when Yahoo reports it */
+  marketTime?: number;
 }
 
 /** Bar intervals: 1m…1M. Ranges: 1Y (daily bars), 5Y (weekly bars), 10Y (monthly bars). */
@@ -47,6 +53,8 @@ export interface IndexQuote {
   prev: number;
   change: number;
   pct: number;
+  /** false until the first real value has arrived */
+  loaded?: boolean;
 }
 
 export interface DepthLevel {

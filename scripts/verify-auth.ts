@@ -86,7 +86,7 @@ const mem = () => {
     const be = createSupabaseBackend('https://p.supabase.co/', 'anon', mem(), f);
     const su = await be.signUp({ email: 'x@y.co', password: 'password1', role: 'retail', plan: 'retail' });
     assert.ok(su.ok && su.user.plan === 'retail' && su.user.id === 'uid-1');
-    assert.ok(calls.some((c) => c.url === 'https://p.supabase.co/auth/v1/signup' && JSON.parse(c.body!).data.plan === 'retail'));
+    assert.ok(calls.some((c) => c.url.startsWith('https://p.supabase.co/auth/v1/signup') && JSON.parse(c.body!).data.plan === 'retail'));
     assert.equal((await be.restore())?.id, 'uid-1');
     assert.ok(!(await be.signIn('x@y.co', 'wrongpass1')).ok);
     const li = await be.signIn('x@y.co', 'password1');

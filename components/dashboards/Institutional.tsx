@@ -7,7 +7,6 @@ import { alpha } from '@/lib/theme';
 import { fmt, fmtCr, fmtInt, fmtPct, tone } from '@/lib/format';
 import { C } from '@/lib/theme';
 import { breadth, correlationMatrix, liquidityRatio, portfolioValueSeries, sectorIndexSeries, sectorStats, sharpeParts } from '@/lib/analytics';
-import { generateHistory } from '@/lib/market';
 import type { DashboardProps } from './types';
 
 /** Diverging red ↔ green tile colour, saturating at ±3 %. */
@@ -56,34 +55,32 @@ export function InstitutionalDashboard({ engine, quote, closes1D, holdings, favo
   }, [quote.symbol, holdings, favorites, engine]);
 
   const corr = useMemo(() => {
-    const now = Date.now();
-    const series = Object.fromEntries(basket.map((s) => [s, generateHistory(s, '1D', engine.quotes.get(s)?.ltp ?? 100, now).map((c) => c.close)]));
+    const series = Object.fromEntries(basket.map((s) => [s, engine.closes(s)]));
     return correlationMatrix(series);
-  }, [basket, engine]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [basket, engine, engine.histVer]);
 
   // 4×4 sector correlation: equal-weighted index of each sector's three largest names (1Y daily returns)
   const topSectors = sectors.slice(0, 4).map((x) => x.sector);
   const secKey = topSectors.join(',');
   const secCorr = useMemo(() => {
-    const now = Date.now();
     const series: Record<string, number[]> = {};
     for (const sec of topSectors) {
       const members = all.filter((q) => q.sector === sec).sort((a, b) => b.mcapCr - a.mcapCr).slice(0, 3);
-      series[sec] = sectorIndexSeries(members.map((q) => generateHistory(q.symbol, '1D', q.ltp, now).map((c) => c.close)));
+      series[sec] = sectorIndexSeries(members.map((q) => engine.closes(q.symbol)));
     }
     return correlationMatrix(series);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [secKey, engine]);
+  }, [secKey, engine, engine.histVer]);
 
   // portfolio Sharpe = (Rp − Rf) ÷ σ on the holdings' back-cast daily value series
   const holdKey = holdings.map((h) => h.symbol + h.qty).join(',');
   const pSharpe = useMemo(() => {
     if (holdings.length === 0) return null;
-    const now = Date.now();
-    const closes = holdings.map((h) => generateHistory(h.symbol, '1D', engine.touch(h.symbol)?.ltp ?? h.avg, now).map((c) => c.close));
+    const closes = holdings.map((h) => engine.closes(h.symbol));
     return sharpeParts(portfolioValueSeries(closes, holdings.map((h) => h.qty)));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [holdKey, engine]);
+  }, [holdKey, engine, engine.histVer]);
 
   const gaugeVal = Math.min(3, b.ratio);
 
@@ -96,7 +93,7 @@ export function InstitutionalDashboard({ engine, quote, closes1D, holdings, favo
       <div className={`grid grid-cols-2 gap-2 ${WIDE}`}>
         <Stat label="Advance / Decline" value={b.ratio.toFixed(2)} valueClass={b.ratio >= 1 ? 'text-up' : 'text-down'} sub={`${b.adv} adv · ${b.dec} dec · ${b.unch} unch`} hint="Advancers ÷ Decliners across the tracked universe" />
         <Stat label={`Sharpe · ${quote.symbol}`} value={sr === null ? '—' : sr.toFixed(2)} valueClass={sr === null ? '' : sr >= 1 ? 'text-up' : sr < 0 ? 'text-down' : 'text-ink'} sub={shp ? `Rp ${shp.annReturnPct.toFixed(1)}% · σ ${shp.annVolPct.toFixed(1)}%` : '1Y daily, rf 6.5%'} hint="Sharpe = (Rp − Rf) ÷ σ, annualised on daily closes, Rf = 6.5%" />
-        <Stat label="Sharpe · portfolio" value={pSharpe ? pSharpe.sharpe.toFixed(2) : '—'} valueClass={!pSharpe ? '' : pSharpe.sharpe >= 1 ? 'text-up' : pSharpe.sharpe < 0 ? 'text-down' : 'text-ink'} sub={pSharpe ? `Rp ${pSharpe.annReturnPct.toFixed(1)}% · σ ${pSharpe.annVolPct.toFixed(1)}%` : 'import holdings'} hint="(Rp − Rf) ÷ σ on today's holdings back-cast over simulated history" />
+        <Stat label="Sharpe · portfolio" value={pSharpe ? pSharpe.sharpe.toFixed(2) : '—'} valueClass={!pSharpe ? '' : pSharpe.sharpe >= 1 ? 'text-up' : pSharpe.sharpe < 0 ? 'text-down' : 'text-ink'} sub={pSharpe ? `Rp ${pSharpe.annReturnPct.toFixed(1)}% · σ ${pSharpe.annVolPct.toFixed(1)}%` : 'import holdings'} hint="(Rp − Rf) ÷ σ on today's holdings back-cast over real price history" />
         <Stat label="Liquidity ratio" value={`${t2m.toFixed(3)}%`} sub={`${quote.symbol} · ₹${fmt(turnoverCr, 1)} Cr / ${fmtCr(quote.mcapCr)}`} hint="Turnover ÷ Market cap (session traded value ÷ capitalisation)" />
       </div>
 

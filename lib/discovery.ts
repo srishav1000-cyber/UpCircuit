@@ -12,8 +12,8 @@ export const BUDGET_BANDS: { id: BudgetBand; label: string; min: number; max: nu
 export const inBand = (ltp: number, b: { min: number; max: number }) => Number.isFinite(ltp) && ltp > 0 && ltp >= b.min && ltp < b.max;
 
 /**
- * Cheap pre-filter over the whole master (7.5k rows) using a price function that does NOT create engine quotes
- * (`basePrice`); callers then touch only the returned handful for live LTP. Deterministic order: symbol ascending.
+ * Cheap pre-filter over the whole master (7.5k rows) using a price function over REAL loaded quotes
+ * (0 = not priced yet → skipped). Deterministic order: symbol ascending.
  */
 export function budgetCandidates(instruments: Instrument[], band: { min: number; max: number }, priceOf: (symbol: string) => number, limit: number): Instrument[] {
   const out: Instrument[] = [];

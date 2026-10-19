@@ -5,7 +5,6 @@ import { Badge, Card, Meter, Stat, ZONE, sentimentTone } from '../ui';
 import { AreaChart, CARD_GRID, WIDE } from './charts';
 import { fmtCr, fmtPct, tone } from '@/lib/format';
 import { annualVolPct, breadth, hhi, riskScore, trendGrowthYoY, weightedRiskScore } from '@/lib/analytics';
-import { generateHistory } from '@/lib/market';
 import type { SentimentLabel } from '@/lib/types';
 import { CircuitTracker } from '../CircuitTracker';
 import type { DashboardProps } from './types';
@@ -55,18 +54,18 @@ export function ExecutiveDashboard({ engine, holdings, onSelect }: DashboardProp
   const diversification = 1 - h / 10000;
 
   const nifty = engine.indices[0];
-  const growth = useMemo(() => trendGrowthYoY(generateHistory('NIFTY 50', '1D', nifty.value, Date.now(), 'INDEX').map((c) => c.close)), [nifty.value]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const growth = useMemo(() => trendGrowthYoY(engine.closes('NIFTY')), [engine, engine.histVer]);
 
   // weighted portfolio risk: Σ wᵢ·σᵢ over the holdings' 1Y daily volatility (falls back to the 8 largest caps)
   const holdKey = holdings.map((x) => x.symbol + x.qty).join(',');
   const wrisk = useMemo(() => {
-    const now = Date.now();
     const base = holdings.length >= 1 ? holdings.map((x) => ({ symbol: x.symbol, weight: x.qty * (engine.quotes.get(x.symbol)?.ltp ?? x.avg) })) : [...engine.quotes.values()].sort((a, c) => c.mcapCr - a.mcapCr).slice(0, 8).map((q) => ({ symbol: q.symbol, weight: q.mcapCr }));
-    const items = base.map((x) => ({ ...x, volPct: annualVolPct(generateHistory(x.symbol, '1D', engine.touch(x.symbol)?.ltp ?? 100, now).map((c) => c.close)) }));
+    const items = base.map((x) => ({ ...x, volPct: annualVolPct(engine.closes(x.symbol)) }));
     const tot = items.reduce((a, i) => a + i.weight, 0) || 1;
     return { ...weightedRiskScore(items), items: items.map((i) => ({ ...i, w: i.weight / tot })).sort((a, c) => c.w * c.volPct - a.w * a.volPct), own: holdings.length >= 1 };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [holdKey, engine]);
+  }, [holdKey, engine, engine.histVer]);
   const wTone = wrisk.score < 35 ? 'text-up' : wrisk.score < 65 ? 'text-warn' : 'text-down';
 
   const risk = riskScore(engine.realisedVol(), h, b.ratio);
@@ -82,7 +81,7 @@ export function ExecutiveDashboard({ engine, holdings, onSelect }: DashboardProp
           <div className="mt-2">
             <AreaChart data={trend} fmtY={(n) => (n / 1e5).toFixed(2) + 'L'} xLabels={['oldest', 'now']} />
           </div>
-          <p className="mt-1 text-[10px] text-muted">Σ market cap of the {all.length} tracked stocks (₹ lakh crore, simulated).</p>
+          <p className="mt-1 text-[10px] text-muted">Σ market cap of the {all.length} tracked stocks (₹ lakh crore).</p>
         </Card>
 
         <Card

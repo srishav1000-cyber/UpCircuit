@@ -53,6 +53,8 @@ export interface AuthBackend {
   signUp(i: { email: string; password: string; role: Role; plan: PlanId }): Promise<AuthResult>;
   signIn(email: string, password: string): Promise<AuthResult>;
   signOut(): Promise<void>;
+  /** a valid access token for server calls (refreshed if needed); null for backends without server-verifiable sessions */
+  accessToken(): Promise<string | null>;
   /** persist a new primary role and/or plan (a backend may refuse a plan change — billing owns it) */
   update(user: User, patch: { role?: Role; plan?: PlanId }): Promise<AuthResult>;
 }

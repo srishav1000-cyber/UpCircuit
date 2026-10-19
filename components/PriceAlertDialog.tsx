@@ -92,7 +92,7 @@ export function PriceAlertDialog({ symbol, ltp, alerts, onAdd, onRemove, onClear
           </p>
           {error && <p role="alert" className="rounded border border-down/40 bg-down/10 px-2.5 py-1.5 text-[12px] text-down">{error}</p>}
           <button type="submit" disabled={!valid} className="h-10 w-full rounded-md bg-accent text-[13px] font-bold text-white hover:brightness-110 disabled:opacity-40">Set alert</button>
-          <p className="text-[10px] text-muted">Alerts are stored in this browser and fire only while UpCircuit is open — no push, SMS or email. Prices may be simulated (see the feed badge).</p>
+          <p className="text-[10px] text-muted">Alerts are stored in this browser and fire only while UpCircuit is open — no push, SMS or email. Prices are real but may be delayed (see the feed badge).</p>
         </form>
 
         <div className="max-h-48 overflow-y-auto border-t border-line px-4 py-2" data-testid="alert-list">

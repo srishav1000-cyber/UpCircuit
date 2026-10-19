@@ -29,9 +29,14 @@ const LOGIN_URL = 'https://apiconnect.angelbroking.com/rest/auth/angelbroking/us
 const SCRIP_MASTER_URL = 'https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json';
 const WS_URL = 'wss://smartapisocket.angelone.in/smart-stream';
 
+/** session handed over by the app's /api/smartapi/callback (publisher login) — preferred over the TOTP login while present */
+let handed: { jwt: string; feed: string } | null = null;
+
 async function login() {
   const apiKey = env('SMARTAPI_API_KEY');
-  const clientCode = env('SMARTAPI_CLIENT_CODE');
+  const clientCode = process.env.SMARTAPI_CLIENT_CODE ?? '';
+  if (handed) return { apiKey, clientCode, jwt: handed.jwt, feed: handed.feed };
+  if (!clientCode) throw new Error('SMARTAPI_CLIENT_CODE missing');
   const res = await fetch(LOGIN_URL, {
     method: 'POST',
     headers: {
@@ -93,6 +98,25 @@ async function main() {
     if (req.url === '/health' || req.url === '/') {
       res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
       res.end(JSON.stringify({ ok: true, source: lastSrc, clients: wss.clients.size, uptimeSec: Math.round(process.uptime()) }));
+      return;
+    }
+    if (req.method === 'POST' && req.url === '/session') {
+      // app → relay token handoff, guarded by RELAY_ADMIN_SECRET
+      const secret = process.env.RELAY_ADMIN_SECRET;
+      let body = '';
+      req.on('data', (c) => (body += c) && body.length > 8192 && req.destroy());
+      req.on('end', () => {
+        try {
+          const j = JSON.parse(body) as { jwt?: string; feed?: string };
+          if (!secret || req.headers['x-relay-secret'] !== secret) throw new Error('forbidden');
+          if (!j.jwt || !j.feed) throw new Error('bad');
+          handed = { jwt: j.jwt, feed: j.feed };
+          upstream?.close(); // reconnect with the new session
+          res.writeHead(200).end('{"ok":true}');
+        } catch (e) {
+          res.writeHead((e as Error).message === 'forbidden' ? 403 : 400).end('{"ok":false}');
+        }
+      });
       return;
     }
     res.writeHead(426, { 'content-type': 'text/plain' });

@@ -1,3 +1,4 @@
+import { appUrl } from './appUrl';
 import { PLANS, coerceRole, canUse, validateCredentials, type AuthBackend, type AuthResult, type PlanId, type Role, type User, ALL_ROLES } from './auth';
 
 type Store = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
@@ -72,6 +73,9 @@ export function createLocalBackend(store: Store): AuthBackend {
     },
     async signOut() {
       store.removeItem(SESSION);
+    },
+    async accessToken() {
+      return null; // demo accounts have no server-verifiable session
     },
     async update(user, patch) {
       const users = read();
@@ -157,7 +161,7 @@ export function createSupabaseBackend(url: string, anonKey: string, store: Store
       if (bad) return fail(bad);
       if (!canUse(plan, role)) return fail('That role is not included in the selected plan.');
       try {
-        const r = await f(`${base}/auth/v1/signup`, { method: 'POST', headers: hdr(), body: JSON.stringify({ email: normEmail(email), password, data: { role, plan } }) });
+        const r = await f(`${base}/auth/v1/signup?redirect_to=${encodeURIComponent(appUrl('/login'))}`, { method: 'POST', headers: hdr(), body: JSON.stringify({ email: normEmail(email), password, data: { role, plan } }) });
         if (!r.ok) return fail(await msg(r, 'Sign-up failed.'));
         return finish(await r.json());
       } catch {
@@ -177,6 +181,21 @@ export function createSupabaseBackend(url: string, anonKey: string, store: Store
       const t = load();
       save(null);
       if (t) await f(`${base}/auth/v1/logout`, { method: 'POST', headers: hdr(t.access) }).catch(() => undefined);
+    },
+    async accessToken() {
+      try {
+        let t = load();
+        if (!t) return null;
+        const r = await f(`${base}/auth/v1/user`, { headers: hdr(t.access) });
+        if (r.status === 401 && t.refresh) {
+          const n = await refresh(t);
+          if (!n) return null;
+          save((t = n));
+        } else if (!r.ok) return null;
+        return t.access;
+      } catch {
+        return null;
+      }
     },
     async update(user, patch) {
       if (patch.plan && patch.plan !== user.plan) return fail('Plan changes are handled by billing — contact support or complete checkout.');

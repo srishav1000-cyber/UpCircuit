@@ -15,6 +15,8 @@ interface Ctx {
   signUp: (i: { email: string; password: string; role: Role; plan: PlanId }) => Promise<AuthResult>;
   signIn: (email: string, password: string) => Promise<AuthResult>;
   signOut: () => Promise<void>;
+  /** fresh Supabase access token for server calls (null on demo accounts) */
+  getToken: () => Promise<string | null>;
   /** change primary role and/or plan; resolves with the outcome so the UI can show a refusal */
   update: (patch: { role?: Role; plan?: PlanId }) => Promise<AuthResult>;
 }
@@ -76,6 +78,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       backend: process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ? 'supabase' : 'local',
       signUp: (i) => wrap(() => need().signUp(i)),
       signIn: (e, p) => wrap(() => need().signIn(e, p)),
+      getToken: async () => (await be.current?.accessToken().catch(() => null)) ?? null,
       signOut: async () => {
         await be.current?.signOut().catch(() => undefined);
         put(REQUIRED ? null : GUEST);

@@ -1,5 +1,5 @@
 import type { Instrument, Quote } from './types';
-import { basePrice, generateHistory, hashStr, mulberry32, sharesCr } from './market';
+import { hashStr, mulberry32 } from './estimate';
 import { getFundamentals, sectorTypicalPe } from './fundamentals';
 
 /**
@@ -96,8 +96,8 @@ function computeScreener(q: Q, now: Date): Screener {
     return { label: labels[i], sales: r1(sales), expenses: r1(sales - opB), operatingProfit: r1(opB), opmPct: r1((opB / sales) * 100), netProfit: r1(pat), eps: r2(pat / shares) };
   });
 
-  // 52-week range from the same deterministic 1Y series the chart uses (anchored on the previous close → stable while LTP ticks)
-  const hist = generateHistory(q.symbol, '1Y', q.prevClose, now.getTime(), q.sector);
+  // 52-week range from the REAL 1-year daily bars (when they have loaded); otherwise just today's known range
+  const hist: { high: number; low: number }[] = []; // real 52W bounds arrive via mergeLive (Yahoo); until then only today's known range
   let hi = Math.max(q.ltp, q.high, ...hist.map((c) => c.high));
   let lo = Math.min(q.ltp, q.low, ...hist.map((c) => c.low));
   hi = r2(hi);
@@ -197,15 +197,15 @@ export function getScreener(q: Q | null | undefined, now = new Date()): Screener
 export const rangePct = (v: number, lo: number, hi: number) => (hi > lo ? Math.min(100, Math.max(0, ((v - lo) / (hi - lo)) * 100)) : 50);
 
 /**
- * Top-N same-sector peers by (static) market-cap proxy — computed WITHOUT creating engine quotes for the whole sector,
+ * Top-N same-sector peers by REAL market cap (names Yahoo has not priced yet rank last) — computed WITHOUT creating engine quotes for the whole sector,
  * so only the returned handful need `engine.touch()`.
  */
-export function peerCandidates(instruments: Instrument[] | null | undefined, symbol: string, sector: string, n = 5): Instrument[] {
+export function peerCandidates(instruments: Instrument[] | null | undefined, symbol: string, sector: string, n = 5, capOf?: (symbol: string) => number): Instrument[] {
   if (!Array.isArray(instruments)) return [];
   const scored: { i: Instrument; cap: number }[] = [];
   for (const i of instruments) {
     if (i.symbol === symbol || (i.sector ?? 'Others') !== sector) continue;
-    scored.push({ i, cap: basePrice(i.symbol) * sharesCr(i.symbol) });
+    scored.push({ i, cap: capOf?.(i.symbol) ?? 0 });
   }
   scored.sort((a, b) => b.cap - a.cap || (a.i.symbol < b.i.symbol ? -1 : 1));
   return scored.slice(0, n).map((x) => x.i);

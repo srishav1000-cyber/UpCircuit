@@ -2,7 +2,6 @@
 
 import { useMemo, useState } from 'react';
 import type { MarketEngine } from '@/lib/market';
-import { generateHistory } from '@/lib/market';
 import type { NewsResponse, Quote } from '@/lib/types';
 import { breadth, capClass, dayPct, topMovers, type CapClass } from '@/lib/analytics';
 import { fmt, fmtCompact, fmtCr, fmtPct, fmtSigned, tone } from '@/lib/format';
@@ -100,20 +99,19 @@ export function HomePage({ engine, news, newsError, onOpenStock, instruments, on
   const trend = engine.mcapTrend;
   const trendPct = trend.length > 1 ? (trend[trend.length - 1] / trend[0] - 1) * 100 : 0;
 
-  // index sparklines: fixed intraday shape per index, last point pinned to the live value
-  const shapes = useMemo(() => {
-    const now = Date.now();
-    return Object.fromEntries(engine.indices.map((ix) => [ix.id, generateHistory(ix.label, '5m', ix.prev, now, 'INDEX').slice(-78).map((c) => c.close)]));
-  }, [engine]);
+  // index sparklines: REAL 5-minute closes from Yahoo (empty until they load)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const shapes = useMemo(() => Object.fromEntries(engine.indices.map((ix) => [ix.id, engine.historyOf(ix.id, '5m').slice(-78).map((c) => c.close)])), [engine, engine.histVer]);
 
   return (
     <div className="mx-auto grid max-w-[1500px] gap-4 p-3 lg:p-4 xl:grid-cols-[minmax(0,1fr)_380px]">
       <div className="min-w-0 space-y-4">
         <section aria-label="Market summary" className="grid grid-cols-2 gap-3 lg:grid-cols-3 2xl:grid-cols-6">
           {engine.indices.map((ix) => {
-            const series = [...shapes[ix.id].slice(0, -1), ix.value];
+            const sh = shapes[ix.id] ?? [];
+            const series = ix.loaded === false ? [] : sh.length ? [...sh.slice(0, -1), ix.value] : [];
             return (
-              <SummaryCard key={ix.id} title={ix.label} value={fmt(ix.value)} sub={`${fmtSigned(ix.change)} (${fmtPct(ix.pct)})`} subClass={tone(ix.pct)}>
+              <SummaryCard key={ix.id} title={ix.label} value={ix.loaded === false ? '—' : fmt(ix.value)} sub={ix.loaded === false ? 'loading' : `${fmtSigned(ix.change)} (${fmtPct(ix.pct)})`} subClass={tone(ix.pct)}>
                 <Sparkline data={series} up={ix.pct >= 0} height={34} />
               </SummaryCard>
             );
@@ -144,7 +142,7 @@ export function HomePage({ engine, news, newsError, onOpenStock, instruments, on
               </button>
             ))}
           </div>
-          <Badge className="ml-auto" tone="muted">Simulated prices</Badge>
+          <Badge className="ml-auto" tone="muted">Real delayed prices</Badge>
         </div>
 
         <div className="grid gap-4 md:grid-cols-3">

@@ -2,7 +2,6 @@
 
 import { useMemo, useState } from 'react';
 import type { MarketEngine } from '@/lib/market';
-import { basePrice } from '@/lib/market';
 import type { Instrument } from '@/lib/types';
 import { dayPct } from '@/lib/analytics';
 import { BUDGET_BANDS, budgetCandidates, inBand, type BudgetBand } from '@/lib/discovery';
@@ -23,9 +22,12 @@ export function BudgetDiscovery({ engine, instruments, onOpenChart }: Props) {
   const [band, setBand] = useState<BudgetBand>('under50');
   const b = BUDGET_BANDS.find((x) => x.id === band)!;
 
-  // pre-filter the full master without instantiating quotes, then touch only the few shown
-  const candidates = useMemo(() => budgetCandidates(instruments, b, basePrice, SHOWN), [instruments, b]);
-  const totals = useMemo(() => Object.fromEntries(BUDGET_BANDS.map((x) => [x.id, instruments.reduce((n, i) => n + (inBand(basePrice(i.symbol), x) ? 1 : 0), 0)])), [instruments]);
+  // bands use REAL last prices of the stocks Yahoo has delivered so far (the tracked universe), re-evaluated after every batch
+  const priceOf = (s: string) => engine.quotes.get(s)?.ltp ?? 0;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const candidates = useMemo(() => budgetCandidates(instruments, b, priceOf, SHOWN), [instruments, b, engine.lastQuotesAt]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const totals = useMemo(() => Object.fromEntries(BUDGET_BANDS.map((x) => [x.id, instruments.reduce((n, i) => n + (inBand(priceOf(i.symbol), x) ? 1 : 0), 0)])), [instruments, engine.lastQuotesAt]);
   const rows = candidates.flatMap((i) => {
     const q = engine.touch(i.symbol);
     return q ? [q] : [];
@@ -34,7 +36,7 @@ export function BudgetDiscovery({ engine, instruments, onOpenChart }: Props) {
   return (
     <Card
       title="Budget Stock Discovery"
-      right={<span className="num text-[10px] text-muted">{totals[band]} stocks · showing {rows.length}</span>}
+      right={<span className="num text-[10px] text-muted">{totals[band]} priced stocks · showing {rows.length}</span>}
     >
       <div className="p-3" data-testid="budget-discovery">
         <div className="mb-3 flex flex-wrap gap-1" role="tablist" aria-label="Price band">

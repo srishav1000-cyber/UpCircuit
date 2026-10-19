@@ -7,6 +7,8 @@ import type { Persona } from '@/lib/personas';
 import { MAX_FOCUS } from '@/lib/focus';
 import { fmt, fmtInt, fmtPct, tone } from '@/lib/format';
 import { Card } from './ui';
+import { GLOW } from './CircuitAlerts';
+import type { CircuitDir } from '@/lib/circuit';
 
 interface Props {
   persona: Persona;
@@ -19,10 +21,12 @@ interface Props {
   onSelect: (sym: string) => void;
   /** bumps with every market render so the tiles stay live */
   version: number;
+  /** symbols currently at a circuit → pulsing glow */
+  glow?: Record<string, CircuitDir>;
 }
 
 /** Live tiles for the user's 5–6 focus tickers, shown at the top of the Day Trader and Retail dashboards. */
-export function FocusBoard({ persona, engine, focus, candidates, holdings, onToggle, onSelect }: Props) {
+export function FocusBoard({ persona, engine, focus, candidates, holdings, onToggle, onSelect, glow = {} }: Props) {
   const [err, setErr] = useState<string | null>(null);
   const [pick, setPick] = useState(false);
   const toggle = (s: string) => setErr(onToggle(s));
@@ -49,7 +53,7 @@ export function FocusBoard({ persona, engine, focus, candidates, holdings, onTog
             const vwap = q.sumV > 0 ? q.sumPV / q.sumV : q.ltp;
             const h = holdings.find((x) => x.symbol === s);
             return (
-              <div key={s} data-testid={`focus-${s}`} className="rounded-md border border-line bg-bg/40 p-2 text-[11px]">
+              <div key={s} data-testid={`focus-${s}`} data-glow={glow[s] ?? undefined} className={`rounded-md border bg-bg/40 p-2 text-[11px] ${glow[s] ? `border-2 ${GLOW[glow[s]]}` : 'border-line'}`}>
                 <div className="flex items-center justify-between">
                   <button onClick={() => onSelect(s)} className="font-bold text-ink hover:text-accent">{s}</button>
                   {pick && <button onClick={() => toggle(s)} aria-label={`Remove ${s}`} className="text-muted hover:text-down">✕</button>}
