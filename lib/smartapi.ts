@@ -1,5 +1,5 @@
 // Angel One SmartAPI — SmartWebSocketV2 binary decoding + subscribe-message helpers.
-// Pure functions (DataView only), shared by the relay (scripts/angel-relay.ts) and the unit tests.
+// Pure functions (DataView only), shared by the browser stream (lib/smartapiDirect.ts) and the unit tests.
 //
 // UNVERIFIED against a live session: layouts follow Angel One's published SmartWebSocketV2 docs / SDKs
 // (little-endian; prices in paise). Validate with a real feed token before relying on them.

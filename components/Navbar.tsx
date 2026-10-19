@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
 import type { IndexQuote, Instrument } from '@/lib/types';
-import { FEED_BADGE, smartApiStatus, type FeedConn, type FeedMode, type FeedSource, type Health } from '@/lib/market';
+import { FEED_BADGE, smartApiStatus, type FeedConn, type FeedMode, type Health, type LiveReason } from '@/lib/market';
 import type { Persona } from '@/lib/personas';
 import { useDismiss } from '@/hooks/useClickOutside';
 import { testChime } from '@/lib/chime';
@@ -44,13 +44,12 @@ interface Props {
   searchRef: RefObject<HTMLInputElement>;
   /** feed status badge: LIVE MARKET / OFF-MARKET REPLAY / SIMULATED */
   mode: FeedMode;
-  /** relay upstream: angel | yahoo */
-  source?: FeedSource;
+  liveReason?: LiveReason;
   /** ⭐ button / W → open the Watchlist drawer */
   onOpenWatchlist?: () => void;
   /** live LTP for search results */
   priceOf?: (symbol: string) => number | undefined;
-  /** browser ↔ SmartAPI relay socket state */
+  /** browser ↔ SmartAPI socket state */
   conn: FeedConn;
   /** opens the CSV / image / PDF import modal */
   onOpenImport: () => void;
@@ -133,7 +132,7 @@ export function AskButton({ onClick, className = '' }: { onClick: () => void; cl
 
 interface ServerStatus {
   gemini: { configured: boolean; valid: boolean | null; reason?: 'rejected' | 'quota' | 'unreachable'; model: string };
-  smartapi: { serverCreds: boolean; missing: string[]; relayUrlConfigured: boolean };
+  smartapi: { serverCreds: boolean; missing: string[]; publicKeyConfigured: boolean };
 }
 
 const DOT: Record<Health, string> = { ok: 'bg-up', warn: 'bg-warn', off: 'bg-muted/60' };
@@ -149,7 +148,7 @@ function aiStatus(st: ServerStatus | null, failed: boolean): { health: Health; l
   return { health: 'ok', label: 'Gemini', detail: `Key accepted by Google (model ${g.model}). Local rules remain the fallback on quota or errors.` };
 }
 
-function StatusPill({ mode, conn, source }: { mode: FeedMode; conn: FeedConn; source?: FeedSource }) {
+function StatusPill({ mode, conn, liveReason }: { mode: FeedMode; conn: FeedConn; liveReason?: LiveReason }) {
   const [open, setOpen] = useState(false);
   const [st, setSt] = useState<ServerStatus | null>(null);
   const [failed, setFailed] = useState(false);
@@ -173,9 +172,8 @@ function StatusPill({ mode, conn, source }: { mode: FeedMode; conn: FeedConn; so
     return () => clearInterval(id);
   }, [load]);
 
-  const relayConfigured = Boolean(process.env.NEXT_PUBLIC_FEED_WS_URL);
   const ai = aiStatus(st, failed);
-  const feed = smartApiStatus({ mode, conn, relayConfigured, serverCreds: st?.smartapi.serverCreds, source });
+  const feed = smartApiStatus({ mode, conn, reason: liveReason });
 
   return (
     <div ref={ref} className="relative flex shrink-0 items-stretch border-l border-line">
@@ -210,10 +208,11 @@ function StatusPill({ mode, conn, source }: { mode: FeedMode; conn: FeedConn; so
           <section>
             <h3 className="mb-0.5 flex items-center gap-1.5 font-bold text-ink"><span className={`h-2 w-2 rounded-full ${DOT[feed.health]}`} />Market feed · Angel One SmartAPI <span className="font-normal text-muted">— {feed.label}</span></h3>
             <p className="text-muted">{feed.detail}</p>
-            {feed.health !== 'ok' && !(relayConfigured && conn === 'open') && (
+            {feed.health !== 'ok' && (
               <ol className="mt-1 list-decimal space-y-0.5 pl-4 text-muted">
-                <li>On a long-running host run <code className="rounded bg-bg px-1 text-ink">npm run relay</code> with <code className="rounded bg-bg px-1 text-ink">SMARTAPI_API_KEY</code>, <code className="rounded bg-bg px-1 text-ink">SMARTAPI_CLIENT_CODE</code>, <code className="rounded bg-bg px-1 text-ink">SMARTAPI_PASSWORD</code>, <code className="rounded bg-bg px-1 text-ink">SMARTAPI_TOTP_SECRET</code>.</li>
-                <li>Set <code className="rounded bg-bg px-1 text-ink">NEXT_PUBLIC_FEED_WS_URL=wss://your-relay</code> here and redeploy.</li>
+                <li>Set <code className="rounded bg-bg px-1 text-ink">SMARTAPI_API_KEY</code>, <code className="rounded bg-bg px-1 text-ink">SMARTAPI_CLIENT_CODE</code>, <code className="rounded bg-bg px-1 text-ink">SMARTAPI_PASSWORD</code>, <code className="rounded bg-bg px-1 text-ink">SMARTAPI_TOTP_SECRET</code> on the server (Vercel env vars).</li>
+                <li>Set <code className="rounded bg-bg px-1 text-ink">NEXT_PUBLIC_SMARTAPI_API_KEY</code> (same API key) and redeploy — it is baked in at build time.</li>
+                <li>Sign in with a Supabase account; the feed token is only issued to verified users.</li>
               </ol>
             )}
             {st && !st.smartapi.serverCreds && st.smartapi.missing.length < 4 && <p className="mt-1 text-warn">Partially set on this server — missing: {st.smartapi.missing.join(', ')}</p>}
@@ -343,7 +342,7 @@ function AvatarMenu({ mode, onPlans }: { mode: FeedMode; onPlans?: () => void })
         <div role="menu" className="absolute right-0 top-full z-50 mt-2 w-60 rounded-md border border-line bg-panel py-1 text-[13px] shadow-2xl shadow-black/40">
           <div className="border-b border-line px-3 py-2">
             <div className="truncate font-semibold text-ink" data-testid="account-email">{email}</div>
-            <div className="text-[11px] text-muted" data-testid="account-plan">Tier {planOf(user?.plan).tier} · {planOf(user?.plan).name} · {mode === 'live' ? 'Live feed' : mode === 'snapshot' ? 'Off-market · relay data' : 'Real Yahoo data (delayed)'}</div>
+            <div className="text-[11px] text-muted" data-testid="account-plan">Tier {planOf(user?.plan).tier} · {planOf(user?.plan).name} · {mode === 'live' ? 'Live feed' : mode === 'snapshot' ? 'Off-market · SmartAPI data' : 'Real Yahoo data (delayed)'}</div>
           </div>
           <button role="menuitem" data-testid="account-plans" className="block w-full px-3 py-1.5 text-left text-ink hover:bg-line" onClick={() => { close(); onPlans?.(); }}>💳 Plans &amp; upgrade</button>
           {required && (
@@ -356,7 +355,7 @@ function AvatarMenu({ mode, onPlans }: { mode: FeedMode; onPlans?: () => void })
 }
 
 
-export function Navbar({ view, onView, persona, onPersona, onPlans, audioOn = true, onToggleAudio, circuitCount = 0, onOpenCircuitLog, indices, instruments, onSelect, onOpenIndex, symbol, watchlisted, activeAlerts, onDeepResearch, onToggleWatchlist, onSetAlert, searchRef, mode, source, conn, onOpenWatchlist, priceOf, onOpenImport, onAsk }: Props) {
+export function Navbar({ view, onView, persona, onPersona, onPlans, audioOn = true, onToggleAudio, circuitCount = 0, onOpenCircuitLog, indices, instruments, onSelect, onOpenIndex, symbol, watchlisted, activeAlerts, onDeepResearch, onToggleWatchlist, onSetAlert, searchRef, mode, liveReason, conn, onOpenWatchlist, priceOf, onOpenImport, onAsk }: Props) {
   const actionProps = { symbol, watchlisted, activeAlerts, onDeepResearch, onToggleWatchlist, onSetAlert, onOpenWatchlist };
   return (
     <header className="relative">
@@ -418,7 +417,7 @@ export function Navbar({ view, onView, persona, onPersona, onPlans, audioOn = tr
             <IndexCard key={ix.id} ix={ix} onOpen={onOpenIndex} />
           ))}
         </div>
-        <StatusPill mode={mode} conn={conn} source={source} />
+        <StatusPill mode={mode} conn={conn} liveReason={liveReason} />
       </div>
     </header>
   );

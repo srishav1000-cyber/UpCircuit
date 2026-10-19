@@ -1,4 +1,4 @@
-// Single source of truth for absolute links (auth redirects, e-mail alert links, SmartAPI callbacks).
+// Single source of truth for absolute links (auth redirects, e-mail alert links).
 // NEXT_PUBLIC_APP_URL is inlined at build time; the fallback is the production domain.
 export const APP_URL = (process.env.NEXT_PUBLIC_APP_URL || 'https://upcircuit.vercel.app').replace(/\/+$/, '');
 
@@ -7,6 +7,3 @@ export const appUrl = (path = '/') => `${APP_URL}${path.startsWith('/') ? path :
 
 /** Deep link that opens a stock in the terminal: /terminal?symbol=XYZ */
 export const terminalUrl = (symbol: string) => appUrl(`/terminal?symbol=${encodeURIComponent(symbol)}`);
-
-/** Where SmartAPI (publisher login) sends the browser back to — register this exact URL in the SmartAPI app settings. */
-export const smartApiCallbackUrl = () => appUrl('/api/smartapi/callback');

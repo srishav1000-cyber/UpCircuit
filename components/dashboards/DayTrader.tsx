@@ -58,7 +58,7 @@ export function DayTraderDashboard({ engine, quote, mode, onAction }: DashboardP
         title="Market depth · 5 levels"
         right={noDepth ? undefined : <span className={`num text-[11px] ${tone(imbalance)}`}>Exchange · imbalance {fmtPct(imbalance, 1)}</span>}
       >
-        {noDepth && <p className="py-6 text-center text-[12px] text-muted">{live ? 'Waiting for order-book depth from the feed…' : 'Order-book depth is not available from Yahoo Finance. Connect the SmartAPI relay (live market hours) to see real depth.'}</p>}
+        {noDepth && <p className="py-6 text-center text-[12px] text-muted">{live ? 'Waiting for order-book depth from the feed…' : 'Order-book depth is not available from Yahoo Finance. Real depth appears when the direct SmartAPI feed is live (market hours).'}</p>}
         {!noDepth && (<>
         <div className="grid grid-cols-[1fr_auto_auto] gap-x-3 pb-1 text-[10px] uppercase tracking-wider text-muted">
           <span>Price</span>
@@ -91,7 +91,7 @@ export function DayTraderDashboard({ engine, quote, mode, onAction }: DashboardP
       </Card>
 
       <div className="grid grid-cols-2 gap-2">
-        <Stat label="Ticks / Min" value={live ? fmtInt(tpm) : '—'} sub={live ? 'trades, rolling 60 s' : 'needs the live relay'} />
+        <Stat label="Ticks / Min" value={live ? fmtInt(tpm) : '—'} sub={live ? 'trades, rolling 60 s' : 'needs the live SmartAPI feed'} />
         <Stat label={`Rolling VWAP · ${winMs / 60_000}m`} value={fmt(vwap)} sub={rolling === null ? 'warming up — session VWAP' : `Session ${fmt(session)}`} hint={`Σ(price × volume) ÷ Σ(volume) over the last ${winMs / 60_000} minutes of ${live ? 'trades' : 'real 1-minute bars'}`} />
         <Stat label="VWAP Spread" value={<span className={tone(vwapSpread)}>{fmtSigned(vwapSpread)}</span>} sub={fmtPct((vwapSpread / vwap) * 100) + ' vs VWAP'} />
         <Stat label="Volatility σ" value={vol === null ? '…' : vol.toFixed(1) + '%'} sub="Realised, annualised" hint={live ? 'Std-dev of 250 ms log-returns over the last 60 s, annualised' : 'Std-dev of 1-minute log-returns of the real session, annualised'} />

@@ -1,0 +1,6 @@
+DELETE these from your repo:
+scripts/angel-relay.ts
+render.yaml
+Dockerfile.relay
+app/api/smartapi/callback/route.ts
+app/api/smartapi/login/route.ts

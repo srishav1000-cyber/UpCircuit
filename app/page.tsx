@@ -120,7 +120,7 @@ function Terminal() {
   const alertSymbols = useMemo(() => priceAlerts.alerts.filter((a) => !a.triggeredAt).map((a) => a.symbol), [priceAlerts.alerts]);
   const focusCandidates = useMemo(() => [...new Set([...allWatched, ...rawHoldings.map((h) => h.symbol)])], [allWatched, rawHoldings]);
   const watch = useMemo(() => [...allWatched, ...rawHoldings.map((h) => h.symbol), ...alertSymbols], [allWatched, rawHoldings, alertSymbols]);
-  const { engine, version, mode, conn, source, state: dataState, retry: retryData } = useMarket(instruments, symbol, watch, focus);
+  const { engine, version, mode, conn, liveReason, state: dataState, retry: retryData } = useMarket(instruments, symbol, watch, focus);
 
   const audio = useAudioAlerts();
   const [logOpen, setLogOpen] = useState(false);
@@ -290,7 +290,7 @@ function Terminal() {
           instruments={instruments}
           onSelect={openStock}
           onOpenIndex={openIndex}
-          source={source}
+          liveReason={liveReason}
           onOpenWatchlist={() => setWatchOpen(true)}
           priceOf={(s) => engine.touch(s)?.ltp}
           {...actions}

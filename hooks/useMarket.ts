@@ -1,12 +1,15 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
-import { MarketEngine, SmartApiFeed, isMarketOpen, type FeedConn, type FeedMode, type FeedSource } from '@/lib/market';
+import { MarketEngine, isMarketOpen, isStreamWindow, type FeedConn, type FeedMode, type LiveReason } from '@/lib/market';
+import { DirectSmartApiStream, toEngineTick, type Listing, type MarketTick } from '@/lib/smartapiDirect';
+import { useAuth } from '@/hooks/useAuth';
 import type { Candle, Instrument, Timeframe } from '@/lib/types';
 import type { YahooRow } from '@/lib/yahooData';
 
-/** WebSocket URL of the SmartAPI relay (scripts/angel-relay.ts), e.g. wss://relay.example.com. Unset → Yahoo only. */
-const FEED_URL = process.env.NEXT_PUBLIC_FEED_WS_URL;
+/** Public SmartAPI API key (build-time). Unset → the browser never opens the socket and the app runs on delayed Yahoo data. */
+const API_KEY = process.env.NEXT_PUBLIC_SMARTAPI_API_KEY;
+const RETRY_COOLDOWN_MS = 5 * 60_000;
 
 export type DataState = 'loading' | 'ok' | 'error';
 
@@ -17,8 +20,9 @@ const uniq = <T,>(a: T[]) => Array.from(new Set(a));
 /**
  * Owns the market engine. REAL data only:
  *   • Yahoo Finance (delayed) through /api/quotes + /api/bars — the default, polled every 10 s while the market is open (60 s when closed)
- *   • SmartAPI relay ticks (wss) when connected — they take over price / volume / depth for the symbols they carry
- * Feed mode is re-evaluated every second: live (open + ticks) · snapshot (closed + relay ticks) · delayed (Yahoo).
+ *   • Angel One SmartAPI ticks streamed DIRECTLY to this browser (lib/smartapiDirect.ts, tokens from /api/smartapi/session) —
+ *     they take over price / volume / depth for the symbols they carry; any session, token or socket failure falls back to Yahoo
+ * Feed mode is re-evaluated every second: live (open + ticks) · snapshot (closed + ticks) · delayed (Yahoo).
  * Nothing is generated locally: until the first Yahoo batch arrives `state` is 'loading', and if Yahoo cannot be reached it is 'error'.
  */
 export function useMarket(universe: Instrument[], selected: string, watch: string[], focus: string[] = []) {
@@ -26,9 +30,13 @@ export function useMarket(universe: Instrument[], selected: string, watch: strin
   const [version, bump] = useReducer((x: number) => x + 1, 0);
   const [conn, setConn] = useState<FeedConn>('idle');
   const [mode, setMode] = useState<FeedMode>('delayed');
-  const [source, setSource] = useState<FeedSource | undefined>();
+  const [liveReason, setLiveReason] = useState<LiveReason | undefined>(API_KEY ? undefined : 'no_key');
+  const { getToken } = useAuth();
+  const tokenRef = useRef(getToken);
+  tokenRef.current = getToken;
   const [state, setState] = useState<DataState>('loading');
-  const feedRef = useRef<SmartApiFeed | null>(null);
+  const feedRef = useRef<DirectSmartApiStream | null>(null);
+  const listingsRef = useRef(new Map<string, Listing>());
   const selRef = useRef(selected);
   selRef.current = selected;
   const watchRef = useRef(watch);
@@ -144,37 +152,137 @@ export function useMarket(universe: Instrument[], selected: string, watch: strin
     };
   }, [engine]);
 
-  /* ── SmartAPI relay (optional) ── */
-  useEffect(() => {
-    if (!FEED_URL) return;
-    if (typeof window !== 'undefined' && window.location.protocol === 'https:' && FEED_URL.startsWith('ws://') && !/^ws:\/\/(localhost|127\.0\.0\.1)/.test(FEED_URL))
-      console.warn('[UpCircuit] NEXT_PUBLIC_FEED_WS_URL is ws:// on an https page — browsers block this; use wss://');
-    const feed = new SmartApiFeed(FEED_URL, engine, setConn);
-    feedRef.current = feed;
-    feed.connect();
-    return () => {
-      feed.close();
-      feedRef.current = null;
-    };
-  }, [engine]);
+  /* ── SmartAPI, direct browser → exchange socket (optional; Yahoo keeps running underneath as the fallback) ── */
+  const applyTick = useCallback(
+    (m: MarketTick) => {
+      if (m.isIndex) engine.applyIndexTick(m.symbol, m.lastPrice, m.prevClose);
+      else engine.applyTick(toEngineTick(m));
+    },
+    [engine],
+  );
 
   useEffect(() => {
-    feedRef.current?.setSymbols([selected, ...focus, ...watch, ...seedRef.current.slice(0, 80)]);
+    if (!API_KEY) return;
+    let alive = true;
+    let stream: DirectSmartApiStream | null = null;
+    let starting = false;
+    let refreshed = false;
+    let cooldownUntil = 0;
+    const down = (why: LiveReason, cool = true) => {
+      stream?.close();
+      stream = feedRef.current = null;
+      setConn('closed');
+      setLiveReason(why);
+      if (cool) cooldownUntil = Date.now() + RETRY_COOLDOWN_MS;
+    };
+    const start = async (refresh = false) => {
+      if (starting || stream) return;
+      starting = true;
+      setConn('connecting');
+      try {
+        const token = await tokenRef.current();
+        const r = await fetch(`/api/smartapi/session${refresh ? '?refresh=1' : ''}`, { cache: 'no-store', headers: token ? { Authorization: `Bearer ${token}` } : {}, signal: AbortSignal.timeout(15000) });
+        const j = (await r.json().catch(() => ({}))) as { ok?: boolean; clientCode?: string; feedToken?: string; reason?: LiveReason };
+        if (!alive) return;
+        if (!r.ok || !j.ok || !j.clientCode || !j.feedToken) return down(j.reason ?? (r.status === 401 ? 'unauthorized' : 'unreachable'), j.reason !== 'rate_limited');
+        const s = new DirectSmartApiStream({
+          apiKey: API_KEY,
+          clientCode: j.clientCode,
+          feedToken: j.feedToken,
+          onTick: applyTick,
+          onStatus: (c) => alive && stream === s && setConn(c),
+          onOpen: () => {
+            setLiveReason(undefined);
+            syncSubs();
+          },
+          onError: () => {
+            // retries exhausted (or the server rejected the token): try ONE fresh session, then fall back to Yahoo
+            const wasRefreshed = refreshed;
+            s.close();
+            if (stream === s) stream = feedRef.current = null;
+            if (!alive) return;
+            if (!wasRefreshed) {
+              refreshed = true;
+              void start(true);
+            } else down('stream_failed');
+          },
+        });
+        stream = feedRef.current = s;
+        s.connect();
+      } catch {
+        if (alive) down('unreachable');
+      } finally {
+        starting = false;
+      }
+    };
+    const gate = () => {
+      const inWindow = isStreamWindow(Date.now());
+      if (!inWindow) {
+        if (stream) down('outside_hours', false);
+        else setLiveReason((r) => r ?? 'outside_hours');
+        setConn((c) => (c === 'connecting' ? 'idle' : c));
+        return;
+      }
+      if (!stream && !starting && Date.now() >= cooldownUntil) {
+        refreshed = false;
+        void start();
+      }
+    };
+    gate();
+    const id = setInterval(gate, 30_000);
+    return () => {
+      alive = false;
+      clearInterval(id);
+      stream?.close();
+      stream = feedRef.current = null;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [engine, applyTick]);
+
+  /** subscribe the symbols the UI needs (selected → focus basket → watchlist → top of the universe); tokens come from /api/smartapi/tokens */
+  const subbing = useRef(false);
+  const syncSubs = useCallback(async () => {
+    const stream = feedRef.current;
+    if (!stream || subbing.current) return;
+    subbing.current = true;
+    try {
+      const want = uniq([selRef.current, ...focusRef.current, ...watchRef.current, ...seedRef.current.slice(0, 80)]).filter(Boolean);
+      const missing = want.filter((s) => !listingsRef.current.has(s));
+      for (let i = 0; i < missing.length; i += 100) {
+        const part = missing.slice(i, i + 100);
+        try {
+          const r = await fetch(`/api/smartapi/tokens?s=${encodeURIComponent(part.join(','))}`, { signal: AbortSignal.timeout(30000) });
+          const j = (await r.json()) as { ok?: boolean; listings?: Record<string, { token: string; exchangeType: number }> };
+          for (const s of part) {
+            const l = j.listings?.[s];
+            // unknown symbols are remembered as "no token" so they are not re-requested every pass
+            listingsRef.current.set(s, l ? { symbol: s, token: l.token, exchangeType: l.exchangeType } : { symbol: s, token: '', exchangeType: 0 });
+          }
+        } catch {
+          break; // try again on the next change
+        }
+      }
+      stream.subscribe(want.map((s) => listingsRef.current.get(s)).filter((l): l is Listing => !!l && !!l.token));
+    } finally {
+      subbing.current = false;
+    }
+  }, []);
+
+  useEffect(() => {
+    if (conn === 'open') void syncSubs();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [engine, selected, watchKey, focusKey, conn]);
 
   useEffect(() => {
     let i = 0;
     let lastMode: FeedMode | null = null;
-    let lastSource: FeedSource | undefined;
     const evalMode = () => {
       const now = Date.now();
       const open = isMarketOpen(now);
-      // heartbeats alone don't make it live — real ticks (Angel One or the relay's Yahoo fallback) must be flowing
+      // an open socket alone doesn't make it live — real Angel One ticks must be flowing
       const streaming = feedRef.current?.status === 'open' && now - (feedRef.current?.lastTickAt ?? 0) < 45_000;
-      if (feedRef.current?.source !== lastSource) setSource((lastSource = feedRef.current?.source));
-      const relayTicking = feedRef.current?.status === 'open' && (feedRef.current?.ticks ?? 0) > 0;
-      const m: FeedMode = open && streaming ? 'live' : !open && relayTicking ? 'snapshot' : 'delayed';
+      const streamTicking = feedRef.current?.status === 'open' && (feedRef.current?.ticks ?? 0) > 0;
+      const m: FeedMode = open && streaming ? 'live' : !open && streamTicking ? 'snapshot' : 'delayed';
       if (m !== lastMode) {
         lastMode = m;
         engine.setMode(m);
@@ -196,5 +304,5 @@ export function useMarket(universe: Instrument[], selected: string, watch: strin
     void fetchQuotes([selRef.current, ...INDEX_IDS]).then((ok) => setState(ok || engine.ready ? 'ok' : 'error'));
   }, [engine, fetchQuotes]);
 
-  return { engine, version, mode, conn, source, state, retry };
+  return { engine, version, mode, conn, liveReason, state, retry };
 }

@@ -28,7 +28,7 @@ export interface Quote extends Instrument {
   lowerCircuit: number;
   /** true when upper/lower came from the exchange (SmartAPI); false = inferred (Yahoo has no per-stock band) */
   bandKnown?: boolean;
-  /** epoch ms the quote was last refreshed from Yahoo / the relay */
+  /** epoch ms the quote was last refreshed from Yahoo / SmartAPI */
   fetchedAt?: number;
   /** exchange time of the last trade (epoch ms), when Yahoo reports it */
   marketTime?: number;

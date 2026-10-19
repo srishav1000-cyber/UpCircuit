@@ -40,7 +40,7 @@ async function geminiState(): Promise<GeminiState> {
 
 /**
  * GET /api/status — which integrations are configured on THIS server. Booleans and variable names only: values never leave the server.
- * (SmartAPI credentials normally live on the relay host, so `smartapi.serverCreds` is only true when they are also set here.)
+ * (`smartapi.serverCreds` = the four server-side SmartAPI secrets for /api/smartapi/session; `publicKeyConfigured` = the build-time browser key.)
  */
 export async function GET(req: Request) {
   const ip = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'anon';
@@ -48,6 +48,6 @@ export async function GET(req: Request) {
   const missing = SMARTAPI_VARS.filter((v) => !process.env[v]);
   return json({
     gemini: await geminiState(),
-    smartapi: { serverCreds: missing.length === 0, missing, relayUrlConfigured: Boolean(process.env.NEXT_PUBLIC_FEED_WS_URL) },
+    smartapi: { serverCreds: missing.length === 0, missing, publicKeyConfigured: Boolean(process.env.NEXT_PUBLIC_SMARTAPI_API_KEY) },
   });
 }

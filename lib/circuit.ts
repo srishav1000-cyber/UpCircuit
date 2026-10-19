@@ -1,4 +1,4 @@
-// Circuit-limit detection on REAL prices. Yahoo carries no per-stock price band, so unless the SmartAPI relay supplied the exchange limits,
+// Circuit-limit detection on REAL prices. Yahoo carries no per-stock price band, so unless SmartAPI supplied the exchange limits,
 // a stock counts as "at circuit" when its LTP sits on the 5 %, 10 % or 20 % limit of its previous close (tick-rounded) — the bands NSE uses.
 const TICK = 0.05;
 const roundTick = (p: number) => Math.round(p / TICK) * TICK;

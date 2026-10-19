@@ -1,4 +1,4 @@
-// Free live-quote fallback: Yahoo Finance public chart endpoint (no key, no crumb). Used by scripts/angel-relay.ts when
+// Free live-quote fallback: Yahoo Finance public chart endpoint (no key, no crumb). Used by /api/quotes and /api/bars when
 // SmartAPI is offline / not configured. Pure fetch + parsing so it is testable against a mock (YAHOO_BASE).
 // NOTE: unofficial endpoint — may be rate-limited or change; NSE data can be delayed.
 
@@ -42,7 +42,7 @@ export function parseYahooChart(symbol: string, body: unknown): YahooTick | null
   };
 }
 
-const HEADERS = { 'User-Agent': 'Mozilla/5.0 (compatible; UpCircuit-relay)', Accept: 'application/json' };
+const HEADERS = { 'User-Agent': 'Mozilla/5.0 (compatible; UpCircuit)', Accept: 'application/json' };
 
 export type YahooResult = { ok: true; tick: YahooTick } | { ok: false; status: number };
 

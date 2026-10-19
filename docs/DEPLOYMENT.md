@@ -1,29 +1,23 @@
 # UpCircuit — hosting, accounts, plans
 
-## 1. Public WebSocket relay for SmartAPI
+## 1. Live market feed — direct from the browser (no relay, 100 % Vercel)
 
-The browser cannot talk to SmartAPI directly (credentials + TOTP). It connects to the relay (`scripts/angel-relay.ts`), which logs in server-side and fans ticks out over WebSocket. Replace `ws://localhost:8787` with a public `wss://` URL.
+The browser opens Angel One's market-data socket itself (`wss://smartapisocket.angelone.in/smart-stream`, `lib/smartapiDirect.ts`). It never sees your password or TOTP secret: a serverless route, `GET /api/smartapi/session`, logs in with them and returns **only** `{ clientCode, feedToken }`. Instrument tokens come from `GET /api/smartapi/tokens` (Angel's public scrip master).
 
-| Host | Cost (check current pricing) | Fit |
-|---|---|---|
-| Render free web service | $0, but sleeps after ~15 min idle ([docs](https://render.com/docs/free)) | demos only — first connect after a nap is slow |
-| Fly.io | no free tier; a shared-cpu-1x 256 MB machine is about $2/mo ([pricing](https://fly.io/docs/about/pricing/)) | cheap, always-on, good WebSocket support |
-| Railway Hobby | about $5/mo | simplest UX, always-on |
-| Small VPS (any) | about $4/mo | never sleeps; you manage TLS (Caddy/nginx) |
-
-Recommendation: Render free for the capstone demo, Fly.io (or a $4 VPS) once it must stay awake through market hours (09:15–15:30 IST).
-
-**Steps (Render example)**
-1. Push the repo; **New → Blueprint**; it reads `render.yaml` + `Dockerfile.relay`.
-2. In the dashboard set secrets `SMARTAPI_API_KEY`, `SMARTAPI_CLIENT_CODE`, `SMARTAPI_PASSWORD`, `SMARTAPI_TOTP_SECRET`, and `RELAY_ALLOWED_ORIGIN=https://<your-app-domain>` (comma-separate several). Never put these in the web app or the browser.
-3. Check `https://<relay>.onrender.com/health` → `{"ok":true,"source":"angel"|"yahoo"|"none",…}`.
-4. In the **web app's** host (Vercel etc.) set `NEXT_PUBLIC_FEED_WS_URL=wss://<relay>.onrender.com` and **redeploy** — it is baked in at build time. `ws://` is blocked on an https page.
-5. The header status pill shows the feed state; `LIVE MARKET` appears once ticks flow.
+**Steps**
+1. Vercel → Settings → Environment Variables:
+   - server-side secrets: `SMARTAPI_API_KEY`, `SMARTAPI_CLIENT_CODE`, `SMARTAPI_PASSWORD`, `SMARTAPI_TOTP_SECRET`
+   - public, build-time: `NEXT_PUBLIC_SMARTAPI_API_KEY` (the same API key — it is visible in the browser, by design of this architecture)
+   - accounts: `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY` (the session endpoint only serves verified Supabase users; private deployments without Supabase may set `SMARTAPI_SESSION_PUBLIC=1`)
+2. **Redeploy** (`NEXT_PUBLIC_*` is baked in at build time).
+3. During market hours the header pill reads **● SMARTAPI LIVE**. Otherwise (no key, not signed in, login rejected, socket failed 3× + one fresh session, outside 09:00–15:45 IST) the app stays on **● REAL YAHOO DATA (DELAYED)**; the status popover says why.
 
 Notes
-- The relay honours `PORT` (Render/Railway/Fly set it) and falls back to Yahoo polling when SmartAPI is not configured.
-- Use `/health` for an uptime pinger if you want to keep a free instance warm (against the host's fair-use terms — use at your own risk).
-- SmartAPI's static-IP requirement applies to **order placement**; UpCircuit places no orders. I could not confirm any IP rule for market-data WebSockets, so verify with Angel One before relying on a host with a changing IP ([Angel One notice](https://oga-prod.angelone.in/news/market-updates/what-s-changing-in-angel-one-s-smartapi-access-from-april-1-2026)).
+- The socket opens only inside a window of 15 min either side of the session (Mon–Fri) and falls back to Yahoo on any failure; Yahoo polling keeps running underneath, so there is no gap.
+- Security trade-off: the API key and a feed token are visible to the signed-in user's browser. The feed token only permits market-data streaming (no orders), but treat it as a credential; do not share a deployment publicly without Supabase auth.
+- **UNVERIFIED against a live account:** browser WebSockets cannot set headers, so credentials go in the URL query string as Angel's browser SDK does; if Angel's server rejects that (or checks `Origin`), the app silently stays on Yahoo. Verify during market hours.
+- SmartAPI's static-IP requirement applies to **order placement**; UpCircuit places no orders. I could not confirm any IP rule for market-data sockets, so check with Angel One.
+- Serverless instances each log in at most once per 6 h; refreshes are throttled to 1/min.
 
 ## 2. Accounts & roles
 
@@ -52,4 +46,4 @@ Day Trader and Retail dashboards open with **🎯 My focus**: up to 6 symbols ch
 
 ## 5. Off-market data
 
-Closed market = frozen prices, no synthetic events. **▶ Replay last session** (chart header) replays the previous session's 1-minute bars at 1 bar/second — real Yahoo bars via `/api/session/[symbol]` when available, otherwise a deterministic series scaled to the last close — then rests at the close.
+Closed market = the last real prices and real previous-session bars from Yahoo Finance (delayed); nothing is simulated and there are no synthetic events.

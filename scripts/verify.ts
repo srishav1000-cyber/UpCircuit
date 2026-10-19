@@ -18,7 +18,7 @@ import {
   cumulativeReturnPct, dividendForecast, intradaySigma, liquidityRatio, portfolioDiagnostics, portfolioValueSeries, sectorIndexSeries, sharpeParts, tickVolumeBuckets, vwapBands, weightedRiskScore,
 } from '../lib/analytics';
 import { encodeTick, parseTick, subscribeMessage, totp, type SmartTick } from '../lib/smartapi';
-import { isMarketOpen, SmartApiFeed } from '../lib/market';
+import { isMarketOpen, isStreamWindow, FEED_BADGE } from '../lib/market';
 import { parseHoldingsText } from '../lib/portfolioText';
 import { addAlert, checkAlerts, parseAlerts } from '../lib/alerts';
 import { smartApiStatus } from '../lib/market';
@@ -289,22 +289,6 @@ t('engine: live ticks drive price, 1-minute candles and real depth; bad ticks ig
   assert.equal(bars.length, 2); assert.equal(bars[0].high, 4004); assert.equal(bars[0].volume, 500); assert.equal(bars[1].volume, 200); // first tick = baseline, not a 1000-share bar
   assert.equal(e.depth.bids[0].price, 3999.95);
 });
-t('SmartApiFeed: subscribes the diff, applies tick + index messages, ignores junk', () => {
-  const sent: string[] = [];
-  class FakeWS { onopen?: () => void; onmessage?: (e: { data: string }) => void; onclose?: () => void; onerror?: () => void; constructor(public url: string) { fake = this; } send(m: string) { sent.push(m); } close() { this.onclose?.(); } }
-  let fake!: FakeWS;
-  const e = new MarketEngine(SEED_INSTRUMENTS); e.setMode('live');
-  const f = new SmartApiFeed('wss://x', e, () => {}, FakeWS as unknown as typeof WebSocket);
-  f.setSymbols(['TCS']); f.connect(); fake.onopen!();
-  f.setSymbols(['TCS', 'INFY']);
-  assert.deepEqual(sent.map((m) => JSON.parse(m).symbols), [['TCS'], ['INFY']]);
-  fake.onmessage!({ data: JSON.stringify({ t: 'tick', symbol: 'TCS', ltp: 4123.5, close: 4100 }) });
-  fake.onmessage!({ data: JSON.stringify({ t: 'index', id: 'NIFTY', value: 25000, prev: 24900 }) });
-  fake.onmessage!({ data: 'not json' }); fake.onmessage!({ data: JSON.stringify({ t: 'tick', symbol: 'TCS', ltp: 'x' }) });
-  assert.equal(e.quotes.get('TCS')!.ltp, 4123.5); assert.equal(f.ticks, 1);
-  const nifty = e.indices.find((i) => i.id === 'NIFTY')!; assert.equal(nifty.value, 25000); near(nifty.pct, (100 / 24900) * 100, 1e-9);
-  f.close();
-});
 
 console.log('portfolio import (OCR / PDF text)');
 t('broker-table text → holdings; unknown symbols reported; duplicates merged', () => {
@@ -331,14 +315,16 @@ t('alerts fire once, on the right side, and survive bad storage', () => {
   assert.equal(checkAlerts(al, () => undefined).fired.length, 0);
   assert.deepEqual(parseAlerts('garbage'), []); assert.deepEqual(parseAlerts('[{"id":1}]'), []); assert.equal(parseAlerts(JSON.stringify(al)).length, 2);
 });
-t('SmartAPI link status: every state is distinguishable and honest', () => {
-  const st = (mode: 'live' | 'snapshot' | 'delayed', conn: 'idle' | 'connecting' | 'open' | 'closed', relayConfigured: boolean, serverCreds = false) => smartApiStatus({ mode, conn, relayConfigured, serverCreds });
-  assert.equal(st('live', 'open', true).health, 'ok');
-  assert.equal(st('snapshot', 'open', true).label, 'Relay connected');
-  assert.equal(st('delayed', 'open', true).label, 'Relay ready');
-  assert.equal(st('delayed', 'closed', true).label, 'Relay offline');
-  assert.equal(st('snapshot', 'idle', false).health, 'off');
-  assert.equal(st('snapshot', 'idle', false, true).label, 'Relay not linked');
+t('SmartAPI link status: LIVE vs Yahoo-delayed, with the reason when the stream is not in use', () => {
+  const st = smartApiStatus;
+  assert.equal(st({ mode: 'live', conn: 'open' }).label, '● SMARTAPI LIVE'); assert.equal(st({ mode: 'live', conn: 'open' }).health, 'ok');
+  assert.equal(st({ mode: 'delayed', conn: 'open' }).label, 'SmartAPI connected');
+  assert.equal(st({ mode: 'delayed', conn: 'connecting' }).label, 'Connecting…');
+  for (const reason of ['no_key', 'unauthorized', 'not_configured', 'login_failed', 'unreachable', 'stream_failed', 'outside_hours'] as const) {
+    const r = st({ mode: 'delayed', conn: 'closed', reason }); assert.equal(r.label, 'Yahoo (delayed)'); assert.match(r.detail, /Yahoo/); assert.ok(r.detail.length > 60);
+  }
+  assert.equal(st({ mode: 'delayed', conn: 'idle', reason: 'no_key' }).health, 'off'); assert.equal(st({ mode: 'delayed', conn: 'closed', reason: 'stream_failed' }).health, 'warn');
+  assert.equal(FEED_BADGE.live.text, '● SMARTAPI LIVE'); assert.equal(FEED_BADGE.delayed.text, '● REAL YAHOO DATA (DELAYED)');
 });
 t('instrument sync: NSE + BSE cash equities only, NSE wins duplicates', () => {
   const rows = [
@@ -367,8 +353,8 @@ t('budget bands: exclusive upper bound, candidates filtered + capped', () => {
   }
 });
 t('feed modes: snapshot badge + status', () => {
-  assert.equal(smartApiStatus({ mode: 'snapshot', conn: 'open', relayConfigured: true }).health, 'ok');
-  assert.match(smartApiStatus({ mode: 'snapshot', conn: 'open', relayConfigured: true }).detail, /last prices/);
+  assert.equal(smartApiStatus({ mode: 'snapshot', conn: 'open' }).health, 'ok');
+  assert.match(smartApiStatus({ mode: 'snapshot', conn: 'open' }).detail, /last prices/);
 });
 
 import { parseYahooChart, toYahooSymbol } from '../lib/yahoo';
@@ -393,10 +379,6 @@ t('search: 8,200 NSE+BSE instruments — exact, name, BSE-only, fast', () => {
   assert.equal(searchInstruments(idx, 'SRIT', 8)[0].symbol, 'SRIT'); assert.equal(searchInstruments(idx, 'sri rama', 8)[0].symbol, 'SRIT'); assert.equal(searchInstruments(idx, 'SRIT', 8)[0].exch, 'BSE');
   assert.ok(searchInstruments(idx, 'industries', 30).length === 30); searchInstruments(idx, 'horizn', 8);
   assert.ok(Date.now() - t0 < 1500, 'search too slow: ' + (Date.now() - t0));
-});
-t('status: LIVE FEED from either source', () => {
-  for (const source of ['angel', 'yahoo'] as const) { const st = smartApiStatus({ mode: 'live', conn: 'open', relayConfigured: true, source }); assert.equal(st.health, 'ok'); assert.match(st.label, /LIVE FEED/); }
-  assert.match(smartApiStatus({ mode: 'live', conn: 'open', relayConfigured: true, source: 'yahoo' }).detail, /Yahoo/);
 });
 
 import { barInterval, fibPrice, logicalToTime, moveDrawing, parseDrawings, rulerStats, snapToBar, timeToLogical, formatDuration } from '../lib/drawings';
@@ -563,9 +545,99 @@ t('report: CSV escaping + injection guard + sections', () => {
 
 import { circuitHit, nearCircuit, limitPrice, CircuitTracker } from '../lib/circuit';
 import { CHIME_FREQ } from '../lib/chime';
-import { appUrl, terminalUrl, smartApiCallbackUrl, APP_URL } from '../lib/appUrl';
+import { appUrl, terminalUrl, APP_URL } from '../lib/appUrl';
 import { buildCircuitEmail, sendEmail, esc } from '../lib/email';
 import { parseQuoteRows } from '../lib/yahooData';
+import { DirectSmartApiStream, SMART_STREAM_URL, toEngineTick, type MarketTick } from '../lib/smartapiDirect';
+import { ExchangeType, INDEX_TOKENS } from '../lib/smartapi';
+import { smartApiLogin } from '../lib/smartapiLogin';
+import { buildListings } from '../lib/scripMaster';
+console.log('direct SmartAPI stream (no relay)');
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+function fakeWS() {
+  const made: FakeWS[] = [];
+  class FakeWS {
+    readyState = 0; binaryType = ''; sent: string[] = [];
+    onopen?: () => void; onmessage?: (e: { data: unknown }) => void; onclose?: () => void; onerror?: () => void;
+    constructor(public url: string) { made.push(this); }
+    send(m: string) { this.sent.push(m); }
+    close() { this.readyState = 3; this.onclose?.(); }
+    open() { this.readyState = 1; this.onopen?.(); }
+    drop() { this.readyState = 3; this.onclose?.(); }
+  }
+  return { FakeWS, made };
+}
+const bin = (o: Parameters<typeof encodeTick>[0]) => { const u = encodeTick(o); return u.buffer.slice(u.byteOffset, u.byteOffset + u.byteLength); };
+t('stream: URL carries clientCode/feedToken/apiKey; 30 s ping default; subscribes indices + diff of symbols (mode 3)', async () => {
+  const { FakeWS, made } = fakeWS();
+  const s = new DirectSmartApiStream({ apiKey: 'KEY', clientCode: 'C123', feedToken: 'FT/1', onTick: () => {}, onError: () => {}, WebSocketImpl: FakeWS as unknown as typeof WebSocket });
+  assert.equal(s.url, `${SMART_STREAM_URL}?clientCode=C123&feedToken=FT%2F1&apiKey=KEY`); assert.equal(SMART_STREAM_URL, 'wss://smartapisocket.angelone.in/smart-stream');
+  assert.equal((s as unknown as { o: { pingMs: number; maxRetries: number } }).o.pingMs, 30_000); assert.equal((s as unknown as { o: { maxRetries: number } }).o.maxRetries, 3);
+  s.connect(); const ws = made[0]; assert.equal(s.status, 'connecting'); assert.equal(ws.binaryType, 'arraybuffer'); ws.open(); assert.equal(s.status, 'open');
+  const first = ws.sent.map((m) => JSON.parse(m)); assert.ok(first.every((m) => m.params.mode === 3 && m.action === 1)); assert.equal(first.flatMap((m) => m.params.tokenList.flatMap((g: { tokens: string[] }) => g.tokens)).length, INDEX_TOKENS.length);
+  s.subscribe([{ symbol: 'TCS', token: '11536', exchangeType: ExchangeType.NSE_CM }]); s.subscribe([{ symbol: 'TCS', token: '11536', exchangeType: ExchangeType.NSE_CM }, { symbol: 'INFY', token: '1594', exchangeType: ExchangeType.NSE_CM }]);
+  assert.deepEqual(ws.sent.slice(first.length).map((m) => JSON.parse(m).params.tokenList), [[{ exchangeType: 1, tokens: ['11536'] }], [{ exchangeType: 1, tokens: ['1594'] }]]);
+  s.close(); assert.equal(s.status, 'idle');
+});
+t('stream: heartbeat sends "ping" on the interval and stops on close', async () => {
+  const { FakeWS, made } = fakeWS();
+  const s = new DirectSmartApiStream({ apiKey: 'K', clientCode: 'C', feedToken: 'F', pingMs: 15, onTick: () => {}, onError: () => {}, WebSocketImpl: FakeWS as unknown as typeof WebSocket });
+  s.connect(); made[0].open(); await sleep(150);
+  const pings = made[0].sent.filter((m) => m === 'ping').length; assert.ok(pings >= 2, 'pings: ' + pings);
+  s.close(); const n = made[0].sent.length; await sleep(40); assert.equal(made[0].sent.length, n, 'no pings after close');
+});
+t('stream: binary ticks → MarketTick {symbol,lastPrice,changePercent,volume,timestamp}; stock + index; junk / unknown tokens ignored', () => {
+  const { FakeWS, made } = fakeWS(); const got: MarketTick[] = [];
+  const s = new DirectSmartApiStream({ apiKey: 'K', clientCode: 'C', feedToken: 'F', onTick: (m) => got.push(m), onError: () => {}, WebSocketImpl: FakeWS as unknown as typeof WebSocket });
+  s.subscribe([{ symbol: 'TCS', token: '11536', exchangeType: 1 }]); s.connect(); made[0].open();
+  const ts = Date.parse('2026-10-19T10:00:00+05:30');
+  made[0].onmessage!({ data: bin({ mode: 2, exchangeType: 1, token: '11536', seq: 1, exchangeTs: ts, ltp: 4100, volume: 12345, open: 4010, high: 4120, low: 4000, close: 4000 }) });
+  assert.equal(got.length, 1); const m = got[0];
+  assert.deepEqual([m.symbol, m.lastPrice, m.volume, m.timestamp], ['TCS', 4100, 12345, ts]); near(m.changePercent, 2.5, 1e-9); assert.equal(m.prevClose, 4000); assert.ok(!m.isIndex);
+  const e = new MarketEngine(SEED_INSTRUMENTS); e.applyTick(toEngineTick(m)); assert.equal(e.quotes.get('TCS')!.ltp, 4100); assert.equal(e.quotes.get('TCS')!.prevClose, 4000);
+  made[0].onmessage!({ data: bin({ mode: 1, exchangeType: 1, token: '99926000', seq: 2, exchangeTs: ts, ltp: 25000 }) });
+  assert.equal(got[1].symbol, 'NIFTY'); assert.ok(got[1].isIndex); assert.equal(got[1].lastPrice, 25000);
+  made[0].onmessage!({ data: bin({ mode: 1, exchangeType: 1, token: '55555', seq: 3, exchangeTs: ts, ltp: 10 }) });
+  made[0].onmessage!({ data: 'pong' }); made[0].onmessage!({ data: new ArrayBuffer(4) }); made[0].onmessage!({ data: 'not json' });
+  assert.equal(got.length, 2); assert.equal(s.ticks, 2); s.close();
+});
+t('stream: reconnects with exponential backoff (3 retries) then calls onError once; a tick resets the budget', async () => {
+  const { FakeWS, made } = fakeWS(); const errs: unknown[] = []; const times: number[] = []; const t0 = Date.now();
+  const s = new DirectSmartApiStream({ apiKey: 'K', clientCode: 'C', feedToken: 'F', baseDelayMs: 10, onTick: () => {}, onError: (e) => errs.push(e), WebSocketImpl: class extends FakeWS { constructor(u: string) { super(u); times.push(Date.now() - t0); } } as unknown as typeof WebSocket });
+  s.connect(); made[0].drop(); await sleep(15); made[1].drop(); await sleep(30); made[2].drop(); await sleep(60); made[3].drop(); await sleep(30);
+  assert.equal(made.length, 4, '1 connect + 3 retries'); assert.equal(errs.length, 1); assert.equal((errs[0] as { reason: string }).reason, 'retries_exhausted'); assert.equal((errs[0] as { attempts: number }).attempts, 3);
+  assert.ok(times[2] - times[1] >= 18 && times[3] - times[2] >= 35, 'delays double: ' + times.join(','));
+  // flowing ticks reset the retry budget
+  const r = fakeWS(); const s2 = new DirectSmartApiStream({ apiKey: 'K', clientCode: 'C', feedToken: 'F', baseDelayMs: 5, onTick: () => {}, onError: () => errs.push('x'), WebSocketImpl: r.FakeWS as unknown as typeof WebSocket });
+  s2.subscribe([{ symbol: 'TCS', token: '11536', exchangeType: 1 }]); s2.connect(); r.made[0].open(); r.made[0].drop(); await sleep(10); assert.equal(s2.retries, 1);
+  r.made[1].open(); r.made[1].onmessage!({ data: bin({ mode: 1, exchangeType: 1, token: '11536', seq: 1, exchangeTs: 1, ltp: 5 }) }); assert.equal(s2.retries, 0); s2.close();
+});
+t('stream: a server error frame fails immediately (no retries)', () => {
+  const { FakeWS, made } = fakeWS(); const errs: { reason: string }[] = [];
+  const s = new DirectSmartApiStream({ apiKey: 'K', clientCode: 'C', feedToken: 'F', onTick: () => {}, onError: (e) => errs.push(e), WebSocketImpl: FakeWS as unknown as typeof WebSocket });
+  s.connect(); made[0].open(); made[0].onmessage!({ data: JSON.stringify({ errorCode: '403', errorMessage: 'Invalid token' }) });
+  assert.deepEqual(errs.map((e) => e.reason), ['server_error']); assert.equal(made.length, 1);
+});
+t('session login: returns ONLY clientCode + feedToken (never the JWT); missing config is reported', async () => {
+  const env = { SMARTAPI_API_KEY: 'k', SMARTAPI_CLIENT_CODE: 'C1', SMARTAPI_PASSWORD: 'pw', SMARTAPI_TOTP_SECRET: 'JBSWY3DPEHPK3PXP' };
+  let body = ''; const f = (async (_u: string, i: RequestInit) => { body = String(i.body); return new Response(JSON.stringify({ status: true, data: { jwtToken: 'SECRETJWT', refreshToken: 'R', feedToken: 'FEED' } })); }) as unknown as typeof fetch;
+  const r = await smartApiLogin(env, f, 1_760_000_000_000); assert.ok(r.ok); if (r.ok) { assert.deepEqual(Object.keys(r.session).sort(), ['clientCode', 'expiresAt', 'feedToken']); assert.equal(r.session.feedToken, 'FEED'); assert.ok(!JSON.stringify(r).includes('SECRETJWT')); }
+  assert.match(body, /"clientcode":"C1"/); assert.match(body, /"totp":"\d{6}"/);
+  assert.deepEqual(await smartApiLogin({}, f).then((x) => !x.ok && x.reason), 'not_configured');
+  const bad = (async () => new Response(JSON.stringify({ status: false, message: 'Invalid TOTP' }))) as unknown as typeof fetch; const b = await smartApiLogin(env, bad); assert.ok(!b.ok && b.reason === 'login_failed');
+});
+t('scrip master listings: NSE cash by name wins; BSE-only names added; derivatives skipped', () => {
+  const m = buildListings([
+    { token: '2885', symbol: 'RELIANCE-EQ', name: 'RELIANCE', exch_seg: 'NSE' }, { token: '500325', symbol: 'RELIANCE', name: 'RELIANCE', exch_seg: 'BSE' },
+    { token: '9', symbol: 'RELIANCE26OCTFUT', name: 'RELIANCE', exch_seg: 'NFO', instrumenttype: 'FUTSTK' }, { token: '539', symbol: 'ABCLTD', name: 'ABC', exch_seg: 'BSE' },
+  ]);
+  assert.deepEqual(m.get('RELIANCE'), { token: '2885', exchangeType: ExchangeType.NSE_CM }); assert.deepEqual(m.get('ABCLTD'), { token: '539', exchangeType: ExchangeType.BSE_CM }); assert.equal(m.size, 2);
+});
+t('stream window: 15 min either side of the session, Mon–Fri only', () => {
+  const ist = (s: string) => Date.parse(s + '+05:30');
+  assert.ok(!isStreamWindow(ist('2026-10-19T08:44:00')) && isStreamWindow(ist('2026-10-19T09:01:00')) && isStreamWindow(ist('2026-10-19T15:44:00')) && !isStreamWindow(ist('2026-10-19T15:46:00')) && !isStreamWindow(ist('2026-10-18T11:00:00')));
+});
+
 console.log('real-data engine · circuits · alerts · email');
 t('engine has NO quotes until Yahoo delivers them; touch() queues the symbol', () => {
   const e = new MarketEngine(SEED_INSTRUMENTS);
@@ -606,7 +678,7 @@ t('chime: upper ascends 880→1760 Hz, lower descends 440→220 Hz', () => {
 });
 t('app URLs resolve from NEXT_PUBLIC_APP_URL (default https://upcircuit.vercel.app)', () => {
   assert.ok(APP_URL.startsWith('http') && !APP_URL.endsWith('/'));
-  assert.equal(appUrl('/login'), APP_URL + '/login'); assert.equal(terminalUrl('M&M'), APP_URL + '/terminal?symbol=M%26M'); assert.equal(smartApiCallbackUrl(), APP_URL + '/api/smartapi/callback');
+  assert.equal(appUrl('/login'), APP_URL + '/login'); assert.equal(terminalUrl('M&M'), APP_URL + '/terminal?symbol=M%26M');
   if (!process.env.NEXT_PUBLIC_APP_URL) assert.equal(APP_URL, 'https://upcircuit.vercel.app');
 });
 t('circuit e-mail: ticker, event, LTP, band limit, terminal link; HTML-escaped', async () => {

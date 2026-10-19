@@ -78,21 +78,21 @@ export function isMarketOpen(nowMs: number): boolean {
   return dow >= 1 && dow <= 5 && min >= MARKET_OPEN_MIN && min < MARKET_CLOSE_MIN;
 }
 
+/** The window in which the browser keeps the SmartAPI socket open: 15 min either side of the session (pre-open … post-close), Mon–Fri. */
+export const isStreamWindow = (nowMs: number): boolean => isMarketOpen(nowMs + 15 * 60_000) || isMarketOpen(nowMs - 15 * 60_000);
+
 /**
- * live     – market open and the SmartAPI relay is streaming exchange ticks
- * snapshot – market closed, the relay is connected and delivering its last prices
+ * live     – market open and the browser's direct SmartAPI socket is streaming exchange ticks
+ * snapshot – market closed, the SmartAPI socket is connected and delivering its last prices
  * delayed  – REAL delayed quotes + bars polled from Yahoo Finance (the default; nothing is simulated)
  */
 export type FeedMode = 'live' | 'snapshot' | 'delayed';
 
 export const FEED_BADGE: Record<FeedMode, { text: string; title: string; tone: 'down' | 'warn' | 'accent' }> = {
-  live: { text: '🔴 LIVE MARKET', title: 'Streaming from Angel One SmartAPI (SmartWebSocketV2)', tone: 'down' },
-  snapshot: { text: '🟡 OFF-MARKET · RELAY DATA', title: 'Market closed (09:15–15:30 IST, Mon–Fri). Showing the last prices delivered by the SmartAPI relay.', tone: 'warn' },
+  live: { text: '● SMARTAPI LIVE', title: 'Streaming live ticks directly from Angel One SmartAPI (SmartWebSocketV2) to this browser.', tone: 'down' },
+  snapshot: { text: '🟡 OFF-MARKET · SMARTAPI', title: 'Market closed (09:15–15:30 IST, Mon–Fri). SmartAPI is connected; showing its last prices.', tone: 'warn' },
   delayed: { text: '● REAL YAHOO DATA (DELAYED)', title: 'Real Yahoo Finance quotes and bars, delayed by up to ~15 minutes. Nothing on this screen is simulated.', tone: 'accent' },
 };
-
-/** which upstream the relay is currently using (reported on every tick / heartbeat) */
-export type FeedSource = 'angel' | 'yahoo';
 
 export type Health = 'ok' | 'warn' | 'off';
 
@@ -104,29 +104,37 @@ export interface LinkStatus {
   detail: string;
 }
 
+/** Why the live SmartAPI stream is not in use (the app then runs on delayed Yahoo data). */
+export type LiveReason = 'no_key' | 'unauthorized' | 'not_configured' | 'login_failed' | 'rate_limited' | 'unreachable' | 'stream_failed' | 'outside_hours';
+
+const REASON: Record<LiveReason, string> = {
+  no_key: 'NEXT_PUBLIC_SMARTAPI_API_KEY is not set (build-time variable), so the browser cannot open the SmartAPI socket.',
+  unauthorized: 'The live feed needs a signed-in Supabase account (the feed token is only issued to verified users).',
+  not_configured: 'SMARTAPI_API_KEY, SMARTAPI_CLIENT_CODE, SMARTAPI_PASSWORD and SMARTAPI_TOTP_SECRET are not all set on the server.',
+  login_failed: 'SmartAPI rejected the server-side login (check the client code, password and TOTP secret).',
+  rate_limited: 'The session endpoint is throttled — retrying shortly.',
+  unreachable: 'SmartAPI could not be reached from the server.',
+  stream_failed: 'The SmartAPI socket failed after 3 reconnect attempts and a fresh session.',
+  outside_hours: 'Outside the streaming window (09:00–15:45 IST, Mon–Fri) — SmartAPI connects automatically when the market is about to open.',
+};
+
 /**
- * What the browser can truthfully say about the SmartAPI link. The browser only ever talks to the relay, so "connected"
- * means: relay socket open AND (during market hours) ticks flowing. Credentials themselves are validated by the relay at its
- * start-up; outside market hours an open relay socket is the strongest signal available.
- *   relayConfigured – NEXT_PUBLIC_FEED_WS_URL is set     serverCreds – SMARTAPI_* are also present on the web server
- */export function smartApiStatus(i: { mode: FeedMode; conn: FeedConn; relayConfigured: boolean; serverCreds?: boolean; source?: FeedSource }): LinkStatus {
+ * What the browser can truthfully say about the market feed. The browser opens the SmartAPI socket itself (tokens come from /api/smartapi/session),
+ * so "live" means the socket is open AND ticks are flowing. In every other case the app is on real, delayed Yahoo data.
+ */
+export function smartApiStatus(i: { mode: FeedMode; conn: FeedConn; reason?: LiveReason }): LinkStatus {
   const yahoo = 'Showing real delayed Yahoo Finance data (nothing is simulated).';
-  if (!i.relayConfigured) {
-    return i.serverCreds
-      ? { health: 'warn', label: 'Relay not linked', detail: `SmartAPI credentials are set on this server, but NEXT_PUBLIC_FEED_WS_URL is not — the browser has no live feed to connect to. ${yahoo}` }
-      : { health: 'off', label: 'Yahoo (delayed)', detail: `SmartAPI is not configured. ${yahoo}` };
-  }
   if (i.conn === 'open') {
-    if (i.mode === 'live')
-      return { health: 'ok', label: '🟢 LIVE FEED', detail: i.source === 'yahoo' ? 'Relay connected — streaming quotes from its Yahoo Finance fallback (SmartAPI is offline or not configured; may be delayed).' : 'Relay connected and streaming exchange ticks from Angel One SmartAPI.' };
-    if (i.mode === 'snapshot') return { health: 'ok', label: 'Relay connected', detail: "Relay connected and delivering ticks. The market is closed (09:15–15:30 IST, Mon–Fri) — showing the relay's last prices." };
-    return { health: 'ok', label: 'Relay ready', detail: `Relay connected. ${yahoo} Live ticks take over once they flow.` };
+    if (i.mode === 'live') return { health: 'ok', label: '● SMARTAPI LIVE', detail: 'Connected directly to Angel One SmartAPI and streaming exchange ticks.' };
+    if (i.mode === 'snapshot') return { health: 'ok', label: 'SmartAPI connected', detail: "SmartAPI is connected. The market is closed (09:15–15:30 IST, Mon–Fri) — showing its last prices." };
+    return { health: 'ok', label: 'SmartAPI connected', detail: `SmartAPI is connected but no ticks have arrived yet. ${yahoo} Live ticks take over once they flow.` };
   }
-  if (i.conn === 'closed') return { health: 'warn', label: 'Relay offline', detail: `The relay socket dropped or could not be reached; retrying with back-off. ${yahoo}` };
-  return { health: 'warn', label: 'Connecting…', detail: 'Connecting to the SmartAPI relay…' };
+  if (i.conn === 'connecting') return { health: 'warn', label: 'Connecting…', detail: `Connecting to SmartAPI… ${yahoo}` };
+  const why = i.reason ? `${REASON[i.reason]} ` : '';
+  return { health: i.reason === 'outside_hours' || i.reason === 'no_key' || i.reason === 'not_configured' ? 'off' : 'warn', label: 'Yahoo (delayed)', detail: `${why}${yahoo}` };
 }
 
-/** A decoded market tick (₹ prices). Produced by the relay from SmartWebSocketV2 packets. */
+/** A decoded market tick (₹ prices). Produced by lib/smartapiDirect.ts from SmartWebSocketV2 packets. */
 export interface Tick {
   symbol: string;
   ltp: number;
@@ -152,7 +160,7 @@ const cleanLevels = (a: unknown): DepthLevel[] =>
 
 /* ───────────── the engine ───────────── */
 // REAL data only. Prices, volume, day range and bars come from Yahoo Finance (delayed) via /api/quotes + /api/bars, or from SmartAPI ticks
-// forwarded by the relay. There are no random numbers in here: a symbol with no data is simply absent (touch() → undefined).
+// streamed directly from SmartAPI. There are no random numbers in here: a symbol with no data is simply absent (touch() → undefined).
 
 const INDEX_META: { id: string; label: string }[] = [
   { id: 'NIFTY', label: 'NIFTY 50' },
@@ -172,7 +180,7 @@ export class MarketEngine {
   readonly quotes = new Map<string, Quote>();
   readonly indices: IndexQuote[];
   readonly master: Map<string, Instrument>;
-  /** exchange depth from the relay; stays empty on Yahoo data (Yahoo has no order book) */
+  /** exchange depth from SmartAPI; stays empty on Yahoo data (Yahoo has no order book) */
   depth: OrderBook = { bids: [], asks: [] };
   /** total market cap of the loaded quotes, one point per Yahoo batch (newest last) */
   mcapTrend: number[] = [];
@@ -269,7 +277,7 @@ export class MarketEngine {
 
   /* ── Yahoo (real, delayed) ── */
 
-  /** Apply a batch of Yahoo rows. Symbols with fresher relay ticks keep the relay's price. */
+  /** Apply a batch of Yahoo rows. Symbols with fresher SmartAPI ticks keep SmartAPI's price. */
   ingestRows(rows: YahooRow[], now = Date.now()) {
     let any = false;
     for (const r of rows) {
@@ -375,7 +383,7 @@ export class MarketEngine {
     return this.historyOf(symbol, '1Y').map((c) => c.close).slice(-n);
   }
 
-  /* ── SmartAPI relay ticks (live) ── */
+  /* ── SmartAPI ticks (live) ── */
 
   /** Apply one exchange tick (live mode). Symbols Yahoo has not delivered yet need a previous close on the tick to be created. */
   applyTick(t: Tick, now = Date.now()) {
@@ -618,136 +626,3 @@ export class MarketEngine {
 
 export type FeedConn = 'idle' | 'connecting' | 'open' | 'closed';
 
-/**
- * Browser adapter for the SmartAPI relay (scripts/angel-relay.ts).
- *
- * Browsers cannot set the auth headers SmartWebSocketV2 requires and must never hold the API key / password / TOTP
- * secret, so the relay logs in server-side, subscribes via SmartWebSocketV2, decodes the binary packets and forwards
- * them here as JSON:
- *   → { t: 'sub', symbols: string[] }                       (client → relay)
- *   ← { t: 'tick', symbol, ltp, volume, open, high, low, close, avgPrice, depth, ts, … }
- *   ← { t: 'index', id, value, prev }
- *   ← { t: 'hb' }                                          (heartbeat, every ~15 s)
- */
-export class SmartApiFeed {
-  status: FeedConn = 'idle';
-  ticks = 0;
-  lastMessageAt = 0;
-  /** last time a price tick / index tick arrived (heartbeats don't count) */
-  lastTickAt = 0;
-  /** upstream reported by the relay (angel | yahoo); undefined until the first tagged message */
-  source: FeedSource | undefined;
-
-  private ws: WebSocket | null = null;
-  private attempt = 0;
-  private timer: ReturnType<typeof setTimeout> | null = null;
-  private watchdog: ReturnType<typeof setInterval> | null = null;
-  private wanted = new Set<string>();
-  private sent = new Set<string>();
-  private stopped = false;
-
-  constructor(
-    private url: string,
-    private engine: MarketEngine,
-    private onStatus: (s: FeedConn) => void = () => {},
-    private WS: typeof WebSocket | undefined = typeof WebSocket !== 'undefined' ? WebSocket : undefined,
-  ) {}
-
-  private set(s: FeedConn) {
-    if (this.status !== s) {
-      this.status = s;
-      this.onStatus(s);
-    }
-  }
-
-  connect() {
-    if (!this.WS || this.stopped || this.ws) return;
-    this.set('connecting');
-    let ws: WebSocket;
-    try {
-      ws = new this.WS(this.url);
-    } catch {
-      this.scheduleReconnect();
-      return;
-    }
-    this.ws = ws;
-    ws.onopen = () => {
-      this.attempt = 0;
-      this.ticks = 0;
-      this.lastMessageAt = Date.now();
-      this.sent.clear();
-      this.set('open');
-      this.flushSubs();
-    };
-    ws.onmessage = (ev) => {
-      this.lastMessageAt = Date.now();
-      if (typeof ev.data === 'string') this.handle(ev.data);
-    };
-    ws.onclose = () => {
-      this.ws = null;
-      this.set('closed');
-      this.scheduleReconnect();
-    };
-    ws.onerror = () => ws.close();
-    if (!this.watchdog) {
-      // a silent socket (no tick or heartbeat for 45 s) is treated as dead
-      this.watchdog = setInterval(() => {
-        if (this.ws && this.status === 'open' && Date.now() - this.lastMessageAt > 45_000) this.ws.close();
-      }, 10_000);
-    }
-  }
-
-  private scheduleReconnect() {
-    if (this.stopped || this.timer) return;
-    const delay = Math.min(30_000, 1000 * 2 ** Math.min(this.attempt++, 5)) * (0.75 + Math.random() * 0.5);
-    this.timer = setTimeout(() => {
-      this.timer = null;
-      this.connect();
-    }, delay);
-  }
-
-  /** Declare which symbols the UI needs; only the diff is sent to the relay. */
-  setSymbols(symbols: Iterable<string>) {
-    this.wanted = new Set(symbols);
-    this.flushSubs();
-  }
-
-  private flushSubs() {
-    if (!this.ws || this.status !== 'open') return;
-    const fresh = Array.from(this.wanted).filter((s) => !this.sent.has(s));
-    if (fresh.length === 0) return;
-    for (let i = 0; i < fresh.length; i += 200) {
-      const chunk = fresh.slice(i, i + 200);
-      this.ws.send(JSON.stringify({ t: 'sub', symbols: chunk }));
-      chunk.forEach((s) => this.sent.add(s));
-    }
-  }
-
-  private handle(raw: string) {
-    let m: Record<string, unknown>;
-    try {
-      m = JSON.parse(raw);
-    } catch {
-      return;
-    }
-    if (m.src === 'angel' || m.src === 'yahoo') this.source = m.src;
-    if (m.t === 'tick' && typeof m.symbol === 'string' && m.symbol.length <= 24 && finite(m.ltp)) {
-      this.ticks++;
-      this.lastTickAt = Date.now();
-      this.engine.applyTick(m as unknown as Tick);
-    } else if (m.t === 'index' && typeof m.id === 'string' && finite(m.value)) {
-      this.lastTickAt = Date.now();
-      this.engine.applyIndexTick(m.id, m.value, finite(m.prev) ? m.prev : undefined);
-    }
-  }
-
-  close() {
-    this.stopped = true;
-    if (this.timer) clearTimeout(this.timer);
-    if (this.watchdog) clearInterval(this.watchdog);
-    this.timer = this.watchdog = null;
-    this.ws?.close();
-    this.ws = null;
-    this.set('idle');
-  }
-}

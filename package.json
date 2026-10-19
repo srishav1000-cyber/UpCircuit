@@ -11,8 +11,7 @@
     "typecheck": "tsc --noEmit",
     "sync:instruments": "node scripts/sync-instruments.mjs --force",
     "test": "tsx scripts/verify.ts && tsx scripts/verify-auth.ts",
-    "postinstall": "node scripts/copy-ocr-assets.mjs",
-    "relay": "tsx scripts/angel-relay.ts"
+    "postinstall": "node scripts/copy-ocr-assets.mjs"
   },
   "dependencies": {
     "lightweight-charts": "^4.2.0",
