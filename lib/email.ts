@@ -36,7 +36,7 @@ export function buildCircuitEmail(m: CircuitMail): { subject: string; html: stri
 ${row('Last traded price', esc(inr(m.ltp)))}${row('Change vs previous close', esc(pct))}${row(esc(limitLabel), esc(inr(m.limit)))}
 </table></td></tr>
 <tr><td style="padding-top:16px"><a href="${esc(link)}" style="display:inline-block;background:#3b82f6;color:#fff;text-decoration:none;font-weight:600;padding:10px 16px;border-radius:8px">Open ${sym} in the terminal</a></td></tr>
-<tr><td style="padding-top:16px;font-size:11px;color:#64748b">Prices are real, delayed Yahoo Finance data (or exchange ticks when the live SmartAPI feed is connected). Not investment advice. <a href="${esc(appUrl('/'))}" style="color:#64748b">UpCircuit</a></td></tr>
+<tr><td style="padding-top:16px;font-size:11px;color:#64748b">Prices are real NSE session data (exchange ticks when the live SmartAPI feed is connected). Not investment advice. <a href="${esc(appUrl('/'))}" style="color:#64748b">UpCircuit</a></td></tr>
 </table></td></tr></table></body></html>`;
   const text = `${event}: ${m.symbol}\nLTP ${inr(m.ltp)} (${pct})\n${limitLabel}: ${inr(m.limit)}\nOpen in the terminal: ${link}\n`;
   return { subject, html, text, link };

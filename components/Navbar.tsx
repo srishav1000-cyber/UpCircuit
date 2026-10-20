@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
 import type { IndexQuote, Instrument } from '@/lib/types';
-import { FEED_BADGE, smartApiStatus, type FeedConn, type FeedMode, type Health, type LiveReason } from '@/lib/market';
+import { feedBadge, isMarketOpen, smartApiStatus, type FeedConn, type FeedMode, type Health, type LiveReason } from '@/lib/market';
 import type { Persona } from '@/lib/personas';
 import { useDismiss } from '@/hooks/useClickOutside';
 import { testChime } from '@/lib/chime';
@@ -58,7 +58,7 @@ interface Props {
 }
 
 export function FeedBadge({ mode, className = '' }: { mode: FeedMode; className?: string }) {
-  const b = FEED_BADGE[mode];
+  const b = feedBadge(mode, isMarketOpen(Date.now()));
   const cls = b.tone === 'down' ? 'bg-down/15 text-down' : b.tone === 'warn' ? 'bg-warn/15 text-warn' : 'bg-accent/15 text-accent';
   return (
     <span role="status" title={b.title} data-testid="feed-badge" data-mode={mode} className={`inline-flex shrink-0 items-center whitespace-nowrap rounded px-2 py-1 text-[10px] font-bold tracking-wide ${cls} ${mode === 'live' ? 'animate-pulse' : ''} ${className}`}>
@@ -330,7 +330,28 @@ function AvatarMenu({ mode, onPlans }: { mode: FeedMode; onPlans?: () => void })
   const ref = useRef<HTMLDivElement>(null);
   const close = useCallback(() => setOpen(false), []);
   useDismiss(ref, open, close);
-  const { user, signOut, required } = useAuth();
+  const { user, signOut, required, getToken } = useAuth();
+  const [csvMsg, setCsvMsg] = useState('');
+  const exportTicks = async () => {
+    setCsvMsg('Preparing…');
+    try {
+      const token = await getToken();
+      const r = await fetch('/api/market/export-csv', { headers: token ? { Authorization: `Bearer ${token}` } : {}, cache: 'no-store' });
+      if (!r.ok) {
+        const j = (await r.json().catch(() => ({}))) as { message?: string };
+        return setCsvMsg(j.message ?? 'No ticks available yet.');
+      }
+      const url = URL.createObjectURL(await r.blob());
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = /filename="([^"]+)"/.exec(r.headers.get('content-disposition') ?? '')?.[1] ?? 'upcircuit-ticks.csv';
+      a.click();
+      URL.revokeObjectURL(url);
+      setCsvMsg('');
+    } catch {
+      setCsvMsg('Export failed.');
+    }
+  };
   const email = user?.email ?? '';
   const initials = (email.split('@')[0] || 'U').slice(0, 2).toUpperCase();
   return (
@@ -342,9 +363,11 @@ function AvatarMenu({ mode, onPlans }: { mode: FeedMode; onPlans?: () => void })
         <div role="menu" className="absolute right-0 top-full z-50 mt-2 w-60 rounded-md border border-line bg-panel py-1 text-[13px] shadow-2xl shadow-black/40">
           <div className="border-b border-line px-3 py-2">
             <div className="truncate font-semibold text-ink" data-testid="account-email">{email}</div>
-            <div className="text-[11px] text-muted" data-testid="account-plan">Tier {planOf(user?.plan).tier} · {planOf(user?.plan).name} · {mode === 'live' ? 'Live feed' : mode === 'snapshot' ? 'Off-market · SmartAPI data' : 'Real Yahoo data (delayed)'}</div>
+            <div className="text-[11px] text-muted" data-testid="account-plan">Tier {planOf(user?.plan).tier} · {planOf(user?.plan).name} · {mode === 'live' ? 'Live feed' : mode === 'snapshot' ? 'Off-market · SmartAPI data' : 'Offline session data'}</div>
           </div>
           <button role="menuitem" data-testid="account-plans" className="block w-full px-3 py-1.5 text-left text-ink hover:bg-line" onClick={() => { close(); onPlans?.(); }}>💳 Plans &amp; upgrade</button>
+          <button role="menuitem" data-testid="account-export-ticks" className="block w-full px-3 py-1.5 text-left text-ink hover:bg-line" onClick={() => void exportTicks()}>⬇ Export session ticks (CSV)</button>
+          {csvMsg && <div className="px-3 pb-1 text-[11px] text-muted" data-testid="account-export-msg">{csvMsg}</div>}
           {required && (
             <button role="menuitem" data-testid="account-logout" className="block w-full border-t border-line px-3 py-1.5 text-left text-down hover:bg-line" onClick={() => { close(); void signOut(); }}>Log out</button>
           )}

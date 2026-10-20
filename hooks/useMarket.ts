@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'r
 import { MarketEngine, isMarketOpen, isStreamWindow, type FeedConn, type FeedMode, type LiveReason } from '@/lib/market';
 import { DirectSmartApiStream, toEngineTick, type Listing, type MarketTick } from '@/lib/smartapiDirect';
 import { useAuth } from '@/hooks/useAuth';
+import { Replayer, TickSampler, buildReplay, tradingDateOf, type TickRow } from '@/lib/offmarketSimulation';
 import type { Candle, Instrument, Timeframe } from '@/lib/types';
 import type { YahooRow } from '@/lib/yahooData';
 
@@ -153,13 +154,99 @@ export function useMarket(universe: Instrument[], selected: string, watch: strin
   }, [engine]);
 
   /* ── SmartAPI, direct browser → exchange socket (optional; Yahoo keeps running underneath as the fallback) ── */
+  const sampler = useRef(new TickSampler());
+  const outbox = useRef<TickRow[]>([]);
   const applyTick = useCallback(
     (m: MarketTick) => {
       if (m.isIndex) engine.applyIndexTick(m.symbol, m.lastPrice, m.prevClose);
-      else engine.applyTick(toEngineTick(m));
+      else {
+        engine.applyTick(toEngineTick(m));
+        // log a throttled copy of the REAL tick (09:15–15:30 IST only) for off-market replay + the CSV export
+        const row = sampler.current.offer({ symbol: m.symbol, lastPrice: m.lastPrice, volume: m.volume, high: m.high, low: m.low, timestamp: m.timestamp });
+        if (row && outbox.current.length < 3000) outbox.current.push(row);
+      }
     },
     [engine],
   );
+
+  /* ── tick persistence: flush the outbox to /api/market/ticks every 30 s (silently stops if the server has no store / rejects us) ── */
+  useEffect(() => {
+    let off = false;
+    let busy = false;
+    const flush = async () => {
+      if (off || busy || !outbox.current.length) return;
+      busy = true;
+      const batch = outbox.current.splice(0, 500);
+      try {
+        const token = await tokenRef.current();
+        const r = await fetch('/api/market/ticks', { method: 'POST', headers: { 'content-type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) }, body: JSON.stringify({ rows: batch }), signal: AbortSignal.timeout(10_000) });
+        if (r.status === 501 || r.status === 401) off = true; // no store configured / not allowed: stop trying
+      } catch { /* dropped; the next window logs fresh ticks */ }
+      finally { busy = false; }
+    };
+    const id = setInterval(flush, 30_000);
+    return () => { clearInterval(id); void flush(); };
+  }, []);
+
+  /* ── off-market replay: persisted last-session ticks → real 1-minute bars → bounded deterministic wobble (never alerts) ── */
+  useEffect(() => {
+    let alive = true;
+    let day = '';
+    let storeOff = false;
+    let loading = false;
+    const players = new Map<string, { r: Replayer; at: number }>();
+    const persisted = new Map<string, TickRow[]>();
+    const make = (s: string) => {
+      const q = engine.quotes.get(s);
+      if (!q) return;
+      const bars = engine.historyOf(s, '1m');
+      const rp = buildReplay({ rows: persisted.get(s), bars, ltp: q.ltp, high: q.high, low: q.low });
+      if (rp) players.set(s, { r: new Replayer(rp), at: Date.now() });
+    };
+    const load = async (syms: string[]) => {
+      for (let i = 0; i < syms.length; i += 20) {
+        const part = syms.slice(i, i + 20);
+        if (!storeOff) {
+          try {
+            const token = await tokenRef.current();
+            const r = await fetch(`/api/market/replay?s=${encodeURIComponent(part.join(','))}`, { cache: 'no-store', headers: token ? { Authorization: `Bearer ${token}` } : {}, signal: AbortSignal.timeout(12_000) });
+            if (r.status === 501 || r.status === 401) storeOff = true;
+            const j = (await r.json().catch(() => ({}))) as { source?: string; ticks?: Record<string, Omit<TickRow, 'symbol'>[]> };
+            if (j.source === 'none') storeOff = true;
+            for (const [sym, rows] of Object.entries(j.ticks ?? {})) persisted.set(sym, rows.map((x) => ({ ...x, symbol: sym })));
+          } catch { /* fall through to bars / envelope */ }
+        }
+        part.forEach((s) => make(s));
+      }
+    };
+    const tick = async () => {
+      const now = Date.now();
+      const f = feedRef.current;
+      // replay only when there is no real stream: market closed AND the socket is not delivering ticks
+      if (isMarketOpen(now) || (f?.status === 'open' && (f.ticks ?? 0) > 0) || !engine.ready) return;
+      const today = tradingDateOf(now);
+      if (day !== today) {
+        day = today;
+        players.clear();
+        persisted.clear();
+      }
+      const want = uniq([selRef.current, ...focusRef.current, ...watchRef.current]).filter((s) => engine.quotes.has(s)).slice(0, 40);
+      const need = want.filter((s) => !players.has(s));
+      if (need.length && !loading) {
+        loading = true;
+        try { await load(need); } finally { loading = false; }
+      }
+      for (const s of want) {
+        const p = players.get(s);
+        if (!p) continue;
+        // an envelope-only symbol is upgraded to real bars as soon as they have arrived
+        if (p.r.replay.kind === 'envelope' && now - p.at > 15_000 && engine.historyOf(s, '1m').length >= 2) make(s);
+        engine.setReplayPrice(s, (players.get(s) ?? p).r.next());
+      }
+    };
+    const id = setInterval(() => alive && void tick(), 2000);
+    return () => { alive = false; clearInterval(id); };
+  }, [engine]);
 
   useEffect(() => {
     if (!API_KEY) return;

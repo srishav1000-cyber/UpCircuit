@@ -11,7 +11,7 @@ import { parsePortfolioCsv } from '../lib/csv';
 import { parseRss, decodeEntities } from '../lib/news';
 import { scoreText } from '../lib/sentiment';
 import { buildIndex, searchInstruments } from '../lib/fuzzy';
-import { getFundamentals } from '../lib/fundamentals';
+import { fundamentalsOf, ratioTone } from '../lib/fundamentals';
 import { answerLocally, detectIntent, isContext, type CopilotContext } from '../lib/copilot';
 import { TtlCache, allow } from '../lib/ttlCache';
 import {
@@ -159,18 +159,17 @@ const mkCtx = (symbol = 'TCS'): CopilotContext => {
   return {
     symbol, name: q.name, sector: q.sector,
     price: { ltp: q.ltp, changePct: (q.ltp / q.prevClose - 1) * 100, dayHigh: q.high, dayLow: q.low, volume: q.volume, circuitBandPct: q.circuitBand },
-    ratios: getFundamentals(q),
+    ratios: { marketCapCr: q.mcapCr, pe: 24.5, bookValue: 310, dividendYield: 1.2, roce: 18.2, roe: 16.4, debtToEquity: symbol === 'HDFCBANK' ? null : 0.4, promoterHolding: 52, eps: q.ltp / 24.5 },
     technicals: { rsi: rsi14(closes), sma50: sma(closes, 50), sma200: sma(closes, 200), pivots: pivotLevels(prev.high, prev.low, prev.close), short: s && { label: s.label, score: s.score }, long: l && { label: l.label, score: l.score } },
     simulated: true,
   };
 };
-t('fundamentals are consistent (BV = EPS/ROE, banks have no D/E)', () => {
-  const e = ingestFixture(new MarketEngine(SEED_INSTRUMENTS));
-  const f = getFundamentals(e.quotes.get('TCS')!);
-  near(f.bookValue, f.eps / (f.roe / 100), f.bookValue * 0.01); // 1 % slack: inputs are rounded for display
-  assert.ok(f.pe > 0 && f.promoterHolding >= 0 && f.promoterHolding <= 100);
-  assert.equal(getFundamentals(e.quotes.get('HDFCBANK')!).debtToEquity, null);
-  assert.deepEqual(getFundamentals(e.quotes.get('TCS')!), getFundamentals(e.quotes.get('TCS')!));
+t('fundamentals: no simulation — null ratios are N/A and never get a tone', () => {
+  const sc = getScreener({ symbol: 'TCS', sector: 'IT', ltp: 3500, prevClose: 3480, mcapCr: 1_270_000, dividendYield: 0, high: 3510, low: 3470 });
+  const f = fundamentalsOf(sc);
+  assert.equal(f.marketCapCr, 1_270_000); assert.equal(f.pe, null); assert.equal(f.roe, null); assert.equal(f.promoterHolding, null);
+  for (const k of ['pe', 'roe', 'roce', 'debtToEquity', 'promoterHolding', 'dividendYield'] as const) assert.equal(ratioTone(k, f), 'na', k);
+  assert.equal(ratioTone('roe', { ...f, roe: 20 }), 'good'); assert.equal(ratioTone('debtToEquity', { ...f, debtToEquity: 1.4 }), 'bad');
 });
 t('outlooks produce labelled signals', () => {
   const closes = fixtureCandles('INFY').map((c) => c.close);
@@ -190,10 +189,10 @@ t('local answers: every intent returns text with the disclaimer and real numbers
   const ctx = mkCtx();
   for (const q of ['Is it expensive?', 'How are ROE and ROCE?', 'debt?', 'dividend?', 'support resistance?', 'news sentiment?', 'key risks?', 'should I invest?', 'hi']) {
     const a = answerLocally(q, ctx, []);
-    assert.match(a, /not investment advice/); assert.match(a, /estimates/);
+    assert.match(a, /not investment advice/); assert.match(a, /N\/A/);
     assert.ok(a.length > 80, q);
   }
-  assert.match(answerLocally('Is it expensive?', ctx, []), new RegExp(ctx.ratios.pe.toFixed(1)));
+  assert.match(answerLocally('Is it expensive?', ctx, []), new RegExp(ctx.ratios.pe!.toFixed(1)));
   assert.doesNotMatch(answerLocally('debt?', mkCtx('HDFCBANK'), []), /Debt-to-equity is \d/);
   assert.ok(isContext(ctx) && !isContext({ symbol: 1 }) && !isContext(null));
 });
@@ -315,16 +314,16 @@ t('alerts fire once, on the right side, and survive bad storage', () => {
   assert.equal(checkAlerts(al, () => undefined).fired.length, 0);
   assert.deepEqual(parseAlerts('garbage'), []); assert.deepEqual(parseAlerts('[{"id":1}]'), []); assert.equal(parseAlerts(JSON.stringify(al)).length, 2);
 });
-t('SmartAPI link status: LIVE vs Yahoo-delayed, with the reason when the stream is not in use', () => {
+t('SmartAPI link status: LIVE vs offline session, with the reason when the stream is not in use', () => {
   const st = smartApiStatus;
   assert.equal(st({ mode: 'live', conn: 'open' }).label, '● SMARTAPI LIVE'); assert.equal(st({ mode: 'live', conn: 'open' }).health, 'ok');
   assert.equal(st({ mode: 'delayed', conn: 'open' }).label, 'SmartAPI connected');
   assert.equal(st({ mode: 'delayed', conn: 'connecting' }).label, 'Connecting…');
   for (const reason of ['no_key', 'unauthorized', 'not_configured', 'login_failed', 'unreachable', 'stream_failed', 'outside_hours'] as const) {
-    const r = st({ mode: 'delayed', conn: 'closed', reason }); assert.equal(r.label, 'Yahoo (delayed)'); assert.match(r.detail, /Yahoo/); assert.ok(r.detail.length > 60);
+    const r = st({ mode: 'delayed', conn: 'closed', reason }); assert.equal(r.label, 'Offline session'); assert.doesNotMatch(r.detail, /Yahoo/); assert.ok(r.detail.length > 60);
   }
   assert.equal(st({ mode: 'delayed', conn: 'idle', reason: 'no_key' }).health, 'off'); assert.equal(st({ mode: 'delayed', conn: 'closed', reason: 'stream_failed' }).health, 'warn');
-  assert.equal(FEED_BADGE.live.text, '● SMARTAPI LIVE'); assert.equal(FEED_BADGE.delayed.text, '● REAL YAHOO DATA (DELAYED)');
+  assert.equal(FEED_BADGE.live.text, '● SMARTAPI LIVE'); assert.equal(FEED_BADGE.delayed.text, '● OFFLINE SESSION (LAST NSE CLOSE)');
 });
 t('instrument sync: NSE + BSE cash equities only, NSE wins duplicates', () => {
   const rows = [
@@ -396,37 +395,28 @@ t('drawings: time↔logical round-trip incl. extrapolation, magnet, fib, ruler, 
 });
 
 import { getScreener, peerCandidates, quarterLabels, rangePct } from '../lib/screener';
-t('screener: missing / NaN fields fall back to safe defaults', () => {
+t('screener: quote-only — no invented numbers, everything unknown is null / N/A', () => {
   const bad: any[] = [null, undefined, {}, { symbol: 'X' }, { symbol: 'X', ltp: NaN, mcapCr: undefined, sector: undefined, high: null, low: -1, prevClose: 0 }];
   for (const q of bad) {
     const sc = getScreener(q);
-    const nums = [sc.marketCapCr, sc.pe, sc.industryPe, sc.bookValue, sc.dividendYield, sc.roce, sc.roe, sc.faceValue, sc.eps, sc.high52, sc.low52];
-    assert(nums.every((n) => Number.isFinite(n)), 'finite ratios');
-    assert(sc.quarters.length === 5 && sc.quarters.every((r) => Number.isFinite(r.sales) && Number.isFinite(r.eps) && r.label), '5 quarters');
-    assert(Math.abs(sc.holding.promoters + sc.holding.fiis + sc.holding.diis + sc.holding.public - 100) < 0.2, 'holding ~100');
-    assert(sc.low52 <= sc.high52, '52w order');
+    for (const k of ['marketCapCr', 'pe', 'industryPe', 'bookValue', 'dividendYield', 'roce', 'roe', 'faceValue', 'eps', 'high52', 'low52', 'debtToEquity'] as const) assert.equal(sc[k], null, k);
+    assert.deepEqual(sc.quarters, []); assert.equal(sc.holding, null); assert.equal(sc.source.live, false);
+    assert.ok(sc.source.na.includes('P/E') && sc.source.na.includes('52W range') && sc.source.na.includes('Shareholding'));
   }
-  assert(getScreener(undefined).pe === 15.2, 'default P/E 15.2');
-  assert(peerCandidates(undefined, 'X', 'IT').length === 0, 'no instruments → no peers');
+  assert.equal(getScreener(undefined).pe, null, 'no default 15.2 any more');
+  assert.equal(peerCandidates(undefined, 'X', 'IT').length, 0, 'no instruments → no peers');
 });
 
-t('screener: consistent fundamentals for every sector / any symbol', () => {
+t('screener: real quote fields pass through; today\'s range is NOT passed off as a 52-week range', () => {
   assert.deepEqual(quarterLabels(new Date('2026-10-15T00:00:00Z')), ['Sep 2025', 'Dec 2025', 'Mar 2026', 'Jun 2026', 'Sep 2026']);
   assert.deepEqual(quarterLabels(new Date('2026-09-15T00:00:00Z')).slice(-1), ['Jun 2026']); assert.deepEqual(quarterLabels(new Date('2026-01-10T00:00:00Z')).slice(-1), ['Dec 2025']);
-  const sectors = ['Banking', 'IT', 'Energy', 'Auto', 'FMCG', 'Pharma', 'Metals', 'Financials', 'Infra', 'Telecom', 'Consumer', 'Cement', 'Realty', 'Chemicals', 'Others', 'Unknown'];
-  const eng = ingestFixture(new MarketEngine(SEED_INSTRUMENTS));
-  for (let i = 0; i < 400; i++) {
-    const sym = 'TST' + i; const sector = sectors[i % sectors.length]; const ltp = [3.2, 18, 55, 240, 1900, 4800][i % 6]; const mcap = [40, 900, 12000, 250000][i % 4];
-    const s = getScreener({ symbol: sym, sector, ltp, prevClose: ltp * 0.99, mcapCr: mcap, dividendYield: 1.2, high: ltp * 1.01, low: ltp * 0.98 }, new Date('2026-10-15T00:00:00Z'));
-    const nums = [s.pe, s.bookValue, s.roce, s.roe, s.eps, s.high52, s.low52, ...s.quarters.flatMap((q) => [q.sales, q.expenses, q.operatingProfit, q.opmPct, q.netProfit, q.eps])];
-    assert.ok(nums.every(Number.isFinite), sym); assert.equal(s.quarters.length, 5);
-    assert.ok(s.low52 <= ltp && ltp <= s.high52, `52w ${sym}`);
-    const ttm = s.quarters.slice(1).reduce((a, q) => a + q.netProfit, 0); assert.ok(Math.abs(ttm - mcap / s.pe) <= Math.max(0.5, (mcap / s.pe) * 0.02), `ttm ${sym} ${ttm} vs ${mcap / s.pe}`);
-    for (const q of s.quarters) { assert.ok(Math.abs(q.sales - q.expenses - q.operatingProfit) < 0.25 + q.sales * 1e-4, 'sales-exp=op ' + sym); assert.ok(q.sales > 0 && q.netProfit > 0); assert.ok(q.sales >= mcap * 0.05 - 0.1 && q.sales <= mcap * 0.25 + 0.1, `sales ${q.sales} vs mcap ${mcap} ${sym}`); assert.ok(q.operatingProfit >= q.netProfit - 0.1 && q.expenses >= 0, 'op>=pat ' + sym); }
-    const h = s.holding; assert.ok(Math.abs(h.promoters + h.fiis + h.diis + h.public - 100) < 0.11 && h.public >= 0, 'holding ' + sym);
-    assert.deepEqual(s, getScreener({ symbol: sym, sector, ltp, prevClose: ltp * 0.99, mcapCr: mcap, dividendYield: 1.2, high: ltp * 1.01, low: ltp * 0.98 }, new Date('2026-10-15T00:00:00Z'))); // deterministic
-  }
+  const q = { symbol: 'TST', sector: 'IT', ltp: 100, prevClose: 99, mcapCr: 5000, dividendYield: 1.2, high: 101, low: 98 };
+  const s = getScreener(q); assert.equal(s.marketCapCr, 5000); assert.equal(s.dividendYield, 1.2); assert.equal(s.high52, null); assert.equal(s.low52, null);
+  assert.ok(!s.source.na.includes('Market Cap') && !s.source.na.includes('Dividend Yield'));
+  assert.deepEqual(s, getScreener(q)); // deterministic, no RNG
+  assert.equal(getScreener({ ...q, mcapCr: 0, dividendYield: 0 }).marketCapCr, null);
   assert.equal(rangePct(5, 0, 10), 50); assert.equal(rangePct(-1, 0, 10), 0); assert.equal(rangePct(99, 0, 10), 100); assert.equal(rangePct(1, 5, 5), 50);
+  const eng = ingestFixture(new MarketEngine(SEED_INSTRUMENTS));
   const all = Array.from({ length: 3000 }, (_, i) => ({ symbol: 'P' + i, name: 'P' + i, sector: i % 2 ? 'IT' : 'Auto' }));
   const peers = peerCandidates(all, 'P1', 'IT', 5); assert.equal(peers.length, 5); assert.ok(peers.every((p) => p.sector === 'IT' && p.symbol !== 'P1'));
   assert.equal(eng.quotes.size < 400, true); // peer selection must not instantiate the sector
@@ -435,7 +425,7 @@ t('screener: consistent fundamentals for every sector / any symbol', () => {
 import { parseQuoteSummary, parseTimeseries, fromTimeseries, mergeLive } from '../lib/yahooFundamentals';
 import { createList, renameList, deleteList, defaultState, mapList, setActive, parseState, activeList, allSymbols, MAX_LISTS } from '../lib/watchlist';
 const W = (v: number) => ({ raw: v });
-t('yahoo fundamentals: quoteSummary + timeseries parsing, merge over estimate', () => {
+t('yahoo fundamentals: quoteSummary + timeseries parsing, merge over the quote-only screener', () => {
   const qs = { quoteSummary: { result: [{ summaryDetail: { marketCap: W(1.5e12), trailingPE: W(24.5), dividendYield: W(0.0125), fiftyTwoWeekHigh: W(3200), fiftyTwoWeekLow: W(2100) }, defaultKeyStatistics: { bookValue: W(620), trailingEps: W(118), heldPercentInsiders: W(0.5), heldPercentInstitutions: W(0.3) }, financialData: { returnOnEquity: W(0.091), debtToEquity: W(45.2) }, price: { currency: 'INR' } }], error: null } };
   const r = parseQuoteSummary(qs);
   assert.deepEqual([r.marketCapCr, r.pe, r.dividendYield, r.bookValue, r.eps, r.roe, r.debtToEquity, r.high52, r.low52], [150000, 24.5, 1.25, 620, 118, 9.1, 0.45, 3200, 2100]);
@@ -447,12 +437,12 @@ t('yahoo fundamentals: quoteSummary + timeseries parsing, merge over estimate', 
   assert.equal(f.quarters.length, 5); assert.deepEqual(f.quarters[0], { label: 'Sep 2025', sales: 10000, expenses: 8000, operatingProfit: 2000, opmPct: 20, netProfit: 1000, eps: 7 }); assert.equal(f.quarters[4].label, 'Sep 2026'); assert.equal(f.roce, 20);
   const ltp = 2800; const sim = getScreener({ symbol: 'LIVE', sector: 'Energy', ltp, prevClose: ltp, mcapCr: 90000, dividendYield: 0.5, high: ltp, low: ltp });
   const m = mergeLive(sim, { yahooSymbol: 'LIVE.NS', fetchedAt: 1, ...r, roce: f.roce, quarters: f.quarters }, ltp);
-  assert.deepEqual([m.marketCapCr, m.pe, m.bookValue, m.roce, m.eps, m.quarters.length, m.holding.promoters], [150000, 24.5, 620, 20, 118, 5, 50]);
-  assert.ok(m.source.live && m.source.quarters && m.source.holding && m.source.estimated.includes('Face Value') && !m.source.estimated.includes('P/E'));
-  assert.ok(Math.abs(m.holding.promoters + m.holding.fiis + m.holding.diis + m.holding.public - 100) < 0.2);
-  assert.ok(m.low52 <= ltp && ltp <= m.high52);
-  const partial = mergeLive(sim, { yahooSymbol: 'X.NS', fetchedAt: 1, pe: 30, quarters: [] }, ltp); // missing fields keep the estimate
-  assert.equal(partial.pe, 30); assert.equal(partial.marketCapCr, sim.marketCapCr); assert.deepEqual(partial.quarters, sim.quarters); assert.ok(partial.source.estimated.includes('Quarterly results'));
+  assert.deepEqual([m.marketCapCr, m.pe, m.bookValue, m.roce, m.eps, m.quarters.length, m.holding!.promoters], [150000, 24.5, 620, 20, 118, 5, 50]);
+  assert.ok(m.source.live && m.source.quarters && m.source.holding && m.source.na.includes('Face Value') && !m.source.na.includes('P/E'));
+  assert.ok(Math.abs(m.holding!.promoters + m.holding!.institutions + m.holding!.public - 100) < 0.2);
+  assert.ok(m.low52! <= ltp && ltp <= m.high52!);
+  const partial = mergeLive(sim, { yahooSymbol: 'X.NS', fetchedAt: 1, pe: 30, quarters: [] }, ltp); // missing fields stay N/A
+  assert.equal(partial.pe, 30); assert.equal(partial.marketCapCr, sim.marketCapCr); assert.deepEqual(partial.quarters, []); assert.equal(partial.roe, null); assert.equal(partial.high52, null); assert.ok(partial.source.na.includes('Quarterly results') && partial.source.na.includes('ROE'));
   assert.equal(mergeLive(sim, null, ltp), sim);
   assert.equal(parseQuoteSummary({ quoteSummary: { result: [{ price: { financialCurrency: 'USD' }, summaryDetail: { marketCap: W(1e9) } }] } }).currency, 'USD');
 });
@@ -536,7 +526,8 @@ t('rebalance: sliders sum to 100, cash released/required, per-stock trims, apply
 t('report: CSV escaping + injection guard + sections', () => {
   assert.equal(toCsv([['a,b', 'q"t', 'x\ny', 1.5, null, undefined, NaN]]), '"a,b","q""t","x\ny",1.5,,,\r\n'); assert.equal(toCsv([['=SUM(A1)', '@x', '-5', -5]]), "'=SUM(A1),'@x,'-5,-5\r\n");
   const q = { symbol: 'TST', name: 'Test, Ltd', exch: 'NSE' as const, sector: 'IT', ltp: 110, prevClose: 100, high: 112, low: 99, volume: 10, circuitBand: 10, lowerCircuit: 90, upperCircuit: 110 };
-  const sc = getScreener({ ...q, mcapCr: 5000, dividendYield: 1 } as any, new Date('2026-10-15T00:00:00Z')); const csv = reportCsv(q, sc, new Date('2026-10-15T05:00:00Z'));
+  const fq = Array.from({ length: 5 }, (_, i) => ({ label: ['Sep 2025', 'Dec 2025', 'Mar 2026', 'Jun 2026', 'Sep 2026'][i], sales: 100 + i, expenses: 80, operatingProfit: 20 + i, opmPct: 20, netProfit: 10 + i, eps: 1 + i }));
+  const sc = mergeLive(getScreener({ ...q, mcapCr: 5000, dividendYield: 1 } as any), { yahooSymbol: 'TST.NS', fetchedAt: 1, pe: 20, roce: 15, roe: 14, holding: { promoters: 50, institutions: 30 }, quarters: fq }, q.ltp); const csv = reportCsv(q, sc, new Date('2026-10-15T05:00:00Z'));
   const lines = csv.trim().split('\r\n'); assert.equal(lines[0], 'Section,Metric,Period,Value,Unit'); assert.ok(lines.includes('Summary,Company,,"Test, Ltd",'));
   for (const sec of ['Summary,LTP', 'Fundamentals,Market Cap', 'Fundamentals,ROCE', 'Fundamentals,ROE', 'Fundamentals,Stock P/E', 'Shareholding,Promoters']) assert.ok(lines.some((l) => l.startsWith(sec)), sec);
   assert.equal(lines.filter((l) => l.startsWith('Quarterly,Net Profit')).length, 5); assert.ok(lines.some((l) => l.startsWith('Quarterly,Sales / Revenue,Sep 2026,')));
@@ -726,6 +717,63 @@ t('circuit log line: [HH:MM:SS] | SYMBOL | TYPE | ₹price | %change (IST)', () 
   assert.equal(istTime(at), '09:45:07');
   assert.equal(logLine({ at, symbol: 'ABC', dir: 'upper', ltp: 220.05, pct: 10.02 }), '[09:45:07] | ABC | UPPER | ₹220.05 | +10.02%');
   assert.match(logLine({ at, symbol: 'XYZ', dir: 'lower', ltp: 90, pct: -10 }), /^\[09:45:07\] \| XYZ \| LOWER \| ₹90\.00 \| [-−]10\.00%$/);
+});
+
+/* ───────────── Round 19: HHI + macro shocks, alert dedupe, off-market replay ───────────── */
+import { hhiPct, hhiBand, sectorWeights as sectorWeightsH, runScenario, runAllScenarios, shockFactor, SCENARIOS } from '../lib/analytics/hhi';
+import { CircuitDedupe, istDate } from '../lib/circuitDedupe';
+import { TickSampler, validateRows, rowsToCsv, buildReplay, Replayer, envelopePath, inSession, clampToSession } from '../lib/offmarketSimulation';
+
+t('HHI: Σ s² on % weights, bands green < 1500 ≤ yellow ≤ 2500 < red', () => {
+  near(hhiPct([100]), 10000); near(hhiPct([50, 50]), 5000); near(hhiPct(Array(10).fill(10)), 1000); assert.equal(hhiPct([]), 0);
+  assert.equal(hhiBand(1499).zone, 'green'); assert.equal(hhiBand(1500).zone, 'yellow'); assert.equal(hhiBand(2500).zone, 'yellow'); assert.equal(hhiBand(2501).zone, 'red');
+  const w = sectorWeightsH([{ symbol: 'A', sector: 'IT', value: 300 }, { symbol: 'B', sector: 'IT', value: 100 }, { symbol: 'C', sector: 'Banking', value: 600 }, { symbol: 'D', sector: 'X', value: 0 }]);
+  assert.deepEqual(w.map((x) => [x.sector, Math.round(x.weightPct)]), [['Banking', 60], ['IT', 40]]); near(hhiPct(w.map((x) => x.weightPct)), 5200, 1e-6);
+});
+t('macro shocks: ΔValue = Σ Valueⱼ × Shockⱼ, scaled by scenario', () => {
+  const pos = [{ symbol: 'HDFCBANK', sector: 'Banking', value: 1_000_000 }, { symbol: 'DLF', sector: 'Realty', value: 500_000 }, { symbol: 'TCS', sector: 'IT', value: 500_000 }];
+  const get = (id: string) => runScenario(pos, SCENARIOS.find((s) => s.id === id)!);
+  near(get('rate100').delta, 1_000_000 * -0.018 + 500_000 * -0.032 + 500_000 * -0.005, 1e-6); near(get('rate50').delta, get('rate100').delta / 2, 1e-6);
+  near(get('crash5').delta, (1_000_000 * 1.15 + 500_000 * 1.5 + 500_000 * 0.85) * -0.05, 1e-6); near(get('crash10').delta, get('crash5').delta * 2, 1e-6); near(get('crash3').delta / get('crash5').delta, 0.6, 1e-9);
+  assert.equal(runAllScenarios(pos).length, 6); assert.equal(runAllScenarios([]).every((r) => r.delta === 0 && r.deltaPct === 0), true);
+  near(shockFactor('crude15', 'Consumer', 'ASIANPAINT'), -0.045); near(shockFactor('crude15', 'Energy', 'ONGC'), 0.032); near(shockFactor('rate100', 'Weird'), -0.01);
+  assert.ok(get('crude15').delta < 0 && get('rate100').worst!.sector === 'Banking');
+});
+t('circuit dedupe: once per symbol·direction per IST day, re-fires only on a higher band', () => {
+  const mem = new Map<string, string>(); const kv = { getItem: (k: string) => mem.get(k) ?? null, setItem: (k: string, v: string) => void mem.set(k, v) };
+  const d = new CircuitDedupe(kv); const t0 = Date.parse('2026-10-20T04:00:00Z'); // 09:30 IST
+  assert.equal(d.shouldFire('ABC', 5, 'upper', t0), true); assert.equal(d.shouldFire('ABC', 5, 'upper', t0 + 60_000), false);
+  assert.equal(d.shouldFire('ABC', 10, 'upper', t0 + 120_000), true); assert.equal(d.shouldFire('ABC', 5, 'upper', t0 + 180_000), false); assert.equal(d.shouldFire('ABC', 10, 'upper', t0 + 240_000), false);
+  assert.equal(d.shouldFire('ABC', 20, 'upper', t0 + 300_000), true); assert.equal(d.shouldFire('ABC', 5, 'lower', t0), true); assert.equal(d.shouldFire('XYZ', 5, 'upper', t0), true);
+  assert.equal(new CircuitDedupe(kv).shouldFire('ABC', 20, 'upper', t0 + 400_000), false, 'survives a reload'); // persisted
+  assert.equal(new CircuitDedupe(kv).shouldFire('ABC', 5, 'upper', t0 + 86_400_000), true, 'new IST day re-arms');
+  assert.equal(istDate(Date.parse('2026-10-19T19:00:00Z')), '2026-10-20'); // 00:30 IST
+  assert.equal(new CircuitDedupe().shouldFire('Q', 5, 'upper', t0), true); // works with no storage
+});
+t('off-market: session window, sampler throttle, validation, CSV', () => {
+  const open = Date.parse('2026-10-20T03:45:00Z'); // 09:15 IST Tue
+  assert.equal(inSession(open), true); assert.equal(inSession(open - 60_000), false); assert.equal(inSession(Date.parse('2026-10-20T10:00:00Z')), true); assert.equal(inSession(Date.parse('2026-10-20T10:01:00Z')), false); assert.equal(inSession(Date.parse('2026-10-24T05:00:00Z')), false); // Sat
+  const sm = new TickSampler(15_000); const now = open + 3_600_000;
+  const a = sm.offer({ symbol: 'TCS', lastPrice: 3500, volume: 10, timestamp: now }, now)!; assert.ok(a && a.high >= 3500 && a.low <= 3500);
+  assert.equal(sm.offer({ symbol: 'TCS', lastPrice: 3501, timestamp: now + 5000 }, now + 5000), null); assert.ok(sm.offer({ symbol: 'TCS', lastPrice: 3502, timestamp: now + 16_000 }, now + 16_000));
+  assert.equal(sm.offer({ symbol: 'NIFTY', lastPrice: 25000, isIndex: true, timestamp: now }, now), null); assert.equal(sm.offer({ symbol: 'X', lastPrice: 5, timestamp: open - 3_600_000 }, open - 3_600_000), null);
+  const good = { symbol: 'TCS', ltp: 100, high: 101, low: 99, volume: 5, ts: now };
+  assert.equal(validateRows([good, { ...good, symbol: 'bad sym' }, { ...good, ltp: -1 }, { ...good, ltp: 200 }, { ...good, ts: open - 1e6 }, { ...good, ts: now + 1e7 }, null], now + 1000).length, 1);
+  assert.equal(validateRows(Array(900).fill(good), now + 1000).length, 500);
+  assert.equal(rowsToCsv([{ symbol: 'M&M', ltp: 1, high: 2, low: 0.5, volume: 3, ts: Date.parse('2026-10-20T03:45:00Z') }]), 'Symbol,LTP,High,Low,Volume,Timestamp\nM&M,1,2,0.5,3,2026-10-20T09:15:00+05:30\n');
+});
+t('replay: persisted → bars → envelope, ping-pong, bounded ±0.05 % of session High/Low, no RNG', () => {
+  const rows = Array.from({ length: 100 }, (_, i) => ({ symbol: 'A', ltp: 100 + (i % 7) * 0.1, high: 101, low: 99.5, volume: i, ts: 1_000 + i * 15_000 }));
+  const p = buildReplay({ rows, ltp: 100, high: 101, low: 99.5 })!; assert.equal(p.kind, 'persisted'); assert.equal(p.path.length, 60); assert.equal(p.high, 101);
+  const r = new Replayer(p); const first = r.next(); assert.equal(first, p.path[59], 'starts at the real close');
+  const seq = Array.from({ length: 200 }, () => r.next()); assert.ok(seq.every((v) => v >= 99.5 * 0.9995 - 1e-9 && v <= 101 * 1.0005 + 1e-9));
+  for (let i = 1; i < seq.length; i++) assert.ok(Math.abs(seq[i] - seq[i - 1]) <= 0.7, 'no teleporting');
+  const bars = buildReplay({ bars: [{ close: 50 }, { close: 50.2 }, { close: 50.1 }], ltp: 50, high: 51, low: 49 })!; assert.equal(bars.kind, 'bars');
+  const env = buildReplay({ ltp: 200, high: 202, low: 198 })!; assert.equal(env.kind, 'envelope'); assert.deepEqual(envelopePath(200, 202, 198), envelopePath(200, 202, 198));
+  assert.ok(env.path.every((v) => Math.abs(v / 200 - 1) <= 0.0005 + 1e-12) && new Set(env.path.map((v) => v.toFixed(4))).size > 5);
+  assert.equal(buildReplay({ ltp: 0, high: 0, low: 0 }), null); near(clampToSession(300, 202, 198), 202 * 1.0005); near(clampToSession(1, 202, 198), 198 * 0.9995);
+  const q = { symbol: 'Q', ltp: 100, prevClose: 99, open: 99, high: 101, low: 98, volume: 7 } as any; const e = new MarketEngine(SEED_INSTRUMENTS); ingestFixture(e);
+  const tcs = e.quotes.get('TCS')!; const vol = tcs.volume; const hi = tcs.high; e.setReplayPrice('TCS', tcs.ltp * 1.0002); assert.equal(tcs.volume, vol); assert.equal(tcs.high, hi); e.setReplayPrice('NOPE', 5); e.setReplayPrice('TCS', NaN); void q;
 });
 
 void Promise.all(pending).then(() => {

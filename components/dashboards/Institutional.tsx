@@ -7,6 +7,7 @@ import { alpha } from '@/lib/theme';
 import { fmt, fmtCr, fmtInt, fmtPct, tone } from '@/lib/format';
 import { C } from '@/lib/theme';
 import { breadth, correlationMatrix, liquidityRatio, portfolioValueSeries, sectorIndexSeries, sectorStats, sharpeParts } from '@/lib/analytics';
+import { RiskPanel } from './RiskPanel';
 import type { DashboardProps } from './types';
 
 /** Diverging red ↔ green tile colour, saturating at ±3 %. */
@@ -96,6 +97,8 @@ export function InstitutionalDashboard({ engine, quote, closes1D, holdings, favo
         <Stat label="Sharpe · portfolio" value={pSharpe ? pSharpe.sharpe.toFixed(2) : '—'} valueClass={!pSharpe ? '' : pSharpe.sharpe >= 1 ? 'text-up' : pSharpe.sharpe < 0 ? 'text-down' : 'text-ink'} sub={pSharpe ? `Rp ${pSharpe.annReturnPct.toFixed(1)}% · σ ${pSharpe.annVolPct.toFixed(1)}%` : 'import holdings'} hint="(Rp − Rf) ÷ σ on today's holdings back-cast over real price history" />
         <Stat label="Liquidity ratio" value={`${t2m.toFixed(3)}%`} sub={`${quote.symbol} · ₹${fmt(turnoverCr, 1)} Cr / ${fmtCr(quote.mcapCr)}`} hint="Turnover ÷ Market cap (session traded value ÷ capitalisation)" />
       </div>
+
+      <RiskPanel engine={engine} holdings={holdings} />
 
       <Card title="Advance / decline gauge" right={<span className="num text-[10px] text-muted">{b.adv} ▲ · {b.dec} ▼</span>}>
         <Gauge value={gaugeVal} min={0} max={3} zones={[{ to: 0.8, color: 'rgb(var(--c-down) / 0.7)' }, { to: 1.25, color: 'rgb(var(--c-muted) / 0.55)' }, { to: 3, color: 'rgb(var(--c-up) / 0.7)' }]} label={b.ratio.toFixed(2)} sub={b.ratio >= 1.25 ? 'Broad advance' : b.ratio <= 0.8 ? 'Broad decline' : 'Balanced'} />

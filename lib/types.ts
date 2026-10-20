@@ -109,14 +109,15 @@ export interface NewsResponse {
 }
 
 export interface Fundamentals {
-  marketCapCr: number;
-  pe: number;
-  bookValue: number;
-  dividendYield: number;
-  roce: number;
-  roe: number;
-  /** null for banks / lenders, where leverage ratios aren't meaningful */
+  /** every field is null when no real value is available (rendered "N/A") */
+  marketCapCr: number | null;
+  pe: number | null;
+  bookValue: number | null;
+  dividendYield: number | null;
+  roce: number | null;
+  roe: number | null;
+  /** null for banks / lenders (leverage ratios aren't meaningful) and when unknown */
   debtToEquity: number | null;
-  promoterHolding: number;
-  eps: number;
+  promoterHolding: number | null;
+  eps: number | null;
 }

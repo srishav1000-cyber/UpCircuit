@@ -28,8 +28,8 @@ export interface ReportModel {
   generatedAt: string;
   ltp: number;
   changePct: number;
-  high52: number;
-  low52: number;
+  high52: number | null;
+  low52: number | null;
   dataSource: string;
   grid: { label: string; value: string }[];
   quarters: Screener['quarters'];
@@ -37,7 +37,8 @@ export interface ReportModel {
   estimated: string[];
 }
 
-const inr = (n: number, dp = 2) => n.toLocaleString('en-IN', { minimumFractionDigits: dp, maximumFractionDigits: dp });
+const inr = (n: number | null, dp = 2) => (n === null ? 'N/A' : n.toLocaleString('en-IN', { minimumFractionDigits: dp, maximumFractionDigits: dp }));
+const fx = (n: number | null, dp = 1) => (n === null ? 'N/A' : n.toFixed(dp));
 
 export function buildReport(q: Q, s: Screener, now = new Date()): ReportModel {
   const changePct = q.prevClose > 0 ? ((q.ltp - q.prevClose) / q.prevClose) * 100 : 0;
@@ -51,22 +52,22 @@ export function buildReport(q: Q, s: Screener, now = new Date()): ReportModel {
     changePct,
     high52: s.high52,
     low52: s.low52,
-    dataSource: s.source.live ? 'Yahoo Finance (live) — some fields estimated' : 'Estimated (Yahoo Finance data unavailable for this scrip)',
+    dataSource: s.source.live ? 'Verified provider data — fields not available show N/A' : 'Not available for this scrip',
     grid: [
       { label: 'Market Cap (₹ Cr)', value: inr(s.marketCapCr, 0) },
-      { label: 'Stock P/E', value: s.pe.toFixed(1) },
-      { label: 'Industry P/E', value: String(s.industryPe) },
-      { label: 'ROCE (%)', value: s.roce.toFixed(1) },
-      { label: 'ROE (%)', value: s.roe.toFixed(1) },
+      { label: 'Stock P/E', value: fx(s.pe) },
+      { label: 'Industry P/E', value: fx(s.industryPe) },
+      { label: 'ROCE (%)', value: fx(s.roce) },
+      { label: 'ROE (%)', value: fx(s.roe) },
       { label: 'Book Value (₹)', value: inr(s.bookValue) },
       { label: 'EPS TTM (₹)', value: inr(s.eps) },
-      { label: 'Dividend Yield (%)', value: s.dividendYield.toFixed(2) },
-      { label: 'Debt to Equity', value: s.debtToEquity === null ? 'n/a' : s.debtToEquity.toFixed(2) },
-      { label: 'Face Value (₹)', value: String(s.faceValue) },
+      { label: 'Dividend Yield (%)', value: fx(s.dividendYield, 2) },
+      { label: 'Debt to Equity', value: fx(s.debtToEquity, 2) },
+      { label: 'Face Value (₹)', value: s.faceValue === null ? 'N/A' : String(s.faceValue) },
     ],
     quarters: s.quarters,
     holding: s.holding,
-    estimated: s.source.estimated,
+    estimated: s.source.na,
   };
 }
 
@@ -80,23 +81,23 @@ export function reportCsv(q: Q, s: Screener, now = new Date()): string {
   add('Summary', 'Sector', '', m.sector);
   add('Summary', 'LTP', '', r2(q.ltp), 'INR');
   add('Summary', 'Day change', '', r2(m.changePct), '%');
-  add('Summary', '52W High', '', r2(s.high52), 'INR');
-  add('Summary', '52W Low', '', r2(s.low52), 'INR');
+  add('Summary', '52W High', '', s.high52 === null ? 'N/A' : r2(s.high52), 'INR');
+  add('Summary', '52W Low', '', s.low52 === null ? 'N/A' : r2(s.low52), 'INR');
   add('Summary', 'Day High', '', r2(q.high), 'INR');
   add('Summary', 'Day Low', '', r2(q.low), 'INR');
   add('Summary', 'Circuit band', '', q.circuitBand, '%');
   add('Summary', 'Generated', '', m.generatedAt);
   add('Summary', 'Data source', '', m.dataSource);
-  add('Fundamentals', 'Market Cap', '', Math.round(s.marketCapCr), 'INR Cr');
-  add('Fundamentals', 'Stock P/E', '', r2(s.pe), 'x');
-  add('Fundamentals', 'Industry P/E', '', s.industryPe, 'x');
-  add('Fundamentals', 'Book Value', '', r2(s.bookValue), 'INR');
-  add('Fundamentals', 'Dividend Yield', '', r2(s.dividendYield), '%');
-  add('Fundamentals', 'ROCE', '', r2(s.roce), '%');
-  add('Fundamentals', 'ROE', '', r2(s.roe), '%');
-  add('Fundamentals', 'EPS (TTM)', '', r2(s.eps), 'INR');
-  add('Fundamentals', 'Face Value', '', s.faceValue, 'INR');
-  add('Fundamentals', 'Debt to Equity', '', s.debtToEquity === null ? 'n/a' : r2(s.debtToEquity), 'x');
+  add('Fundamentals', 'Market Cap', '', s.marketCapCr === null ? 'N/A' : Math.round(s.marketCapCr), 'INR Cr');
+  add('Fundamentals', 'Stock P/E', '', s.pe === null ? 'N/A' : r2(s.pe), 'x');
+  add('Fundamentals', 'Industry P/E', '', s.industryPe ?? 'N/A', 'x');
+  add('Fundamentals', 'Book Value', '', s.bookValue === null ? 'N/A' : r2(s.bookValue), 'INR');
+  add('Fundamentals', 'Dividend Yield', '', s.dividendYield === null ? 'N/A' : r2(s.dividendYield), '%');
+  add('Fundamentals', 'ROCE', '', s.roce === null ? 'N/A' : r2(s.roce), '%');
+  add('Fundamentals', 'ROE', '', s.roe === null ? 'N/A' : r2(s.roe), '%');
+  add('Fundamentals', 'EPS (TTM)', '', s.eps === null ? 'N/A' : r2(s.eps), 'INR');
+  add('Fundamentals', 'Face Value', '', s.faceValue ?? 'N/A', 'INR');
+  add('Fundamentals', 'Debt to Equity', '', s.debtToEquity === null ? 'N/A' : r2(s.debtToEquity), 'x');
   for (const qr of s.quarters) {
     add('Quarterly', 'Sales / Revenue', qr.label, qr.sales, 'INR Cr');
     add('Quarterly', 'Expenses', qr.label, qr.expenses, 'INR Cr');
@@ -105,11 +106,10 @@ export function reportCsv(q: Q, s: Screener, now = new Date()): string {
     add('Quarterly', 'Net Profit', qr.label, qr.netProfit, 'INR Cr');
     add('Quarterly', 'EPS', qr.label, qr.eps, 'INR');
   }
-  add('Shareholding', 'Promoters', '', s.holding.promoters, '%');
-  add('Shareholding', 'FIIs', '', s.holding.fiis, '%');
-  add('Shareholding', 'DIIs', '', s.holding.diis, '%');
-  add('Shareholding', 'Public', '', s.holding.public, '%');
-  if (m.estimated.length) add('Notes', 'Estimated fields', '', m.estimated.join('; '));
+  add('Shareholding', 'Promoters', '', s.holding?.promoters ?? 'N/A', '%');
+  add('Shareholding', 'Institutions (FII + DII)', '', s.holding?.institutions ?? 'N/A', '%');
+  add('Shareholding', 'Public', '', s.holding?.public ?? 'N/A', '%');
+  if (m.estimated.length) add('Notes', 'N/A fields', '', m.estimated.join('; '));
   return toCsv(rows);
 }
 

@@ -91,8 +91,14 @@ export type FeedMode = 'live' | 'snapshot' | 'delayed';
 export const FEED_BADGE: Record<FeedMode, { text: string; title: string; tone: 'down' | 'warn' | 'accent' }> = {
   live: { text: '● SMARTAPI LIVE', title: 'Streaming live ticks directly from Angel One SmartAPI (SmartWebSocketV2) to this browser.', tone: 'down' },
   snapshot: { text: '🟡 OFF-MARKET · SMARTAPI', title: 'Market closed (09:15–15:30 IST, Mon–Fri). SmartAPI is connected; showing its last prices.', tone: 'warn' },
-  delayed: { text: '● REAL YAHOO DATA (DELAYED)', title: 'Real Yahoo Finance quotes and bars, delayed by up to ~15 minutes. Nothing on this screen is simulated.', tone: 'accent' },
+  delayed: { text: '● OFFLINE SESSION (LAST NSE CLOSE)', title: 'SmartAPI live stream is not in use. Showing the last NSE session (prices and bars are real, never generated).', tone: 'accent' },
 };
+
+/** While the market is open but the live stream is not in use, the fallback data is up to ~15 min old — say so instead of claiming "last close". */
+export function feedBadge(mode: FeedMode, marketOpen: boolean) {
+  if (mode === 'delayed' && marketOpen) return { text: '● DELAYED SESSION (~15 MIN)', title: 'SmartAPI live stream is not in use. Showing real NSE prices delayed by up to ~15 minutes.', tone: 'accent' as const };
+  return FEED_BADGE[mode];
+}
 
 export type Health = 'ok' | 'warn' | 'off';
 
@@ -104,7 +110,7 @@ export interface LinkStatus {
   detail: string;
 }
 
-/** Why the live SmartAPI stream is not in use (the app then runs on delayed Yahoo data). */
+/** Why the live SmartAPI stream is not in use (the app then shows delayed session data). */
 export type LiveReason = 'no_key' | 'unauthorized' | 'not_configured' | 'login_failed' | 'rate_limited' | 'unreachable' | 'stream_failed' | 'outside_hours';
 
 const REASON: Record<LiveReason, string> = {
@@ -120,10 +126,10 @@ const REASON: Record<LiveReason, string> = {
 
 /**
  * What the browser can truthfully say about the market feed. The browser opens the SmartAPI socket itself (tokens come from /api/smartapi/session),
- * so "live" means the socket is open AND ticks are flowing. In every other case the app is on real, delayed Yahoo data.
+ * so "live" means the socket is open AND ticks are flowing. In every other case the app shows real, delayed NSE session data.
  */
 export function smartApiStatus(i: { mode: FeedMode; conn: FeedConn; reason?: LiveReason }): LinkStatus {
-  const yahoo = 'Showing real delayed Yahoo Finance data (nothing is simulated).';
+  const yahoo = 'Showing the last NSE session data — real prices, delayed by up to ~15 minutes in market hours (nothing is simulated).';
   if (i.conn === 'open') {
     if (i.mode === 'live') return { health: 'ok', label: '● SMARTAPI LIVE', detail: 'Connected directly to Angel One SmartAPI and streaming exchange ticks.' };
     if (i.mode === 'snapshot') return { health: 'ok', label: 'SmartAPI connected', detail: "SmartAPI is connected. The market is closed (09:15–15:30 IST, Mon–Fri) — showing its last prices." };
@@ -131,7 +137,7 @@ export function smartApiStatus(i: { mode: FeedMode; conn: FeedConn; reason?: Liv
   }
   if (i.conn === 'connecting') return { health: 'warn', label: 'Connecting…', detail: `Connecting to SmartAPI… ${yahoo}` };
   const why = i.reason ? `${REASON[i.reason]} ` : '';
-  return { health: i.reason === 'outside_hours' || i.reason === 'no_key' || i.reason === 'not_configured' ? 'off' : 'warn', label: 'Yahoo (delayed)', detail: `${why}${yahoo}` };
+  return { health: i.reason === 'outside_hours' || i.reason === 'no_key' || i.reason === 'not_configured' ? 'off' : 'warn', label: 'Offline session', detail: `${why}${yahoo}` };
 }
 
 /** A decoded market tick (₹ prices). Produced by lib/smartapiDirect.ts from SmartWebSocketV2 packets. */
@@ -452,6 +458,15 @@ export class MarketEngine {
         this.depthReal = true;
       }
     }
+  }
+
+  /**
+   * Off-market replay (lib/offmarketSimulation.ts): moves ONLY the displayed LTP. No bar, volume, depth, high/low or live flag is touched,
+   * so nothing downstream (alerts, VWAP, charts) treats it as a trade. The caller keeps the price inside the session range ±0.05 %.
+   */
+  setReplayPrice(symbol: string, ltp: number) {
+    const q = this.quotes.get(symbol);
+    if (q && finite(ltp) && ltp > 0) q.ltp = ltp;
   }
 
   applyIndexTick(id: string, value: number, prev?: number) {

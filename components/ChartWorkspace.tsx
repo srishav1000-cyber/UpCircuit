@@ -84,7 +84,7 @@ function IndexWorkspace({ index, tf, onTf, live }: { index: IndexQuote; tf: Time
             <span className="text-[15px] font-bold text-ink">{index.label}</span>
             <Badge>INDEX</Badge>
           </div>
-          <div className="truncate text-[11px] text-muted">Real Yahoo Finance bars — indices carry no volume or depth</div>
+          <div className="truncate text-[11px] text-muted">Real session bars — indices carry no volume or depth</div>
         </div>
         <div className="num flex items-baseline gap-2">
           <span className={`text-2xl font-semibold ${tone(index.change)}`}>{fmt(index.value)}</span>

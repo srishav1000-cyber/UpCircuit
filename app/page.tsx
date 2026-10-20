@@ -55,12 +55,12 @@ function MarketGate({ state, onRetry }: { state: DataState; onRetry: () => void 
     <div data-testid="market-gate" className="flex h-screen flex-col items-center justify-center gap-3 bg-bg px-4 text-center text-[13px] text-muted">
       {state === 'error' ? (
         <>
-          <div className="text-[15px] font-semibold text-ink">Could not reach Yahoo Finance</div>
+          <div className="text-[15px] font-semibold text-ink">Market data is temporarily unavailable</div>
           <p className="max-w-sm">UpCircuit shows only real market data and never fills gaps with simulated prices. Check your connection and try again.</p>
           <button onClick={onRetry} data-testid="market-retry" className="rounded-md border border-accent px-3 py-1.5 font-semibold text-accent hover:bg-accent/10">Retry</button>
         </>
       ) : (
-        <span className="animate-pulse">Loading real market data from Yahoo Finance…</span>
+        <span className="animate-pulse">Connecting to SmartAPI Live Market Stream...</span>
       )}
     </div>
   );
@@ -389,7 +389,7 @@ function Terminal() {
           {instruments.length.toLocaleString('en-IN')} instruments indexed
           {bseOnly > 0 && <> · NSE {(instruments.length - bseOnly).toLocaleString('en-IN')} + BSE-only {bseOnly.toLocaleString('en-IN')}</>}
         </span>
-        <span className="ml-auto hidden sm:inline">{mode === 'live' ? 'Prices streamed via Angel One SmartAPI; some ratios are estimates.' : 'Prices are real, delayed Yahoo Finance data; some ratios are estimates.'} Not investment advice.</span>
+        <span className="ml-auto hidden sm:inline">{mode === 'live' ? 'Prices streamed via Angel One SmartAPI; fundamentals not available from the feed show N/A.' : 'Prices are real NSE session data (delayed up to ~15 min); fundamentals not available from the feed show N/A.'} Not investment advice.</span>
       </footer>
 
       {research && (
@@ -497,7 +497,7 @@ export default function Page() {
   if (!mounted) {
     return (
       <div className="flex h-screen items-center justify-center bg-bg text-[13px] text-muted">
-        <span className="animate-pulse">Starting UpCircuit…</span>
+        <span className="animate-pulse">Initializing UpCircuit Market Analytics Engine...</span>
       </div>
     );
   }
@@ -511,7 +511,7 @@ export default function Page() {
 /** login wall → terminal. Keyed on the user id so switching accounts remounts every hook with its own storage namespace. */
 function Gate() {
   const { user, ready } = useAuth();
-  if (!ready) return <div className="flex h-screen items-center justify-center bg-bg text-[13px] text-muted"><span className="animate-pulse">Starting UpCircuit…</span></div>;
+  if (!ready) return <div className="flex h-screen items-center justify-center bg-bg text-[13px] text-muted"><span className="animate-pulse">Initializing UpCircuit Market Analytics Engine...</span></div>;
   if (!user) {
     // deep links (/terminal?symbol=…) go through /login and come back after sign-in; every redirect resolves via NEXT_PUBLIC_APP_URL
     const p = window.location.pathname;

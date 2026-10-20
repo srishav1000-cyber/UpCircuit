@@ -58,7 +58,7 @@ export function DayTraderDashboard({ engine, quote, mode, onAction }: DashboardP
         title="Market depth · 5 levels"
         right={noDepth ? undefined : <span className={`num text-[11px] ${tone(imbalance)}`}>Exchange · imbalance {fmtPct(imbalance, 1)}</span>}
       >
-        {noDepth && <p className="py-6 text-center text-[12px] text-muted">{live ? 'Waiting for order-book depth from the feed…' : 'Order-book depth is not available from Yahoo Finance. Real depth appears when the direct SmartAPI feed is live (market hours).'}</p>}
+        {noDepth && <p className="py-6 text-center text-[12px] text-muted">{live ? 'Waiting for order-book depth from the feed…' : 'Order-book depth needs the live SmartAPI stream. Real depth appears when the direct SmartAPI feed is live (market hours).'}</p>}
         {!noDepth && (<>
         <div className="grid grid-cols-[1fr_auto_auto] gap-x-3 pb-1 text-[10px] uppercase tracking-wider text-muted">
           <span>Price</span>

@@ -5,7 +5,10 @@ import type { FeedMode, MarketEngine } from '@/lib/market';
 import type { Fundamentals, Holding, Timeframe } from '@/lib/types';
 import { useFullscreen } from '@/hooks/useFullscreen';
 import { macd, pivotLevels, rsi14, shortTermOutlook, longTermOutlook, sma, type Outlook } from '@/lib/analytics';
-import { getFundamentals, ratioTone, sectorTypicalPe, type Tone } from '@/lib/fundamentals';
+import { fundamentalsOf, orNA, ratioTone, type Tone } from '@/lib/fundamentals';
+import { getScreener } from '@/lib/screener';
+import { mergeLive } from '@/lib/yahooFundamentals';
+import { useFundamentals } from '@/hooks/useFundamentals';
 import type { CopilotContext } from '@/lib/copilot';
 import { fmt, fmtCr, fmtInt, fmtPct, fmtSigned, tone } from '@/lib/format';
 import { AnalysisActions } from './AnalysisActions';
@@ -128,7 +131,8 @@ export function StockResearchModal({ symbol, engine, favorite, onToggleFavorite,
   const mac = macd(closes);
   const short = shortTermOutlook(closes);
   const long = longTermOutlook(closes);
-  const f: Fundamentals | null = quote ? getFundamentals(quote) : null;
+  const liveF = useFundamentals(symbol, quote?.exch ?? 'NSE');
+  const f: Fundamentals | null = quote ? fundamentalsOf(mergeLive(getScreener(quote), liveF.data, quote.ltp)) : null;
 
   // always hand the copilot the freshest numbers
   const latest = useRef<() => CopilotContext>(() => null as never);
@@ -139,14 +143,13 @@ export function StockResearchModal({ symbol, engine, favorite, onToggleFavorite,
     price: { ltp: quote?.ltp ?? 0, changePct: quote ? (quote.ltp / quote.prevClose - 1) * 100 : 0, dayHigh: quote?.high ?? 0, dayLow: quote?.low ?? 0, volume: quote?.volume ?? 0, circuitBandPct: quote?.circuitBand ?? 0 },
     ratios: f!,
     technicals: { rsi, sma50, sma200, pivots, short: short && { label: short.label, score: short.score }, long: long && { label: long.label, score: long.score } },
-    simulated: true,
+    simulated: true, // delayed prices; null ratios mean N/A
   });
   const getContext = useCallback(() => latest.current(), []);
 
   if (!quote || !f) return null;
   const chg = quote.ltp - quote.prevClose;
   const pct = (chg / quote.prevClose) * 100;
-  const typicalPe = sectorTypicalPe(quote.sector);
 
   const ladder = [
     { k: 'R2', v: pivots.r2, c: 'text-down' },
@@ -170,7 +173,7 @@ export function StockResearchModal({ symbol, engine, favorite, onToggleFavorite,
               <h2 className="text-[18px] font-bold text-ink">{symbol}</h2>
               <Badge>{quote.exch ?? 'NSE'} · EQ</Badge>
               <Badge tone="accent">{quote.sector}</Badge>
-              <Badge tone="warn" className="hidden sm:inline-flex">Delayed Yahoo data</Badge>
+              <Badge tone="warn" className="hidden sm:inline-flex">Delayed session data</Badge>
             </div>
             <div className="truncate text-[12px] text-muted">{quote.name}</div>
           </div>
@@ -207,16 +210,16 @@ export function StockResearchModal({ symbol, engine, favorite, onToggleFavorite,
                 <PriceChart symbol={symbol} ltp={quote.ltp} volume={quote.volume} tf={tf} onTf={setTf} live={engine.mode === 'live'} className={full.fs ? 'h-[min(62vh,720px)] min-h-[400px]' : 'h-[400px]'} />
               </div>
 
-              <Card title="Key ratios" right={<span className="text-[10px] text-muted">Screener-style · estimates flagged</span>}>
+              <Card title="Key ratios" right={<span className="text-[10px] text-muted">Verified provider data · N/A when unavailable</span>}>
                 <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 [.fs_&]:min-[1500px]:grid-cols-8">
-                  <Ratio label="Market Cap" value={fmtCr(f.marketCapCr)} tone="na" hint="Share price × shares outstanding" />
-                  <Ratio label="Stock P/E" value={f.pe.toFixed(1)} sub={`sector ≈ ${typicalPe}`} tone={ratioTone('pe', f, quote.sector)} hint="Price ÷ earnings per share. Compared with the sector's typical multiple." />
-                  <Ratio label="Book Value" value={'₹' + fmt(f.bookValue)} sub={`P/B ${(quote.ltp / f.bookValue).toFixed(2)}`} tone="na" hint="Net worth per share" />
-                  <Ratio label="Dividend Yield" value={f.dividendYield.toFixed(2) + '%'} tone={ratioTone('dividendYield', f, quote.sector)} hint="Annual dividend ÷ share price" />
-                  <Ratio label="ROCE" value={f.roce.toFixed(1) + '%'} tone={ratioTone('roce', f, quote.sector)} hint="EBIT ÷ capital employed — how well all capital is used. 15%+ is considered good." />
-                  <Ratio label="ROE" value={f.roe.toFixed(1) + '%'} tone={ratioTone('roe', f, quote.sector)} hint="Net profit ÷ shareholders' equity. 15%+ is considered good." />
-                  <Ratio label="Debt to equity" value={f.debtToEquity === null ? '—' : f.debtToEquity.toFixed(2)} sub={f.debtToEquity === null ? 'n/a for lenders' : undefined} tone={ratioTone('debtToEquity', f, quote.sector)} hint="Total borrowings ÷ equity. Not meaningful for banks and lenders." />
-                  <Ratio label="Promoter holding" value={f.promoterHolding.toFixed(1) + '%'} tone={ratioTone('promoterHolding', f, quote.sector)} hint="Share of the company held by its promoters" />
+                  <Ratio label="Market Cap" value={orNA(f.marketCapCr, fmtCr)} tone="na" hint="Share price × shares outstanding" />
+                  <Ratio label="Stock P/E" value={orNA(f.pe, (n) => n.toFixed(1))} sub="sector P/E N/A" tone={ratioTone('pe', f)} hint="Price ÷ earnings per share." />
+                  <Ratio label="Book Value" value={orNA(f.bookValue, (n) => '₹' + fmt(n))} sub={f.bookValue ? `P/B ${(quote.ltp / f.bookValue).toFixed(2)}` : undefined} tone="na" hint="Net worth per share" />
+                  <Ratio label="Dividend Yield" value={orNA(f.dividendYield, (n) => n.toFixed(2) + '%')} tone={ratioTone('dividendYield', f)} hint="Annual dividend ÷ share price" />
+                  <Ratio label="ROCE" value={orNA(f.roce, (n) => n.toFixed(1) + '%')} tone={ratioTone('roce', f)} hint="EBIT ÷ capital employed — how well all capital is used. 15%+ is considered good." />
+                  <Ratio label="ROE" value={orNA(f.roe, (n) => n.toFixed(1) + '%')} tone={ratioTone('roe', f)} hint="Net profit ÷ shareholders' equity. 15%+ is considered good." />
+                  <Ratio label="Debt to equity" value={orNA(f.debtToEquity, (n) => n.toFixed(2))} tone={ratioTone('debtToEquity', f)} hint="Total borrowings ÷ equity. Not meaningful for banks and lenders." />
+                  <Ratio label="Promoter holding" value={orNA(f.promoterHolding, (n) => n.toFixed(1) + '%')} tone={ratioTone('promoterHolding', f)} hint="Share of the company held by its promoters" />
                 </div>
               </Card>
 
@@ -243,7 +246,7 @@ export function StockResearchModal({ symbol, engine, favorite, onToggleFavorite,
                   <OutlookCard title="Long-term outlook" horizon="6–12 months" o={long} />
                 </div>
               </div>
-              <p className="pb-2 text-[10px] text-muted">Prices, ratios and indicators here use real delayed Yahoo prices; ratios marked “estimated” are approximations. Educational only; not investment advice.</p>
+              <p className="pb-2 text-[10px] text-muted">Prices, ratios and indicators here use real NSE session prices; ratios not available show N/A. Educational only; not investment advice.</p>
             </div>
 
             <div className="h-[560px] min-h-0 lg:h-full">

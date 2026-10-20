@@ -159,7 +159,7 @@ export function ExportReport({ symbol, engine, holdings = [], mode = 'delayed', 
               <div style={{ textAlign: 'right' }}>
                 <div style={{ fontSize: 24, fontWeight: 700 }}>₹{model.ltp.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
                 <div className={model.changePct >= 0 ? 'up' : 'down'}>{model.changePct >= 0 ? '▲' : '▼'} {Math.abs(model.changePct).toFixed(2)}% today</div>
-                <div style={{ fontSize: 10, color: '#64748b' }}>52W High {model.high52.toLocaleString('en-IN')} · Low {model.low52.toLocaleString('en-IN')}</div>
+                <div style={{ fontSize: 10, color: '#64748b' }}>52W High {model.high52 === null ? 'N/A' : model.high52.toLocaleString('en-IN')} · Low {model.low52 === null ? 'N/A' : model.low52.toLocaleString('en-IN')}</div>
               </div>
             </div>
 
@@ -181,13 +181,13 @@ export function ExportReport({ symbol, engine, holdings = [], mode = 'delayed', 
             </table>
 
             <h2>Shareholding pattern</h2>
-            <div>Promoters <b>{model.holding.promoters}%</b> · FIIs <b>{model.holding.fiis}%</b> · DIIs <b>{model.holding.diis}%</b> · Public <b>{model.holding.public}%</b></div>
+            <div>{model.holding ? <>Promoters <b>{model.holding.promoters}%</b> · Institutions (FII + DII) <b>{model.holding.institutions}%</b> · Public <b>{model.holding.public}%</b></> : 'N/A — not available for this scrip'}</div>
 
             <h2>AI senior analyst summary &amp; risk assessment {printing?.ai && <span style={{ fontWeight: 400, textTransform: 'none', letterSpacing: 0 }}>· {printing.ai.source}</span>}</h2>
             {printing?.ai ? <div className="ai"><Markdown text={printing.ai.text.replace(/^#{1,6}\s*/gm, '### ')} /></div> : <div style={{ color: '#64748b' }}>AI summary was unavailable when this report was generated.</div>}
 
             <div style={{ marginTop: 18, paddingTop: 6, borderTop: '1px solid #cbd5e1', fontSize: 9.5, color: '#64748b' }}>
-              Generated {model.generatedAt} · Data: {model.dataSource}{model.estimated.length ? ` · Estimated: ${model.estimated.join(', ')}` : ''} · Prices are {mode === 'live' ? 'streamed live' : 'simulated / replayed'}. Educational use only — not investment advice.
+              Generated {model.generatedAt} · Data: {model.dataSource}{model.estimated.length ? ` · N/A: ${model.estimated.join(', ')}` : ''} · Prices are {mode === 'live' ? 'streamed live' : 'from the last session (delayed / offline replay)'}. Educational use only — not investment advice.
             </div>
           </div>,
           document.body,

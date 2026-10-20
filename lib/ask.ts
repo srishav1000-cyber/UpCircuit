@@ -189,6 +189,6 @@ export function answerAskLocally(question: string, ctx: AskContext, news: NewsIt
   }
 
   out.push('');
-  out.push(`Educational overview from rules-based analysis, not investment advice.${ctx.feed === 'live' ? '' : ctx.feed === 'snapshot' ? ' Market closed — prices are SmartAPI\'s last values, not live quotes.' : ' Prices are real Yahoo quotes delayed ~15 min, not live ticks.'}`);
+  out.push(`Educational overview from rules-based analysis, not investment advice.${ctx.feed === 'live' ? '' : ctx.feed === 'snapshot' ? ' Market closed — prices are SmartAPI\'s last values, not live quotes.' : ' Prices are real NSE session quotes delayed ~15 min, not live ticks.'}`);
   return out.join('\n');
 }

@@ -97,7 +97,7 @@ export function RetailDashboard({ engine, quote, closes1D, holdings, favorites, 
         <Stat label="Current value" value={`₹${fmt(s.current)}`} sub={`Invested ₹${fmt(s.invested)}`} />
         <Stat label="Total P&L" value={fmtSignedRupee(s.pnl)} valueClass={tone(s.pnl)} sub={fmtPct(s.pnlPct)} hint="Σ(LTP × Qty) − Invested" />
         <Stat label="Today's gain / loss" value={fmtSignedRupee(s.dayPnl)} valueClass={tone(s.dayPnl)} sub={fmtPct(s.dayPct)} />
-        <Stat label="Dividend yield" value={portfolioYield.toFixed(2) + '%'} sub={`≈ ₹${fmt(income, 0)} / yr`} hint="Portfolio-weighted trailing yield (Yahoo, estimated where missing)" />
+        <Stat label="Dividend yield" value={portfolioYield.toFixed(2) + '%'} sub={`≈ ₹${fmt(income, 0)} / yr`} hint="Portfolio-weighted trailing yield (N/A where unavailable)" />
         <Stat label="vs NIFTY 50" value={cmp ? <span className={tone(cmp.pEnd - cmp.bEnd)}>{fmtPct(cmp.pEnd - cmp.bEnd, 1)}</span> : '—'} sub={cmp ? `${win.k}: you ${fmtPct(cmp.pEnd, 1)} · index ${fmtPct(cmp.bEnd, 1)}` : undefined} hint="Back-cast of today's holdings vs the index over the selected window" />
         <Stat label="Diversification" value={diag ? `${diag.diversification}/100` : '—'} valueClass={diag ? (diag.diversification >= 55 ? 'text-up' : diag.diversification >= 35 ? 'text-warn' : 'text-down') : ''} sub={diag ? `${diag.diversificationLabel} · concentration ${diag.concentration}` : undefined} />
       </div>

@@ -1,6 +1,6 @@
 // REAL fundamentals from Yahoo Finance (unofficial endpoints — no API key, but quoteSummary needs a cookie + crumb).
 // Pure parsers + a fetcher (testable against a mock via YAHOO_BASE / YAHOO_COOKIE_URL) and `mergeLive`, which overlays the real
-// numbers on the deterministic estimate from lib/screener.ts field by field, so a partial Yahoo response never leaves a blank widget.
+// numbers on the quote-only Screener from lib/screener.ts field by field; missing fields stay null (rendered N/A).
 import type { QuarterRow, Screener } from './screener';
 import { toYahooSymbol } from './yahoo';
 
@@ -206,52 +206,49 @@ export async function fetchLiveFundamentals(symbol: string, exch: 'NSE' | 'BSE' 
 
 const fin = (n: number | undefined): n is number => n !== undefined && Number.isFinite(n);
 
-/** Overlay real Yahoo numbers on the estimated Screener, per field. `source` records what is real and what is still estimated. */
-export function mergeLive(sim: Screener, live: LiveFundamentals | null | undefined, ltp: number): Screener {
-  if (!live) return sim;
-  const estimated: string[] = ['Face Value', 'Industry P/E'];
-  const pick = <T extends number>(label: string, l: number | undefined, s: T, ok: (n: number) => boolean = (n) => n > 0): number => {
+/** Overlay the provider's real numbers on the quote-only Screener, per field. Anything the provider lacks stays null (N/A) and is listed in `source.na`. */
+export function mergeLive(base: Screener, live: LiveFundamentals | null | undefined, ltp: number): Screener {
+  if (!live) return base;
+  const na: string[] = ['Face Value', 'Industry P/E'];
+  const pick = (label: string, l: number | undefined, keep: number | null, ok: (n: number) => boolean = (n) => n > 0): number | null => {
     if (fin(l) && ok(l)) return l;
-    estimated.push(label);
-    return s;
+    if (keep === null) na.push(label);
+    return keep;
   };
   const any = (n: number) => Number.isFinite(n);
-  const marketCapCr = pick('Market Cap', live.marketCapCr, sim.marketCapCr);
-  const pe = pick('P/E', live.pe, sim.pe);
-  const bookValue = pick('Book Value', live.bookValue, sim.bookValue);
-  const dividendYield = pick('Dividend Yield', live.dividendYield, sim.dividendYield, (n) => n >= 0);
-  const roe = pick('ROE', live.roe, sim.roe, any);
-  const roce = pick('ROCE', live.roce, sim.roce, any);
-  const eps = pick('EPS', live.eps, sim.eps, any);
-  let debtToEquity = sim.debtToEquity;
+  const marketCapCr = pick('Market Cap', live.marketCapCr, base.marketCapCr);
+  const pe = pick('P/E', live.pe, base.pe);
+  const bookValue = pick('Book Value', live.bookValue, base.bookValue);
+  const dividendYield = pick('Dividend Yield', live.dividendYield, base.dividendYield, (n) => n >= 0);
+  const roe = pick('ROE', live.roe, base.roe, any);
+  const roce = pick('ROCE', live.roce, base.roce, any);
+  const eps = pick('EPS', live.eps, base.eps, any);
+  let debtToEquity = base.debtToEquity;
   if (fin(live.debtToEquity)) debtToEquity = live.debtToEquity;
-  else estimated.push('D/E');
+  else na.push('D/E');
 
   const liveRange = fin(live.high52) && fin(live.low52) && live.high52 > live.low52;
-  if (!liveRange) estimated.push('52W range');
-  const high52 = Math.max(liveRange ? live.high52! : sim.high52, ltp);
-  const low52 = Math.min(liveRange ? live.low52! : sim.low52, ltp);
+  const high52 = liveRange ? Math.max(live.high52!, ltp) : null;
+  const low52 = liveRange ? Math.min(live.low52!, ltp) : null;
+  if (!liveRange) na.push('52W range');
 
   const useQ = live.quarters.length >= 2;
-  const quarters = useQ ? live.quarters : sim.quarters;
-  if (!useQ) estimated.push('Quarterly results');
+  if (!useQ) na.push('Quarterly results');
 
-  let holding = sim.holding;
+  let holding = base.holding;
   const h = live.holding;
   if (h) {
-    const promoters = rnd(Math.min(100, h.promoters), 1);
-    const inst = Math.min(100 - promoters, h.institutions);
-    const fiiShare = sim.holding.fiis + sim.holding.diis > 0 ? sim.holding.fiis / (sim.holding.fiis + sim.holding.diis) : 0.55;
-    const fiis = rnd(inst * fiiShare, 1);
-    const diis = rnd(inst - fiis, 1);
-    holding = { promoters, fiis, diis, public: Math.max(0, rnd(100 - promoters - fiis - diis, 1)) };
-    estimated.push('FII/DII split');
-  } else estimated.push('Shareholding');
+    const promoters = rnd(Math.min(100, Math.max(0, h.promoters)), 1);
+    const institutions = rnd(Math.min(100 - promoters, Math.max(0, h.institutions)), 1);
+    holding = { promoters, institutions, public: Math.max(0, rnd(100 - promoters - institutions, 1)) };
+  } else na.push('Shareholding');
 
-  const liveCount = 8 - estimated.filter((e) => !['Face Value', 'Industry P/E', 'Quarterly results', 'Shareholding', 'FII/DII split', '52W range'].includes(e)).length;
+  const anyLive = [live.marketCapCr, live.pe, live.bookValue, live.dividendYield, live.roe, live.roce, live.eps, live.debtToEquity].some(fin) || liveRange || useQ || !!h;
   return {
-    ...sim,
-    marketCapCr, pe, bookValue, dividendYield, roe, roce, eps, debtToEquity, high52, low52, quarters, holding,
-    source: { live: liveCount > 0 || useQ, quarters: useQ, holding: !!h, estimated, asOf: live.fetchedAt },
+    ...base,
+    marketCapCr, pe, bookValue, dividendYield, roe, roce, eps, debtToEquity, high52, low52,
+    quarters: useQ ? live.quarters : [],
+    holding,
+    source: { live: anyLive, quarters: useQ, holding: !!h, na, asOf: live.fetchedAt },
   };
 }

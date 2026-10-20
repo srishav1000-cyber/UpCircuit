@@ -7,6 +7,7 @@ import { fmtCr, fmtPct, tone } from '@/lib/format';
 import { annualVolPct, breadth, hhi, riskScore, trendGrowthYoY, weightedRiskScore } from '@/lib/analytics';
 import type { SentimentLabel } from '@/lib/types';
 import { CircuitTracker } from '../CircuitTracker';
+import { RiskPanel } from './RiskPanel';
 import type { DashboardProps } from './types';
 
 interface Sentiment {
@@ -131,6 +132,8 @@ export function ExecutiveDashboard({ engine, holdings, onSelect }: DashboardProp
         <Stat label="Herfindahl (HHI)" value={Math.round(h).toLocaleString('en-IN')} sub={useOwn ? 'your holdings · Σwᵢ²' : 'universe by mcap · Σwᵢ²'} hint="HHI = 10 000 × Σ wᵢ². 0 = fully diversified, 10 000 = a single name" />
         <Stat label="Diversification index" value={diversification.toFixed(2)} valueClass={diversification > 0.8 ? 'text-up' : diversification > 0.6 ? 'text-ink' : 'text-down'} sub="1 − HHI/10 000" />
       </div>
+
+      <RiskPanel engine={engine} holdings={holdings} />
 
       <Card title="Weighted portfolio risk score" right={<span className={`num text-[12px] font-semibold ${wTone}`}>{wrisk.score}/100</span>} className={WIDE}>
         <Meter value={wrisk.score} zones={[{ to: 35, color: ZONE.up }, { to: 65, color: ZONE.warn }, { to: 100, color: ZONE.down }]} />

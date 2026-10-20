@@ -69,3 +69,5 @@ kbd {
 @media (prefers-reduced-motion: reduce) {
   .animate-fade-in, .animate-pop-in { animation: none; }
 }
+
+.scrollbar-thin { scrollbar-width: thin; }

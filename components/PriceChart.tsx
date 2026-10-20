@@ -306,7 +306,7 @@ export function PriceChart({ symbol, ltp, volume, tf, onTf, className = '', live
           <div ref={host} className="absolute inset-0" />
           {dataState !== 'ok' && (
             <div data-testid="chart-status" className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center text-[12px] text-muted">
-              {dataState === 'loading' ? <span className="animate-pulse">Loading real Yahoo Finance bars…</span> : <span>No Yahoo Finance bars for this symbol / timeframe.</span>}
+              {dataState === 'loading' ? <span className="animate-pulse">Loading session bars…</span> : <span>No bars available for this symbol / timeframe.</span>}
             </div>
           )}
           <button

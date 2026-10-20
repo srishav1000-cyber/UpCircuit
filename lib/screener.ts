@@ -1,13 +1,16 @@
 import type { Instrument, Quote } from './types';
-import { hashStr, mulberry32 } from './estimate';
-import { getFundamentals, sectorTypicalPe } from './fundamentals';
 
 /**
- * Screener.in / Angel One-style stock snapshot for ANY instrument (all 8,100+ NSE + BSE names).
- * SIMULATED, deterministic per symbol and consistent with the live quote: market cap, P/E, EPS, book value, ROE / ROCE and
- * D/E come from getFundamentals(); revenue, profit and shareholding are scaled from market cap, P/E and the sector's margins,
- * so the last four quarters' net profit sums to ≈ market cap ÷ P/E and EPS ≈ price ÷ P/E. Replace with a licensed data feed
- * (exchange filings / vendor) returning the same `Screener` shape for real numbers.
+ * Screener-style stock snapshot for ANY instrument (all 8,100+ NSE + BSE names) — REAL FIGURES ONLY.
+ *
+ * Audit (Round 19): the former deterministic hash/PRNG "estimates" (P/E, ROE, ROCE, book value, quarterly P&L, shareholding, face value,
+ * sector P/E) are gone. Every field is either
+ *   • taken from the live quote (market cap, dividend yield — Yahoo / SmartAPI via the engine), or
+ *   • overlaid from the fundamentals provider by `mergeLive` (lib/yahooFundamentals.ts), or
+ *   • `null` → rendered as "N/A".
+ * The SmartAPI scrip master (lib/scripMaster.ts) carries only token / symbol / name / expiry / strike / lot size / instrument type /
+ * exchange segment / tick size — it has NO P/E, market cap or 52-week range, so none of those can come from it.
+ * Today's High/Low is NEVER shown as a 52-week range any more.
  */
 
 export interface QuarterRow {
@@ -21,33 +24,36 @@ export interface QuarterRow {
   eps: number;
 }
 
-export interface Screener {
-  marketCapCr: number;
-  pe: number;
-  industryPe: number;
-  bookValue: number;
-  dividendYield: number;
-  roce: number;
-  roe: number;
-  faceValue: number;
-  debtToEquity: number | null;
-  eps: number;
-  high52: number;
-  low52: number;
-  quarters: QuarterRow[];
-  holding: { promoters: number; fiis: number; diis: number; public: number };
-  /** provenance: `live` = at least some figures are real (Yahoo Finance); `estimated` lists what is still simulated */
-  source: { live: boolean; quarters: boolean; holding: boolean; estimated: string[]; asOf?: number };
+export interface Holding3 {
+  promoters: number;
+  /** FII + DII combined — the provider does not split them */
+  institutions: number;
+  public: number;
 }
 
-const OPM: Record<string, [number, number]> = {
-  Banking: [30, 50], IT: [20, 28], Energy: [12, 28], Auto: [9, 17], FMCG: [16, 28], Pharma: [18, 30], Metals: [14, 28], Financials: [35, 60],
-  Infra: [10, 20], Telecom: [30, 50], Consumer: [10, 20], Cement: [15, 25], Realty: [20, 35], Chemicals: [16, 26], Others: [10, 22],
-};
+export interface Screener {
+  marketCapCr: number | null;
+  pe: number | null;
+  /** no data source for industry P/E → always null today */
+  industryPe: number | null;
+  bookValue: number | null;
+  dividendYield: number | null;
+  roce: number | null;
+  roe: number | null;
+  /** not in the SmartAPI scrip master or the fundamentals provider → null */
+  faceValue: number | null;
+  debtToEquity: number | null;
+  eps: number | null;
+  high52: number | null;
+  low52: number | null;
+  /** [] = not available */
+  quarters: QuarterRow[];
+  holding: Holding3 | null;
+  /** `live` = at least some figures come from the provider; `na` lists every field that has no real value */
+  source: { live: boolean; quarters: boolean; holding: boolean; na: string[]; asOf?: number };
+}
+
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-const lerp = (a: number, b: number, r: number) => a + (b - a) * r;
-const r1 = (n: number) => Math.round(n * 10) / 10;
-const r2 = (n: number) => Math.round(n * 100) / 100;
 
 /** The latest 5 quarter-end labels (oldest → newest) completed before `now`. */
 export function quarterLabels(now = new Date(), n = 5): string[] {
@@ -71,126 +77,32 @@ export function quarterLabels(now = new Date(), n = 5): string[] {
 
 type Q = Pick<Quote, 'symbol' | 'sector' | 'ltp' | 'prevClose' | 'mcapCr' | 'dividendYield' | 'high' | 'low'>;
 
-function computeScreener(q: Q, now: Date): Screener {
-  const f = getFundamentals(q);
-  const r = mulberry32(hashStr(q.symbol + ':scr'));
-  const [oLo, oHi] = OPM[q.sector] ?? OPM.Others;
-  const opm = lerp(oLo, oHi, r());
-  const conv = lerp(0.45, 0.75, r()); // net profit ÷ operating profit
-  const growth = lerp(-0.04, 0.28, r()); // annual growth, spread over quarters
-  const ttmPat = q.mcapCr / Math.max(f.pe, 0.1); // ₹ Cr
-  const shares = q.mcapCr / q.ltp; // Cr shares
+const posOrNull = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : null);
 
-  // growth + seasonality weights → scale so the latest four quarters sum to TTM
-  const w = Array.from({ length: 5 }, (_, i) => (1 + growth / 4) ** (i - 4) * (1 + (r() - 0.5) * 0.14));
-  const k = ttmPat / (w[1] + w[2] + w[3] + w[4]);
-  const labels = quarterLabels(now);
-  const quarters: QuarterRow[] = w.map((wi, i) => {
-    const pat = wi * k;
-    const op = pat / conv;
-    const jitter = 1 + (r() - 0.5) * 0.06;
-    const opmQ = opm * jitter;
-    // realistic bound: a quarter's revenue is 5–25 % of market cap (never ×100 for a small scrip); profit stays as derived from P/E
-    const sales = Math.min(Math.max(op / (opmQ / 100), q.mcapCr * 0.05), q.mcapCr * 0.25);
-    const opB = Math.min(sales * 0.95, Math.max(sales * (opmQ / 100), pat * 1.1));
-    return { label: labels[i], sales: r1(sales), expenses: r1(sales - opB), operatingProfit: r1(opB), opmPct: r1((opB / sales) * 100), netProfit: r1(pat), eps: r2(pat / shares) };
-  });
+export const NA_FIELDS = ['Market Cap', 'P/E', 'Industry P/E', 'Book Value', 'Dividend Yield', 'ROE', 'ROCE', 'EPS', 'D/E', 'Face Value', '52W range', 'Quarterly results', 'Shareholding'];
 
-  // 52-week range from the REAL 1-year daily bars (when they have loaded); otherwise just today's known range
-  const hist: { high: number; low: number }[] = []; // real 52W bounds arrive via mergeLive (Yahoo); until then only today's known range
-  let hi = Math.max(q.ltp, q.high, ...hist.map((c) => c.high));
-  let lo = Math.min(q.ltp, q.low, ...hist.map((c) => c.low));
-  hi = r2(hi);
-  lo = r2(lo);
-
-  // shareholding: promoters from the fundamentals, remainder split deterministically
-  const promoters = f.promoterHolding;
-  const rest = 100 - promoters;
-  const fiis = r1(rest * lerp(0.15, 0.4, r()));
-  const diis = r1(rest * lerp(0.1, 0.3, r()));
-  const pub = r1(100 - promoters - fiis - diis);
-
-  return {
-    marketCapCr: q.mcapCr,
-    pe: f.pe,
-    industryPe: sectorTypicalPe(q.sector),
-    bookValue: f.bookValue,
-    dividendYield: f.dividendYield,
-    roce: f.roce,
-    roe: f.roe,
-    faceValue: [1, 2, 5, 10, 10][hashStr(q.symbol + ':fv') % 5],
-    debtToEquity: f.debtToEquity,
-    eps: f.eps,
-    high52: hi,
-    low52: lo,
-    quarters,
-    holding: { promoters, fiis, diis, public: pub },
-    source: { live: false, quarters: false, holding: false, estimated: ['all figures'] },
-  };
-}
-
-const fin = (v: unknown, d: number): number => (typeof v === 'number' && Number.isFinite(v) ? v : d);
-const pos = (v: unknown, d: number): number => {
-  const n = fin(v, NaN);
-  return n > 0 ? n : d;
-};
-
-/** Sector-neutral defaults used when any input / field is missing (never renders blank widgets or throws). */
-function fallbackQuarters(now: Date, ltp: number, mcap: number): QuarterRow[] {
-  const pat = Math.max(1, mcap / 15.2 / 4);
-  return quarterLabels(now).map((label) => ({ label, sales: r1(pat * 6), expenses: r1(pat * 4.8), operatingProfit: r1(pat * 1.2 * 1.4), opmPct: 20, netProfit: r1(pat), eps: r2(pat / Math.max(mcap / Math.max(ltp, 1), 0.01)) }));
-}
-
-/** Merge a possibly partial / NaN-laden Screener with safe defaults. */
-function fillScreener(x: Partial<Screener> | undefined, q: Partial<Q> | undefined, now: Date): Screener {
-  const ltp = pos(q?.ltp, 100);
-  const mcap = pos(x?.marketCapCr ?? q?.mcapCr, 1000);
-  const hold = x?.holding;
-  const promoters = Math.min(100, Math.max(0, fin(hold?.promoters, 50)));
-  const fiis = Math.min(100 - promoters, Math.max(0, fin(hold?.fiis, 12)));
-  const diis = Math.min(100 - promoters - fiis, Math.max(0, fin(hold?.diis, 10)));
-  const quarters = (Array.isArray(x?.quarters) && x!.quarters.length ? x!.quarters : fallbackQuarters(now, ltp, mcap)).map((r, i) => ({
-    label: r?.label || quarterLabels(now)[i] || '—',
-    sales: fin(r?.sales, 0),
-    expenses: fin(r?.expenses, 0),
-    operatingProfit: fin(r?.operatingProfit, 0),
-    opmPct: fin(r?.opmPct, 0),
-    netProfit: fin(r?.netProfit, 0),
-    eps: fin(r?.eps, 0),
-  }));
-  const hi = pos(x?.high52, ltp * 1.2);
-  const lo = pos(x?.low52, ltp * 0.8);
+/** What is knowable from the quote alone. Never throws, never invents a number. `_now` is kept for API compatibility. */
+export function getScreener(q: Q | null | undefined, _now = new Date()): Screener {
+  const mcap = posOrNull(q?.mcapCr);
+  const dy = posOrNull(q?.dividendYield);
+  const na = NA_FIELDS.filter((f) => !(f === 'Market Cap' && mcap !== null) && !(f === 'Dividend Yield' && dy !== null));
   return {
     marketCapCr: mcap,
-    pe: pos(x?.pe, 15.2),
-    industryPe: pos(x?.industryPe, 20),
-    bookValue: pos(x?.bookValue, ltp / 2.5),
-    dividendYield: fin(x?.dividendYield, 0),
-    roce: fin(x?.roce, 12),
-    roe: fin(x?.roe, 12),
-    faceValue: pos(x?.faceValue, 10),
-    debtToEquity: x?.debtToEquity == null ? null : fin(x.debtToEquity, 0),
-    eps: fin(x?.eps, ltp / 15.2),
-    high52: Math.max(hi, lo, ltp),
-    low52: Math.min(hi, lo, ltp),
-    quarters,
-    holding: { promoters, fiis, diis, public: Math.max(0, Math.round((100 - promoters - fiis - diis) * 10) / 10) },
-    source: x?.source ?? { live: false, quarters: false, holding: false, estimated: ['all figures'] },
+    pe: null,
+    industryPe: null,
+    bookValue: null,
+    dividendYield: dy,
+    roce: null,
+    roe: null,
+    faceValue: null,
+    debtToEquity: null,
+    eps: null,
+    high52: null,
+    low52: null,
+    quarters: [],
+    holding: null,
+    source: { live: false, quarters: false, holding: false, na },
   };
-}
-
-/** Never throws, never returns NaN / empty arrays — safe for any of the 8,100+ instruments, even with missing quote fields. */
-export function getScreener(q: Q | null | undefined, now = new Date()): Screener {
-  let raw: Screener | undefined;
-  try {
-    if (q && q.symbol) {
-      const safe: Q = { ...q, sector: q.sector || 'Others', ltp: pos(q.ltp, 100), prevClose: pos(q.prevClose, pos(q.ltp, 100)), mcapCr: pos(q.mcapCr, 1000), dividendYield: fin(q.dividendYield, 0), high: pos(q.high, pos(q.ltp, 100)), low: pos(q.low, pos(q.ltp, 100)) };
-      raw = computeScreener(safe, now);
-    }
-  } catch {
-    raw = undefined;
-  }
-  return fillScreener(raw, q ?? undefined, now);
 }
 
 /** Where `v` sits between lo and hi, 0–100 (clamped). */

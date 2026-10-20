@@ -47,3 +47,8 @@ Day Trader and Retail dashboards open with **🎯 My focus**: up to 6 symbols ch
 ## 5. Off-market data
 
 Closed market = the last real prices and real previous-session bars from Yahoo Finance (delayed); nothing is simulated and there are no synthetic events.
+
+## Tick persistence (optional)
+1. Run `docs/MARKET_TICKS.sql` in the Supabase SQL editor (RLS on, no policies).
+2. Set `SUPABASE_SERVICE_ROLE_KEY` as a server-only env var (never `NEXT_PUBLIC_`).
+3. Without it `/api/market/*` answer 501 and the terminal replays real 1-minute bars instead. Prune with the `delete … trading_date < …` line at the bottom of the SQL file.

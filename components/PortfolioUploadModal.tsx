@@ -394,7 +394,7 @@ export function PortfolioUploadModal({ instruments, engine, mode, onImport, onRe
                       )}
                     </div>
                   )}
-                  <p className="text-[10px] text-muted">Weights use current market values{mode === 'live' ? '' : ' (delayed Yahoo prices)'}. Heuristic guidelines — not personalised investment advice.</p>
+                  <p className="text-[10px] text-muted">Weights use current market values{mode === 'live' ? '' : ' (last session prices)'}. Heuristic guidelines — not personalised investment advice.</p>
                 </div>
               )}
               {validRows.length > 0 && <p className="text-[11px] text-muted">Importing replaces your current portfolio (saved in this browser only).</p>}

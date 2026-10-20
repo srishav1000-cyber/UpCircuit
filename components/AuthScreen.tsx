@@ -38,8 +38,8 @@ export function AuthScreen({ onDone }: { onDone?: () => void } = {}) {
   };
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-bg bg-[radial-gradient(ellipse_at_top,rgba(59,130,246,0.12),transparent_60%)] p-4">
-      <form onSubmit={submit} noValidate data-testid="auth-form" className="w-full max-w-md space-y-4 rounded-xl border border-line bg-panel/60 p-5 shadow-2xl shadow-black/40 ring-1 ring-white/5 backdrop-blur-xl">
+    <div className="dark flex min-h-screen items-center justify-center bg-slate-950 bg-[radial-gradient(ellipse_at_top,rgba(59,130,246,0.14),transparent_60%)] p-4">
+      <form onSubmit={submit} noValidate data-testid="auth-form" className="scrollbar-thin max-h-[90vh] w-full max-w-md space-y-3 overflow-y-auto rounded-xl border border-slate-800 bg-slate-900/70 p-5 shadow-2xl shadow-black/40 ring-1 ring-white/5 backdrop-blur-xl">
         <div>
           <h1 className="text-lg font-bold text-ink">Up<span className="text-accent">Circuit</span></h1>
           <p className="text-[12px] text-muted">{mode === 'login' ? 'Log in to your workspace' : 'Create your account'}</p>
@@ -60,10 +60,10 @@ export function AuthScreen({ onDone }: { onDone?: () => void } = {}) {
 
         {mode === 'signup' && (
           <>
-            <fieldset className="space-y-1.5">
+            <fieldset className="space-y-1">
               <legend className="mb-1 text-[12px] font-medium text-ink">Plan</legend>
               {PLANS.map((p) => (
-                <label key={p.id} className={`flex cursor-pointer items-center gap-2 rounded-md border px-3 py-2 text-[12px] ${plan === p.id ? 'border-accent bg-accent/10' : 'border-line hover:bg-line'}`}>
+                <label key={p.id} className={`flex cursor-pointer items-center gap-2 rounded-md border px-3 py-2 text-[12px] ${plan === p.id ? 'border-blue-500/50 bg-blue-500/10 shadow-[0_0_12px_rgba(59,130,246,0.25)]' : 'border-slate-800 hover:bg-slate-800/60'}`}>
                   <input type="radio" name="plan" value={p.id} checked={plan === p.id} onChange={() => pickPlan(p.id)} data-testid={`plan-${p.id}`} className="accent-[rgb(var(--c-accent))]" />
                   <span className="flex-1"><b className="text-ink">Tier {p.tier} · {p.name}</b><span className="block text-muted">{p.blurb}</span></span>
                   <span className="num text-ink">{p.price}</span>
@@ -71,12 +71,12 @@ export function AuthScreen({ onDone }: { onDone?: () => void } = {}) {
               ))}
               <p className="text-[10px] text-muted">Prices are illustrative — no payment is taken.</p>
             </fieldset>
-            <fieldset className="space-y-1.5">
+            <fieldset className="space-y-1">
               <legend className="mb-1 text-[12px] font-medium text-ink">Primary role</legend>
               {ROLES.map((r) => {
                 const ok = canUse(plan, r.id);
                 return (
-                  <label key={r.id} className={`flex items-center gap-2 rounded-md border px-3 py-2 text-[12px] ${!ok ? 'cursor-not-allowed border-line opacity-50' : role === r.id ? 'cursor-pointer border-accent bg-accent/10' : 'cursor-pointer border-line hover:bg-line'}`}>
+                  <label key={r.id} className={`flex items-center gap-2 rounded-md border px-3 py-2 text-[12px] ${!ok ? 'cursor-not-allowed border-slate-800 opacity-50' : role === r.id ? 'cursor-pointer border-blue-500/50 bg-blue-500/10 shadow-[0_0_12px_rgba(59,130,246,0.25)]' : 'cursor-pointer border-slate-800 hover:bg-slate-800/60'}`}>
                     <input type="radio" name="role" value={r.id} disabled={!ok} checked={role === r.id} onChange={() => setRole(r.id)} data-testid={`role-${r.id}`} className="accent-[rgb(var(--c-accent))]" />
                     <span aria-hidden>{r.icon}</span>
                     <span className="flex-1"><b className="text-ink">{r.label}</b><span className="block text-muted">{r.blurb}</span></span>
@@ -90,9 +90,11 @@ export function AuthScreen({ onDone }: { onDone?: () => void } = {}) {
 
         {(err ?? inline) && !err && <p data-testid="auth-inline" className="text-[11px] text-down">{inline}</p>}
         {err && <p role="alert" data-testid="auth-error" className="rounded-md bg-down/10 px-3 py-2 text-[12px] text-down">{err}</p>}
-        <button type="submit" disabled={busy} data-testid="auth-submit" className="h-9 w-full rounded-md bg-accent text-[13px] font-bold text-white hover:brightness-110 disabled:opacity-60">
+        <div className="sticky bottom-0 -mx-5 -mb-5 rounded-b-xl bg-slate-900/95 px-5 pb-5 pt-2 backdrop-blur-xl">
+          <button type="submit" disabled={busy} data-testid="auth-submit" className="h-9 w-full rounded-md bg-accent text-[13px] font-bold text-white hover:brightness-110 disabled:opacity-60">
           {busy ? 'Please wait…' : mode === 'login' ? 'Log in' : 'Create account'}
         </button>
+        </div>
         {backend === 'local' && <p className="text-[10px] text-muted">Demo mode: accounts are stored only in this browser. Set the Supabase variables for real accounts.</p>}
       </form>
     </div>
