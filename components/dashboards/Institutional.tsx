@@ -8,6 +8,7 @@ import { fmt, fmtCr, fmtInt, fmtPct, tone } from '@/lib/format';
 import { C } from '@/lib/theme';
 import { breadth, correlationMatrix, liquidityRatio, portfolioValueSeries, sectorIndexSeries, sectorStats, sharpeParts } from '@/lib/analytics';
 import { RiskPanel } from './RiskPanel';
+import { OrderFlowHeatmap } from '../OrderFlowHeatmap';
 import type { DashboardProps } from './types';
 
 /** Diverging red ↔ green tile colour, saturating at ±3 %. */
@@ -99,6 +100,7 @@ export function InstitutionalDashboard({ engine, quote, closes1D, holdings, favo
       </div>
 
       <RiskPanel engine={engine} holdings={holdings} />
+      <OrderFlowHeatmap engine={engine} symbol={quote.symbol} className={WIDE} />
 
       <Card title="Advance / decline gauge" right={<span className="num text-[10px] text-muted">{b.adv} ▲ · {b.dec} ▼</span>}>
         <Gauge value={gaugeVal} min={0} max={3} zones={[{ to: 0.8, color: 'rgb(var(--c-down) / 0.7)' }, { to: 1.25, color: 'rgb(var(--c-muted) / 0.55)' }, { to: 3, color: 'rgb(var(--c-up) / 0.7)' }]} label={b.ratio.toFixed(2)} sub={b.ratio >= 1.25 ? 'Broad advance' : b.ratio <= 0.8 ? 'Broad decline' : 'Balanced'} />

@@ -90,13 +90,13 @@ export type FeedMode = 'live' | 'snapshot' | 'delayed';
 
 export const FEED_BADGE: Record<FeedMode, { text: string; title: string; tone: 'down' | 'warn' | 'accent' }> = {
   live: { text: '● SMARTAPI LIVE', title: 'Streaming live ticks directly from Angel One SmartAPI (SmartWebSocketV2) to this browser.', tone: 'down' },
-  snapshot: { text: '🟡 OFF-MARKET · SMARTAPI', title: 'Market closed (09:15–15:30 IST, Mon–Fri). SmartAPI is connected; showing its last prices.', tone: 'warn' },
-  delayed: { text: '● OFFLINE SESSION (LAST NSE CLOSE)', title: 'SmartAPI live stream is not in use. Showing the last NSE session (prices and bars are real, never generated).', tone: 'accent' },
+  snapshot: { text: '● SESSION PAUSED (MARKET CLOSED)', title: 'NSE/BSE markets are closed. Showing verified closing session prices. Live feed auto-connects at 09:15 AM IST.', tone: 'warn' },
+  delayed: { text: '● SESSION PAUSED (MARKET CLOSED)', title: 'NSE/BSE markets are closed. Showing verified closing session prices. Live feed auto-connects at 09:15 AM IST.', tone: 'accent' },
 };
 
 /** While the market is open but the live stream is not in use, the fallback data is up to ~15 min old — say so instead of claiming "last close". */
 export function feedBadge(mode: FeedMode, marketOpen: boolean) {
-  if (mode === 'delayed' && marketOpen) return { text: '● DELAYED SESSION (~15 MIN)', title: 'SmartAPI live stream is not in use. Showing real NSE prices delayed by up to ~15 minutes.', tone: 'accent' as const };
+  if (mode === 'delayed' && marketOpen) return { text: '● DELAYED SESSION', title: 'SmartAPI live stream is not in use right now. Showing real NSE session prices, which may lag the exchange; live ticks take over automatically once the stream connects.', tone: 'accent' as const };
   return FEED_BADGE[mode];
 }
 
@@ -129,7 +129,7 @@ const REASON: Record<LiveReason, string> = {
  * so "live" means the socket is open AND ticks are flowing. In every other case the app shows real, delayed NSE session data.
  */
 export function smartApiStatus(i: { mode: FeedMode; conn: FeedConn; reason?: LiveReason }): LinkStatus {
-  const yahoo = 'Showing the last NSE session data — real prices, delayed by up to ~15 minutes in market hours (nothing is simulated).';
+  const yahoo = 'Showing verified NSE session prices (nothing is simulated); live ticks take over automatically when the stream connects.';
   if (i.conn === 'open') {
     if (i.mode === 'live') return { health: 'ok', label: '● SMARTAPI LIVE', detail: 'Connected directly to Angel One SmartAPI and streaming exchange ticks.' };
     if (i.mode === 'snapshot') return { health: 'ok', label: 'SmartAPI connected', detail: "SmartAPI is connected. The market is closed (09:15–15:30 IST, Mon–Fri) — showing its last prices." };
@@ -469,6 +469,36 @@ export class MarketEngine {
     if (q && finite(ltp) && ltp > 0) q.ltp = ltp;
   }
 
+  /* ── ⚡ Demo Circuit Simulator (lib/offmarketSimulator.ts): temporary, restorable overrides; never real data ── */
+  private demoStash = new Map<string, Pick<Quote, 'ltp' | 'high' | 'low' | 'upperCircuit' | 'lowerCircuit' | 'circuitBand' | 'bandKnown'>>();
+  get demoActive(): boolean {
+    return this.demoStash.size > 0;
+  }
+  isDemo(symbol: string): boolean {
+    return this.demoStash.has(symbol);
+  }
+  demoSet(symbol: string, ltp: number, limits: { upper: number; lower: number; band: number }, now = Date.now()) {
+    const q = this.quotes.get(symbol);
+    if (!q || !finite(ltp) || ltp <= 0) return;
+    if (!this.demoStash.has(symbol)) this.demoStash.set(symbol, { ltp: q.ltp, high: q.high, low: q.low, upperCircuit: q.upperCircuit, lowerCircuit: q.lowerCircuit, circuitBand: q.circuitBand, bandKnown: q.bandKnown });
+    q.ltp = ltp;
+    q.high = Math.max(q.high, ltp);
+    q.low = Math.min(q.low, ltp);
+    q.upperCircuit = limits.upper;
+    q.lowerCircuit = limits.lower;
+    q.circuitBand = limits.band;
+    q.bandKnown = true;
+    this.liveAt.set(symbol, now); // stops the Yahoo poll overwriting the demo price
+  }
+  demoRestore() {
+    this.demoStash.forEach((o, s) => {
+      const q = this.quotes.get(s);
+      if (q) Object.assign(q, o);
+      this.liveAt.delete(s);
+    });
+    this.demoStash.clear();
+  }
+
   applyIndexTick(id: string, value: number, prev?: number) {
     const ix = this.indices.find((i) => i.id === id);
     if (!ix || !finite(value) || value <= 0) return;
@@ -609,6 +639,7 @@ export class MarketEngine {
     const live = this.mode === 'live';
     this.quotes.forEach((q) => {
       const s = q.symbol;
+      if (this.demoStash.has(s)) return; // demo prices never reach the real alert desk
       const pct = (q.ltp / q.prevClose - 1) * 100;
       const hit = this.circuits.observe(q, now);
       if (hit) this.emit(hit.dir === 'upper' ? 'UPPER_CIRCUIT' : 'LOWER_CIRCUIT', q, pct, `${s} hit ${hit.dir} circuit (${hit.band}% band) at ₹${q.ltp.toFixed(2)}`, now);

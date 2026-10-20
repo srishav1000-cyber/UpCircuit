@@ -9,6 +9,7 @@ import { PriceAlertDialog } from '@/components/PriceAlertDialog';
 import { CircuitBanner } from '@/components/CircuitBanner';
 import { CircuitAlerts } from '@/components/CircuitAlerts';
 import { useCircuitAlerts } from '@/hooks/useCircuitAlerts';
+import { useDemoSimulator } from '@/hooks/useDemoSimulator';
 import { useAudioAlerts } from '@/hooks/useAudioAlerts';
 import { appUrl } from '@/lib/appUrl';
 import { CircuitLogDrawer } from '@/components/CircuitLogDrawer';
@@ -125,10 +126,12 @@ function Terminal() {
   const audio = useAudioAlerts();
   const [logOpen, setLogOpen] = useState(false);
   const circuitSymbols = useMemo(() => [...new Set([...favs, ...focus])], [favs, focus]);
-  const circuit = useCircuitAlerts(engine, version, circuitSymbols, audio.on, (hit) => {
+  const demo = useDemoSimulator(engine, circuitSymbols);
+  const watchedForCircuits = useMemo(() => [...new Set([...circuitSymbols, ...demo.symbols])], [circuitSymbols, demo.symbols]);
+  const circuit = useCircuitAlerts(engine, version, watchedForCircuits, audio.on, (hit) => {
     // e-mail the signed-in user (Supabase accounts only; the server uses the verified account address)
     void getToken().then((t) => sendCircuitEmail(hit, t));
-  });
+  }, demo.active);
 
   const quote = engine.touch(symbol) ?? engine.quotes.get('RELIANCE') ?? engine.quotes.values().next().value ?? EMPTY_QUOTE(symbol);
   /** portfolio with real cost bases: a demo holding (avg 0) is costed at the stock's real previous close; unpriced ones wait for Yahoo */
@@ -281,6 +284,7 @@ function Terminal() {
           onToggleAudio={audio.toggle}
           circuitCount={circuit.log.length}
           onOpenCircuitLog={() => setLogOpen(true)}
+          demo={{ active: demo.active, onToggle: demo.toggle, msg: demo.msg }}
           onPersona={(x) => {
             setPersona(x);
             setPanel('dashboard');
@@ -389,7 +393,7 @@ function Terminal() {
           {instruments.length.toLocaleString('en-IN')} instruments indexed
           {bseOnly > 0 && <> · NSE {(instruments.length - bseOnly).toLocaleString('en-IN')} + BSE-only {bseOnly.toLocaleString('en-IN')}</>}
         </span>
-        <span className="ml-auto hidden sm:inline">{mode === 'live' ? 'Prices streamed via Angel One SmartAPI; fundamentals not available from the feed show N/A.' : 'Prices are real NSE session data (delayed up to ~15 min); fundamentals not available from the feed show N/A.'} Not investment advice.</span>
+        <span className="ml-auto hidden sm:inline">{mode === 'live' ? 'Prices streamed via Angel One SmartAPI; fundamentals not available from the feed show N/A.' : 'Prices are real NSE session data; fundamentals not available from the feed show N/A.'} Not investment advice.</span>
       </footer>
 
       {research && (

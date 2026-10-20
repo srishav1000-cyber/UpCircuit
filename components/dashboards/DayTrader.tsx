@@ -1,6 +1,8 @@
 'use client';
 
 import { Card, Meter, Stat, ZONE } from '../ui';
+import { OrderFlowHeatmap } from '../OrderFlowHeatmap';
+import { CircuitPredictor } from '../CircuitPredictor';
 import { BandChart, BarChart, CARD_GRID, WIDE } from './charts';
 import { C, alpha } from '@/lib/theme';
 import { intradaySigma, tickVolumeBuckets, vwapBands } from '@/lib/analytics';
@@ -19,7 +21,7 @@ const SHORTCUTS: { key: string; label: string; action: string; cls?: string }[] 
   { key: 'Esc', label: 'Close / exit full screen', action: 'Escape' },
 ];
 
-export function DayTraderDashboard({ engine, quote, mode, onAction }: DashboardProps) {
+export function DayTraderDashboard({ engine, quote, mode, onAction, onSelect }: DashboardProps) {
   const live = mode === 'live';
   /** Yahoo has no tick stream: the tape is its real 1-minute bars, so windows are wider and stats are per bar */
   const winMs = live ? 5 * 60_000 : 30 * 60_000;
@@ -96,6 +98,9 @@ export function DayTraderDashboard({ engine, quote, mode, onAction }: DashboardP
         <Stat label="VWAP Spread" value={<span className={tone(vwapSpread)}>{fmtSigned(vwapSpread)}</span>} sub={fmtPct((vwapSpread / vwap) * 100) + ' vs VWAP'} />
         <Stat label="Volatility σ" value={vol === null ? '…' : vol.toFixed(1) + '%'} sub="Realised, annualised" hint={live ? 'Std-dev of 250 ms log-returns over the last 60 s, annualised' : 'Std-dev of 1-minute log-returns of the real session, annualised'} />
       </div>
+
+      <OrderFlowHeatmap engine={engine} symbol={quote.symbol} />
+      <CircuitPredictor engine={engine} onSelect={onSelect} />
 
       <Card title="VWAP bands · ±2σ" right={<span className="num text-[10px] text-muted">last {winMs / 60_000} min · {bands?.n ?? 0} {live ? 'trades' : '1-min bars'}</span>}>
         {bands ? (

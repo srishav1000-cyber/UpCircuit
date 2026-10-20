@@ -88,6 +88,7 @@ function Overlay({ log }: { log: CircuitEvent[] }) {
         <button onClick={next} aria-label="Close circuit alert" data-testid="circuit-overlay-close" className="absolute right-3 top-3 flex h-8 w-8 items-center justify-center rounded-md text-slate-400 hover:bg-slate-800 hover:text-white">✕</button>
         <div className={`mx-auto mb-2 flex justify-center ${t.text}`}>{upper ? <TrendingUp /> : <TrendingDown />}</div>
         <div className={`text-[12px] font-bold tracking-[0.2em] ${t.text}`}>{upper ? 'UPPER CIRCUIT' : 'LOWER CIRCUIT'}</div>
+        {head.demo && <div data-testid="circuit-overlay-demo" className="mx-auto mt-1 inline-block rounded bg-amber-500/15 px-2 py-0.5 text-[10px] font-bold tracking-widest text-amber-300 ring-1 ring-amber-500/40">DEMO SIMULATION</div>}
         <div className="mt-1 text-4xl font-extrabold tracking-tight text-white">{head.symbol}</div>
         <div className={`mx-auto mt-3 inline-block rounded-full px-4 py-1 text-xl font-bold ring-1 ${t.badge}`} data-testid="circuit-overlay-pct">{fmtPct(head.pct)}</div>
         <dl className="mt-4 grid grid-cols-3 gap-2 rounded-lg border border-slate-800 bg-slate-950/60 p-3 text-left">
@@ -134,7 +135,7 @@ function Bar({ log, glow, audio, onOpen, onOpenLog }: Props) {
           <span aria-hidden className={TONE[e.dir].text}>{e.dir === 'upper' ? <TrendingUp size={13} /> : <TrendingDown size={13} />}</span>
           <b className="text-white">{e.symbol}</b>
           <span className={`num ${TONE[e.dir].text}`}>{fmtPct(e.pct)}</span>
-          <span className="text-[10px] text-slate-400">{e.band}%</span>
+          <span className="text-[10px] text-slate-400">{e.band}%{e.demo ? ' · DEMO' : ''}</span>
         </button>
       ))}
       <span className="ml-auto flex flex-wrap items-center gap-1.5">

@@ -155,6 +155,7 @@ export function AskUpCircuitDrawer({ open, onClose, getContext, request, focusSy
   }, [request, ask]);
 
   const suggestions = [
+    ...(hasPortfolio ? ['🩺 Portfolio health briefing: HHI, rate-hike & market-shock impact, hedging ideas'] : []),
     'How is the market doing today?',
     hasPortfolio ? 'How diversified is my portfolio?' : 'What can you tell me about my portfolio?',
     'What is my sector exposure?',
@@ -188,7 +189,7 @@ export function AskUpCircuitDrawer({ open, onClose, getContext, request, focusSy
           {msgs.length === 0 && (
             <div className="text-[12.5px] text-muted">
               <p className="mb-2">Ask about the market, a stock, or your portfolio — concentration, diversification, sector exposure, rebalancing, P&amp;L, news.</p>
-              <p className="text-[11px]">Answers use the live data on screen. Prices are real; they are delayed (~15 min) unless the feed badge says LIVE.</p>
+              <p className="text-[11px]">Answers use the live data on screen. Prices are real; the feed badge shows whether they are live ticks or session prices.</p>
             </div>
           )}
           {msgs.map((m) => (

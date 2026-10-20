@@ -323,7 +323,7 @@ t('SmartAPI link status: LIVE vs offline session, with the reason when the strea
     const r = st({ mode: 'delayed', conn: 'closed', reason }); assert.equal(r.label, 'Offline session'); assert.doesNotMatch(r.detail, /Yahoo/); assert.ok(r.detail.length > 60);
   }
   assert.equal(st({ mode: 'delayed', conn: 'idle', reason: 'no_key' }).health, 'off'); assert.equal(st({ mode: 'delayed', conn: 'closed', reason: 'stream_failed' }).health, 'warn');
-  assert.equal(FEED_BADGE.live.text, '● SMARTAPI LIVE'); assert.equal(FEED_BADGE.delayed.text, '● OFFLINE SESSION (LAST NSE CLOSE)');
+  assert.equal(FEED_BADGE.live.text, '● SMARTAPI LIVE'); assert.equal(FEED_BADGE.delayed.text, '● SESSION PAUSED (MARKET CLOSED)');
 });
 t('instrument sync: NSE + BSE cash equities only, NSE wins duplicates', () => {
   const rows = [
@@ -774,6 +774,48 @@ t('replay: persisted → bars → envelope, ping-pong, bounded ±0.05 % of sessi
   assert.equal(buildReplay({ ltp: 0, high: 0, low: 0 }), null); near(clampToSession(300, 202, 198), 202 * 1.0005); near(clampToSession(1, 202, 198), 198 * 0.9995);
   const q = { symbol: 'Q', ltp: 100, prevClose: 99, open: 99, high: 101, low: 98, volume: 7 } as any; const e = new MarketEngine(SEED_INSTRUMENTS); ingestFixture(e);
   const tcs = e.quotes.get('TCS')!; const vol = tcs.volume; const hi = tcs.high; e.setReplayPrice('TCS', tcs.ltp * 1.0002); assert.equal(tcs.volume, vol); assert.equal(tcs.high, hi); e.setReplayPrice('NOPE', 5); e.setReplayPrice('TCS', NaN); void q;
+});
+
+/* ───────────── Round 20: demo simulator, proximity, OFI, briefing ───────────── */
+import { planDemo, demoPrice, demoDone, DEMO_RAMP_MS, DEMO_HOLD_MS } from '../lib/offmarketSimulator';
+import { circuitWatchlist, proximityOf, proximityUpper, proximityLower } from '../lib/analytics/proximity';
+import { ofi, ofiLabel } from '../lib/analytics/orderflow';
+import { buildAskContext, answerAskLocally } from '../lib/ask';
+
+t('demo simulator: 3 targets, alternating sides, 5/10/20 bands, deterministic ease-in, exact limit, restorable', () => {
+  const qs = new Map([['RELIANCE', { symbol: 'RELIANCE', ltp: 1400, prevClose: 1400 }], ['HFCL', { symbol: 'HFCL', ltp: 80, prevClose: 80 }], ['PNB', { symbol: 'PNB', ltp: 100, prevClose: 100 }], ['TCS', { symbol: 'TCS', ltp: 3000, prevClose: 3000 }]]);
+  const plan = planDemo(qs); assert.deepEqual(plan.map((p) => [p.symbol, p.dir, p.band]), [['RELIANCE', 'upper', 5], ['HFCL', 'lower', 10], ['PNB', 'upper', 20]]);
+  assert.equal(plan[0].end, 1470); assert.equal(plan[1].end, 72); assert.equal(plan[2].end, 120);
+  assert.equal(demoPrice(plan[0], 0), 1400); assert.equal(demoPrice(plan[0], DEMO_RAMP_MS), 1470); assert.equal(demoPrice(plan[0], DEMO_RAMP_MS + 5000), 1470);
+  assert.ok(demoPrice(plan[0], 5000) < 1435 && demoPrice(plan[0], 5000) > 1400); assert.equal(demoPrice(plan[0], 5000), demoPrice(plan[0], 5000));
+  assert.equal(demoDone(DEMO_RAMP_MS + DEMO_HOLD_MS - 1), false); assert.equal(demoDone(DEMO_RAMP_MS + DEMO_HOLD_MS), true);
+  assert.deepEqual(planDemo(new Map([['TCS', qs.get('TCS')!]]), ['TCS']).map((p) => p.symbol), ['TCS']); assert.deepEqual(planDemo(new Map()), []);
+  const e = ingestFixture(new MarketEngine(SEED_INSTRUMENTS)); const q = e.quotes.get('RELIANCE')!; const orig = { ltp: q.ltp, high: q.high, low: q.low, bandKnown: q.bandKnown, up: q.upperCircuit };
+  const pl = planDemo((s) => e.quotes.get(s), [])[0]; assert.equal(e.demoActive, false);
+  e.demoSet(pl.symbol, pl.end, pl); assert.equal(e.demoActive, true); assert.ok(circuitHit(q) !== null && circuitHit(q)!.exact, 'engine quote now sits on the limit with exact bands');
+  e.step('RELIANCE', Date.now()); assert.equal(e.alerts.length, 0, 'demo never reaches the real alert desk');
+  e.demoRestore(); assert.equal(e.demoActive, false); assert.deepEqual({ ltp: q.ltp, high: q.high, low: q.low, bandKnown: q.bandKnown, up: q.upperCircuit }, orig);
+});
+t('circuit proximity: (Upper−LTP)/Upper×100, 1.5 % watchlist, exact vs inferred bands', () => {
+  near(proximityUpper(110, 108.9), 1, 1e-9); near(proximityLower(90, 90.9), 1, 1e-9);
+  const ex = { symbol: 'A', ltp: 108.9, prevClose: 100, upperCircuit: 110, lowerCircuit: 90, circuitBand: 10, bandKnown: true };
+  const p = proximityOf(ex)!; assert.equal(p.dir, 'upper'); assert.equal(p.inferred, false); near(p.proximityPct, 1, 1e-9);
+  const inf = proximityOf({ symbol: 'B', ltp: 104.2, prevClose: 100 })!; assert.equal(inf.inferred, true); assert.equal(inf.band, 5); assert.equal(inf.dir, 'upper');
+  const wl = circuitWatchlist([ex, { symbol: 'C', ltp: 100, prevClose: 100 }, { symbol: 'D', ltp: 110, prevClose: 100, upperCircuit: 110, lowerCircuit: 90, circuitBand: 10, bandKnown: true }, { symbol: 'E', ltp: 90.4, prevClose: 100, upperCircuit: 110, lowerCircuit: 90, circuitBand: 10, bandKnown: true }]);
+  assert.deepEqual(wl.map((x) => x.symbol), ['E', 'A']); assert.equal(wl[0].dir, 'lower'); assert.equal(proximityOf({ symbol: 'Z', ltp: 0, prevClose: 1 }), null);
+});
+t('order flow imbalance: (ΣBid−ΣAsk)/(ΣBid+ΣAsk) in [−1,1], N/A without depth', () => {
+  const L = (...q: number[]) => q.map((qty, i) => ({ price: 100 - i, qty, orders: 1 }));
+  const o = ofi(L(300, 200, 100, 50, 50), L(100, 100, 100, 100, 100))!; near(o.value, (700 - 500) / 1200, 1e-12); assert.equal(o.levels.length, 5); near(o.levels[0], 0.5, 1e-12);
+  near(ofi(L(10), L(0.0001))!.value, 1, 0.01); assert.equal(ofi(L(), L(5)), null); assert.equal(ofi(L(0), L(0)), null);
+  assert.equal(ofiLabel(0.7).label, 'Extreme buy imbalance'); assert.equal(ofiLabel(-0.3).tone, 'down'); assert.equal(ofiLabel(0.05).tone, 'muted');
+});
+t('portfolio briefing: risk context carries HHI + ₹ shocks; local fallback renders them', () => {
+  const e = ingestFixture(new MarketEngine(SEED_INSTRUMENTS)); const ctx = buildAskContext(e, [{ symbol: 'TCS', qty: 10, avg: 3000 }, { symbol: 'HDFCBANK', qty: 20, avg: 1500 }], null, 'delayed');
+  assert.ok(ctx.risk && ctx.risk.hhi > 0 && ctx.risk.shocks.length === 6 && ctx.risk.sectors.length >= 1);
+  const a = answerAskLocally('Give me a portfolio health briefing', ctx, []); assert.match(a, /Portfolio health briefing/); assert.match(a, /HHI/); assert.match(a, /Rate-hike/); assert.match(a, /₹/);
+  assert.equal(buildAskContext(e, [], null, 'delayed').risk, null); assert.match(answerAskLocally('portfolio health briefing', buildAskContext(e, [], null, 'delayed'), []), /no holdings/i);
+  assert.match(ASK_SYSTEM, /context\.risk/);
 });
 
 void Promise.all(pending).then(() => {

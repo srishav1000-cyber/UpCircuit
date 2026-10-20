@@ -27,6 +27,7 @@ interface Props {
   onToggleAudio?: () => void;
   /** circuit hits this session (badge on the sound/log menu) */
   circuitCount?: number;
+  demo?: DemoControl;
   onOpenCircuitLog?: () => void;
   indices: IndexQuote[];
   instruments: Instrument[];
@@ -78,7 +79,12 @@ function UploadButton({ onClick, className = '' }: { onClick: () => void; classN
 }
 
 /** 🔊 sound-test + circuit-log menu: verify speakers / pitch before market open without waiting for a real breach. */
-export function SoundMenu({ count, onOpenLog }: { count: number; onOpenLog?: () => void }) {
+export interface DemoControl {
+  active: boolean;
+  onToggle: () => void;
+  msg?: string;
+}
+export function SoundMenu({ count, onOpenLog, demo }: { count: number; onOpenLog?: () => void; demo?: DemoControl }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const close = useCallback(() => setOpen(false), []);
@@ -94,6 +100,12 @@ export function SoundMenu({ count, onOpenLog }: { count: number; onOpenLog?: () 
         <div role="menu" className="absolute right-0 top-full z-50 mt-1 w-52 overflow-hidden rounded-md border border-line bg-panel text-[12px] shadow-xl">
           <button role="menuitem" data-testid="menu-test-upper" className={item} onClick={() => void testChime('upper')}>▲ Test Upper Chime</button>
           <button role="menuitem" data-testid="menu-test-lower" className={item} onClick={() => void testChime('lower')}>▼ Test Lower Chime</button>
+          {demo && (
+            <>
+              <button role="menuitemcheckbox" aria-checked={demo.active} data-testid="menu-demo-simulator" className={`${item} border-t border-line font-semibold ${demo.active ? 'text-warn' : ''}`} onClick={() => { demo.onToggle(); }} title="Off-hours only: drives RELIANCE / HFCL / PNB to circuit limits to test the overlay, chimes and log. Demo data — never real prices, never e-mailed.">⚡ Demo Circuit Simulator{demo.active ? ' · running (stop)' : ''}</button>
+              {demo.msg && <div className="px-3 pb-1 text-[10px] text-muted" data-testid="demo-msg">{demo.msg}</div>}
+            </>
+          )}
           <button role="menuitem" data-testid="menu-circuit-log" className={`${item} border-t border-line`} onClick={() => { close(); onOpenLog?.(); }}>📋 Circuit Hit Log ({count})</button>
         </div>
       )}
@@ -378,7 +390,7 @@ function AvatarMenu({ mode, onPlans }: { mode: FeedMode; onPlans?: () => void })
 }
 
 
-export function Navbar({ view, onView, persona, onPersona, onPlans, audioOn = true, onToggleAudio, circuitCount = 0, onOpenCircuitLog, indices, instruments, onSelect, onOpenIndex, symbol, watchlisted, activeAlerts, onDeepResearch, onToggleWatchlist, onSetAlert, searchRef, mode, liveReason, conn, onOpenWatchlist, priceOf, onOpenImport, onAsk }: Props) {
+export function Navbar({ view, onView, persona, onPersona, onPlans, audioOn = true, onToggleAudio, circuitCount = 0, onOpenCircuitLog, demo, indices, instruments, onSelect, onOpenIndex, symbol, watchlisted, activeAlerts, onDeepResearch, onToggleWatchlist, onSetAlert, searchRef, mode, liveReason, conn, onOpenWatchlist, priceOf, onOpenImport, onAsk }: Props) {
   const actionProps = { symbol, watchlisted, activeAlerts, onDeepResearch, onToggleWatchlist, onSetAlert, onOpenWatchlist };
   return (
     <header className="relative">
@@ -407,7 +419,7 @@ export function Navbar({ view, onView, persona, onPersona, onPlans, audioOn = tr
         <UploadButton onClick={onOpenImport} className="hidden md:flex" />
         <AskButton onClick={onAsk} />
         {onToggleAudio && <AudioToggle on={audioOn} onToggle={onToggleAudio} />}
-        {onToggleAudio && <SoundMenu count={circuitCount} onOpenLog={onOpenCircuitLog} />}
+        {onToggleAudio && <SoundMenu count={circuitCount} onOpenLog={onOpenCircuitLog} demo={demo} />}
         <ThemeToggle />
         <ActionsMenu {...actionProps} className="hidden md:block min-[1400px]:hidden" />
         <div className="hidden items-center gap-2 min-[1400px]:flex">

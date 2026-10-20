@@ -142,7 +142,7 @@ export function HomePage({ engine, news, newsError, onOpenStock, instruments, on
               </button>
             ))}
           </div>
-          <Badge className="ml-auto" tone="muted">Real delayed prices</Badge>
+          <Badge className="ml-auto" tone="muted">Verified session prices</Badge>
         </div>
 
         <div className="grid gap-4 md:grid-cols-3">

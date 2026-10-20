@@ -45,7 +45,8 @@ async function geminiState(): Promise<GeminiState> {
 export async function GET(req: Request) {
   const ip = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'anon';
   if (!allow('status:' + ip, 30, 60_000)) return json({ error: 'Too many requests' }, 429);
-  const missing = SMARTAPI_VARS.filter((v) => !process.env[v]);
+  // the API key may be supplied as either SMARTAPI_API_KEY (server) or NEXT_PUBLIC_SMARTAPI_API_KEY (browser) — they are the same key
+  const missing = SMARTAPI_VARS.filter((v) => !(process.env[v] || (v === 'SMARTAPI_API_KEY' && process.env.NEXT_PUBLIC_SMARTAPI_API_KEY)));
   return json({
     gemini: await geminiState(),
     smartapi: { serverCreds: missing.length === 0, missing, publicKeyConfigured: Boolean(process.env.NEXT_PUBLIC_SMARTAPI_API_KEY) },

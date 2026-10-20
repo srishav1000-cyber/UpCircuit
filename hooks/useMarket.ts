@@ -223,7 +223,7 @@ export function useMarket(universe: Instrument[], selected: string, watch: strin
       const now = Date.now();
       const f = feedRef.current;
       // replay only when there is no real stream: market closed AND the socket is not delivering ticks
-      if (isMarketOpen(now) || (f?.status === 'open' && (f.ticks ?? 0) > 0) || !engine.ready) return;
+      if (isMarketOpen(now) || engine.demoActive || (f?.status === 'open' && (f.ticks ?? 0) > 0) || !engine.ready) return;
       const today = tradingDateOf(now);
       if (day !== today) {
         day = today;

@@ -9,7 +9,7 @@ let cooldownReason: 'quota' | 'auth' | 'error' = 'error';
 /** Env values often arrive with stray whitespace / quotes (`.env`, Vercel UI paste) — normalise before use. */
 const clean = (v: string | undefined) => (v ?? '').trim().replace(/^["']|["']$/g, '').trim();
 export const geminiKey = () => clean(process.env.GEMINI_API_KEY);
-export const geminiModel = () => clean(process.env.GEMINI_MODEL).replace(/^models\//, '') || 'gemini-2.0-flash';
+export const geminiModel = () => clean(process.env.GEMINI_MODEL).replace(/^models\//, '') || 'gemini-2.5-flash';
 export const geminiConfigured = () => Boolean(geminiKey());
 
 /** Pull `error.message` out of a Gemini error body so the UI / logs show the real cause. */

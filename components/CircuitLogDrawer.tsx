@@ -8,8 +8,8 @@ import { fmt, fmtPct } from '@/lib/format';
 export const istTime = (ms: number): string => new Date(ms).toLocaleTimeString('en-GB', { timeZone: 'Asia/Kolkata', hour12: false });
 
 /** `[HH:MM:SS] | SYMBOL | UPPER | ₹price | +x.xx%` */
-export function logLine(e: Pick<CircuitEvent, 'at' | 'symbol' | 'dir' | 'ltp' | 'pct'>): string {
-  return `[${istTime(e.at)}] | ${e.symbol} | ${e.dir.toUpperCase()} | ₹${fmt(e.ltp)} | ${fmtPct(e.pct)}`;
+export function logLine(e: Pick<CircuitEvent, 'at' | 'symbol' | 'dir' | 'ltp' | 'pct'> & { demo?: boolean }): string {
+  return `[${istTime(e.at)}] | ${e.symbol} | ${e.dir.toUpperCase()}${e.demo ? ' (DEMO)' : ''} | ₹${fmt(e.ltp)} | ${fmtPct(e.pct)}`;
 }
 
 interface Props {

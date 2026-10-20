@@ -187,7 +187,7 @@ export function ExportReport({ symbol, engine, holdings = [], mode = 'delayed', 
             {printing?.ai ? <div className="ai"><Markdown text={printing.ai.text.replace(/^#{1,6}\s*/gm, '### ')} /></div> : <div style={{ color: '#64748b' }}>AI summary was unavailable when this report was generated.</div>}
 
             <div style={{ marginTop: 18, paddingTop: 6, borderTop: '1px solid #cbd5e1', fontSize: 9.5, color: '#64748b' }}>
-              Generated {model.generatedAt} · Data: {model.dataSource}{model.estimated.length ? ` · N/A: ${model.estimated.join(', ')}` : ''} · Prices are {mode === 'live' ? 'streamed live' : 'from the last session (delayed / offline replay)'}. Educational use only — not investment advice.
+              Generated {model.generatedAt} · Data: {model.dataSource}{model.estimated.length ? ` · N/A: ${model.estimated.join(', ')}` : ''} · Prices are {mode === 'live' ? 'streamed live' : 'from the last session (not live ticks)'}. Educational use only — not investment advice.
             </div>
           </div>,
           document.body,

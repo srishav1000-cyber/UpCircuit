@@ -8,6 +8,7 @@ import { annualVolPct, breadth, hhi, riskScore, trendGrowthYoY, weightedRiskScor
 import type { SentimentLabel } from '@/lib/types';
 import { CircuitTracker } from '../CircuitTracker';
 import { RiskPanel } from './RiskPanel';
+import { CircuitPredictor } from '../CircuitPredictor';
 import type { DashboardProps } from './types';
 
 interface Sentiment {
@@ -134,6 +135,7 @@ export function ExecutiveDashboard({ engine, holdings, onSelect }: DashboardProp
       </div>
 
       <RiskPanel engine={engine} holdings={holdings} />
+      <CircuitPredictor engine={engine} onSelect={onSelect} className={WIDE} />
 
       <Card title="Weighted portfolio risk score" right={<span className={`num text-[12px] font-semibold ${wTone}`}>{wrisk.score}/100</span>} className={WIDE}>
         <Meter value={wrisk.score} zones={[{ to: 35, color: ZONE.up }, { to: 65, color: ZONE.warn }, { to: 100, color: ZONE.down }]} />

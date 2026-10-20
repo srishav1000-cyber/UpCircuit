@@ -13,6 +13,8 @@ function safeStore() {
 export interface CircuitEvent extends CircuitHit {
   id: number;
   at: number;
+  /** produced by the ⚡ Demo Circuit Simulator — not market data */
+  demo?: boolean;
 }
 
 /**
@@ -20,9 +22,11 @@ export interface CircuitEvent extends CircuitHit {
  * A confirmed hit (once per symbol·direction per IST day, re-armed only by a higher band — see lib/circuitDedupe) → chime (if audio is on), banner event, and `onFire` (e-mail dispatch).
  * `glow` maps each symbol currently sitting at a circuit to its direction (drives the pulsing card border).
  */
-export function useCircuitAlerts(engine: MarketEngine, version: number, symbols: string[], audioOn: boolean, onFire?: (hit: CircuitHit) => void) {
+export function useCircuitAlerts(engine: MarketEngine, version: number, symbols: string[], audioOn: boolean, onFire?: (hit: CircuitHit) => void, demo = false) {
   const tracker = useRef(new CircuitTracker(8000));
   const dedupe = useRef<CircuitDedupe | null>(null);
+  const demoRef = useRef(false);
+  const demoDedupe = useRef(new CircuitDedupe());
   const seq = useRef(1);
   const audioRef = useRef(audioOn);
   audioRef.current = audioOn;
@@ -37,7 +41,14 @@ export function useCircuitAlerts(engine: MarketEngine, version: number, symbols:
   useEffect(() => {
     const now = Date.now();
     // circuit alerts only exist while the session is open: off-market prices are last-close / replayed values, never a fresh circuit hit
-    if (!isMarketOpen(now)) {
+    // the demo gets its own tracker + in-memory dedupe so it never consumes (or is blocked by) the real daily lock
+    if (demo !== demoRef.current) {
+      demoRef.current = demo;
+      tracker.current = new CircuitTracker(8000);
+      demoDedupe.current = new CircuitDedupe();
+      setGlow({});
+    }
+    if (!demo && !isMarketOpen(now)) {
       setGlow((g) => (Object.keys(g).length ? {} : g));
       return;
     }
@@ -49,7 +60,7 @@ export function useCircuitAlerts(engine: MarketEngine, version: number, symbols:
       const hit = tracker.current.observe(q, now);
       if (!dedupe.current) dedupe.current = new CircuitDedupe(safeStore());
       // daily lock: one alert per symbol+direction per IST day; re-fires only on escalation to a higher band
-      if (hit && dedupe.current.shouldFire(hit.symbol, hit.band, hit.dir, now)) fresh.push({ ...hit, id: seq.current++, at: now });
+      if (hit && (demo ? demoDedupe.current : dedupe.current).shouldFire(hit.symbol, hit.band, hit.dir, now)) fresh.push({ ...hit, id: seq.current++, at: now, ...(demo ? { demo: true } : {}) });
       const cur = circuitHit(q);
       if (cur && tracker.current.active().includes(s)) nextGlow[s] = cur.dir;
     }
@@ -62,10 +73,10 @@ export function useCircuitAlerts(engine: MarketEngine, version: number, symbols:
       setEvents((e) => [...fresh, ...e].slice(0, 6));
       setLog((l) => [...fresh, ...l].slice(0, 500));
       if (audioRef.current) playChime(fresh[0].dir);
-      fresh.forEach((h) => fireRef.current?.(h));
+      if (!demo) fresh.forEach((h) => fireRef.current?.(h)); // demo hits are never e-mailed
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [version, key, engine]);
+  }, [version, key, engine, demo]);
 
   const dismiss = (id: number) => setEvents((e) => e.filter((x) => x.id !== id));
   const clearLog = () => {

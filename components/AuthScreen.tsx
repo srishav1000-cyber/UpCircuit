@@ -3,8 +3,10 @@
 import { useState } from 'react';
 import { PLANS, ROLES, canUse, coerceRole, planOf, validateCredentials, type PlanId, type Role } from '@/lib/auth';
 import { useAuth } from '@/hooks/useAuth';
+import { UpCircuitLogo } from './UpCircuitLogo';
 
-const field = 'h-9 w-full rounded-md border border-line bg-bg/70 px-3 text-[13px] text-ink outline-none placeholder:text-muted focus:border-accent';
+const field = 'h-10 w-full rounded-lg border border-slate-700 bg-slate-950/60 px-3 text-[13px] text-slate-100 outline-none placeholder:text-transparent focus:border-blue-500 focus:shadow-[0_0_12px_rgba(59,130,246,0.25)]';
+const SHORT: Record<string, string> = { institutional: 'Institutional', executive: 'Executive / Risk' };
 
 /** Email + password login / sign-up. On sign-up the user picks a plan (Tier 1–3) and a primary role with radio buttons. */
 export function AuthScreen({ onDone }: { onDone?: () => void } = {}) {
@@ -37,66 +39,86 @@ export function AuthScreen({ onDone }: { onDone?: () => void } = {}) {
     else onDone?.();
   };
 
+  const tile = (active: boolean, disabled = false) =>
+    `flex min-w-0 flex-col items-center justify-center rounded-lg border px-2 py-2 text-center text-[11px] leading-tight transition ${disabled ? 'cursor-not-allowed border-slate-800 text-slate-600 opacity-50' : active ? 'cursor-pointer border-blue-500 bg-blue-500/15 text-white shadow-[0_0_15px_rgba(59,130,246,0.3)]' : 'cursor-pointer border-slate-800 bg-slate-900/40 text-slate-300 hover:border-slate-700 hover:bg-slate-800/60'}`;
+  const FEATURES = ['Real-Time SmartAPI Feeds', 'Circuit Breaker Chimes', 'Portfolio Risk HHI Engine', 'Gemini AI Copilot'];
+  const lbl = 'peer-placeholder-shown:bg-transparent peer-placeholder-shown:top-2.5 peer-placeholder-shown:text-[13px] peer-focus:-top-2 peer-focus:text-[10px]';
+
   return (
-    <div className="dark flex min-h-screen items-center justify-center bg-slate-950 bg-[radial-gradient(ellipse_at_top,rgba(59,130,246,0.14),transparent_60%)] p-4">
-      <form onSubmit={submit} noValidate data-testid="auth-form" className="scrollbar-thin max-h-[90vh] w-full max-w-md space-y-3 overflow-y-auto rounded-xl border border-slate-800 bg-slate-900/70 p-5 shadow-2xl shadow-black/40 ring-1 ring-white/5 backdrop-blur-xl">
-        <div>
-          <h1 className="text-lg font-bold text-ink">Up<span className="text-accent">Circuit</span></h1>
-          <p className="text-[12px] text-muted">{mode === 'login' ? 'Log in to your workspace' : 'Create your account'}</p>
-        </div>
-        <div className="grid grid-cols-2 gap-1 rounded-md bg-bg p-1 text-[12px] font-semibold" role="tablist">
-          {(['signup', 'login'] as const).map((m) => (
-            <button key={m} type="button" role="tab" aria-selected={mode === m} data-testid={`auth-tab-${m}`} onClick={() => { setMode(m); setErr(null); }} className={`rounded py-1.5 ${mode === m ? 'bg-accent/15 text-accent' : 'text-muted hover:text-ink'}`}>
-              {m === 'signup' ? 'Sign up' : 'Log in'}
-            </button>
-          ))}
-        </div>
-        <label className="block text-[12px] font-medium text-ink">Email
-          <input data-testid="auth-email" type="email" autoComplete="email" value={email} onChange={(e) => setEmail(e.target.value)} className={`${field} mt-1`} placeholder="you@example.com" />
-        </label>
-        <label className="block text-[12px] font-medium text-ink">Password
-          <span className="relative mt-1 block"><input data-testid="auth-password" type={show ? 'text' : 'password'} autoComplete={mode === 'login' ? 'current-password' : 'new-password'} value={password} onChange={(e) => setPassword(e.target.value)} className={`${field} pr-14`} placeholder="At least 8 characters" /><button type="button" onClick={() => setShow((s) => !s)} aria-label={show ? 'Hide password' : 'Show password'} data-testid="auth-show" className="absolute right-2 top-1/2 -translate-y-1/2 text-[11px] text-muted hover:text-ink">{show ? 'Hide' : 'Show'}</button></span>
-        </label>
+    <div className="dark flex min-h-screen items-center justify-center overflow-hidden bg-slate-950 bg-[radial-gradient(ellipse_at_top_left,rgba(59,130,246,0.18),transparent_55%),radial-gradient(ellipse_at_bottom_right,rgba(16,185,129,0.12),transparent_55%)] p-3 sm:p-4">
+      <div data-testid="auth-card" className="grid max-h-[96vh] w-full max-w-4xl grid-cols-1 gap-4 overflow-hidden rounded-2xl border border-slate-800 bg-slate-900/60 p-4 shadow-2xl shadow-black/50 ring-1 ring-white/5 backdrop-blur-xl sm:p-6 md:grid-cols-2 md:gap-8">
+        {/* LEFT · brand hero */}
+        <section className="hidden flex-col justify-center gap-5 md:flex" data-testid="auth-hero">
+          <UpCircuitLogo size="hero" showText={false} />
+          <h1 className="bg-gradient-to-r from-blue-400 via-indigo-300 to-emerald-400 bg-clip-text text-4xl font-bold leading-tight tracking-tight text-transparent">UpCircuit Terminal</h1>
+          <p className="max-w-sm text-[14px] leading-relaxed text-slate-400">Real-Time Decision-Support Financial Analytics for Indian Equity Markets</p>
+          <ul className="flex flex-wrap gap-2">
+            {FEATURES.map((f) => (
+              <li key={f} className="rounded-full border border-slate-700/80 bg-slate-900/70 px-3 py-1 text-[11px] font-medium text-slate-200 shadow-[0_0_12px_rgba(59,130,246,0.15)]"><span className="mr-1 text-emerald-400">●</span>{f}</li>
+            ))}
+          </ul>
+        </section>
 
-        {mode === 'signup' && (
-          <>
-            <fieldset className="space-y-1">
-              <legend className="mb-1 text-[12px] font-medium text-ink">Plan</legend>
-              {PLANS.map((p) => (
-                <label key={p.id} className={`flex cursor-pointer items-center gap-2 rounded-md border px-3 py-2 text-[12px] ${plan === p.id ? 'border-blue-500/50 bg-blue-500/10 shadow-[0_0_12px_rgba(59,130,246,0.25)]' : 'border-slate-800 hover:bg-slate-800/60'}`}>
-                  <input type="radio" name="plan" value={p.id} checked={plan === p.id} onChange={() => pickPlan(p.id)} data-testid={`plan-${p.id}`} className="accent-[rgb(var(--c-accent))]" />
-                  <span className="flex-1"><b className="text-ink">Tier {p.tier} · {p.name}</b><span className="block text-muted">{p.blurb}</span></span>
-                  <span className="num text-ink">{p.price}</span>
-                </label>
-              ))}
-              <p className="text-[10px] text-muted">Prices are illustrative — no payment is taken.</p>
-            </fieldset>
-            <fieldset className="space-y-1">
-              <legend className="mb-1 text-[12px] font-medium text-ink">Primary role</legend>
-              {ROLES.map((r) => {
-                const ok = canUse(plan, r.id);
-                return (
-                  <label key={r.id} className={`flex items-center gap-2 rounded-md border px-3 py-2 text-[12px] ${!ok ? 'cursor-not-allowed border-slate-800 opacity-50' : role === r.id ? 'cursor-pointer border-blue-500/50 bg-blue-500/10 shadow-[0_0_12px_rgba(59,130,246,0.25)]' : 'cursor-pointer border-slate-800 hover:bg-slate-800/60'}`}>
-                    <input type="radio" name="role" value={r.id} disabled={!ok} checked={role === r.id} onChange={() => setRole(r.id)} data-testid={`role-${r.id}`} className="accent-[rgb(var(--c-accent))]" />
-                    <span aria-hidden>{r.icon}</span>
-                    <span className="flex-1"><b className="text-ink">{r.label}</b><span className="block text-muted">{r.blurb}</span></span>
-                    {!ok && <span aria-hidden title={`Not in ${planOf(plan).name}`}>🔒</span>}
-                  </label>
-                );
-              })}
-            </fieldset>
-          </>
-        )}
+        {/* RIGHT · form */}
+        <form onSubmit={submit} noValidate data-testid="auth-form" className="flex min-w-0 flex-col gap-2.5">
+          <div className="md:hidden"><UpCircuitLogo size="sm" /></div>
+          <div className="grid grid-cols-2 gap-1 rounded-full border border-slate-800 bg-slate-950/70 p-1 text-[12px] font-semibold" role="tablist">
+            {(['signup', 'login'] as const).map((m) => (
+              <button key={m} type="button" role="tab" aria-selected={mode === m} data-testid={`auth-tab-${m}`} onClick={() => { setMode(m); setErr(null); }} className={`rounded-full py-1.5 transition ${mode === m ? 'bg-blue-500/20 text-white shadow-[0_0_12px_rgba(59,130,246,0.3)]' : 'text-slate-400 hover:text-slate-200'}`}>
+                {m === 'signup' ? 'Sign Up' : 'Log In'}
+              </button>
+            ))}
+          </div>
+          <div className="relative mt-1.5">
+            <input id="auth-email" data-testid="auth-email" type="email" autoComplete="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder=" " className={`${field} peer`} />
+            <label htmlFor="auth-email" className={`pointer-events-none absolute left-2 top-2.5 bg-slate-900 px-1 text-slate-400 transition-all ${lbl}`}>Email</label>
+          </div>
+          <div className="relative mt-1.5">
+            <input id="auth-password" data-testid="auth-password" type={show ? 'text' : 'password'} autoComplete={mode === 'login' ? 'current-password' : 'new-password'} value={password} onChange={(e) => setPassword(e.target.value)} placeholder=" " className={`${field} peer pr-14`} />
+            <label htmlFor="auth-password" className={`pointer-events-none absolute left-2 top-2.5 bg-slate-900 px-1 text-slate-400 transition-all ${lbl}`}>Password (min 8 characters)</label>
+            <button type="button" onClick={() => setShow((v) => !v)} aria-label={show ? 'Hide password' : 'Show password'} data-testid="auth-show" className="absolute right-2 top-1/2 -translate-y-1/2 text-[11px] font-semibold text-slate-400 hover:text-white">{show ? 'Hide' : 'Show'}</button>
+          </div>
 
-        {(err ?? inline) && !err && <p data-testid="auth-inline" className="text-[11px] text-down">{inline}</p>}
-        {err && <p role="alert" data-testid="auth-error" className="rounded-md bg-down/10 px-3 py-2 text-[12px] text-down">{err}</p>}
-        <div className="sticky bottom-0 -mx-5 -mb-5 rounded-b-xl bg-slate-900/95 px-5 pb-5 pt-2 backdrop-blur-xl">
-          <button type="submit" disabled={busy} data-testid="auth-submit" className="h-9 w-full rounded-md bg-accent text-[13px] font-bold text-white hover:brightness-110 disabled:opacity-60">
-          {busy ? 'Please wait…' : mode === 'login' ? 'Log in' : 'Create account'}
-        </button>
-        </div>
-        {backend === 'local' && <p className="text-[10px] text-muted">Demo mode: accounts are stored only in this browser. Set the Supabase variables for real accounts.</p>}
-      </form>
+          {mode === 'signup' && (
+            <>
+              <fieldset>
+                <legend className="mb-1 text-[11px] font-semibold uppercase tracking-wider text-slate-400">Plan</legend>
+                <div className="grid grid-cols-3 gap-2">
+                  {PLANS.map((p) => (
+                    <label key={p.id} className={tile(plan === p.id)}>
+                      <input type="radio" name="plan" value={p.id} checked={plan === p.id} onChange={() => pickPlan(p.id)} data-testid={`plan-${p.id}`} className="sr-only" />
+                      <b className="font-semibold">Tier {p.tier}: {p.name}</b>
+                      <span className="num mt-0.5 text-[10px] opacity-80">{p.price.replace(' / mo', '/mo').replace('₹ ', '₹')}</span>
+                    </label>
+                  ))}
+                </div>
+                <p className="mt-1 text-[10px] text-slate-500">Prices are illustrative — no payment is taken.</p>
+              </fieldset>
+              <fieldset>
+                <legend className="mb-1 text-[11px] font-semibold uppercase tracking-wider text-slate-400">Primary role</legend>
+                <div className="grid grid-cols-2 gap-2">
+                  {ROLES.map((r) => {
+                    const ok = canUse(plan, r.id);
+                    return (
+                      <label key={r.id} title={ok ? r.blurb : `Not in ${planOf(plan).name}`} className={tile(role === r.id, !ok)}>
+                        <input type="radio" name="role" value={r.id} disabled={!ok} checked={role === r.id} onChange={() => setRole(r.id)} data-testid={`role-${r.id}`} className="sr-only" />
+                        <span className="font-semibold"><span aria-hidden>{r.icon}</span> {SHORT[r.id] ?? r.label}{!ok && ' 🔒'}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+              </fieldset>
+            </>
+          )}
+
+          {(err ?? inline) && !err && <p data-testid="auth-inline" className="text-[11px] text-down">{inline}</p>}
+          {err && <p role="alert" data-testid="auth-error" className="rounded-md bg-down/10 px-3 py-2 text-[12px] text-down">{err}</p>}
+          <button type="submit" disabled={busy} data-testid="auth-submit" className="mt-1 h-10 w-full rounded-lg bg-gradient-to-r from-blue-600 to-blue-500 text-[13px] font-bold text-white shadow-[0_0_18px_rgba(59,130,246,0.35)] hover:brightness-110 disabled:opacity-60">
+            {busy ? 'Please wait…' : mode === 'login' ? 'Log In' : 'Create Account'}
+          </button>
+          {backend === 'local' && <p className="text-[10px] text-slate-500">Demo mode: accounts are stored only in this browser. Set the Supabase variables for real accounts.</p>}
+        </form>
+      </div>
     </div>
   );
 }

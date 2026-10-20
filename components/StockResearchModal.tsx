@@ -173,7 +173,7 @@ export function StockResearchModal({ symbol, engine, favorite, onToggleFavorite,
               <h2 className="text-[18px] font-bold text-ink">{symbol}</h2>
               <Badge>{quote.exch ?? 'NSE'} · EQ</Badge>
               <Badge tone="accent">{quote.sector}</Badge>
-              <Badge tone="warn" className="hidden sm:inline-flex">Delayed session data</Badge>
+              <Badge tone="warn" className="hidden sm:inline-flex">Session data</Badge>
             </div>
             <div className="truncate text-[12px] text-muted">{quote.name}</div>
           </div>
