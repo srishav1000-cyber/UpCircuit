@@ -12,7 +12,7 @@ export function OrderFlowHeatmap({ engine, symbol, className = '' }: { engine: M
   const lab = o ? ofiLabel(o.value) : null;
   const pos = o ? ((o.value + 1) / 2) * 100 : 50;
   return (
-    <Card title={`Order flow imbalance · ${symbol}`} className={className} right={lab ? <span className={`num text-[11px] font-semibold ${lab.tone === 'up' ? 'text-up' : lab.tone === 'down' ? 'text-down' : 'text-muted'}`} data-testid="ofi-label">{lab.label}</span> : <span className="text-[10px] text-muted">N/A</span>}>
+    <Card title={`Order flow imbalance · ${symbol}`} badges={[o ? 'smartapi' : 'na']} className={className} right={lab ? <span className={`num text-[11px] font-semibold ${lab.tone === 'up' ? 'text-up' : lab.tone === 'down' ? 'text-down' : 'text-muted'}`} data-testid="ofi-label">{lab.label}</span> : <span className="text-[10px] text-muted">N/A</span>}>
       <div data-testid="ofi-heatmap" data-ofi={o ? o.value.toFixed(3) : 'na'}>
         {!o ? (
           <p className="py-4 text-center text-[12px] text-muted" data-testid="ofi-na">N/A — order-book depth is streamed by SmartAPI only while the market is live.</p>

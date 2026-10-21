@@ -9,6 +9,9 @@ import { C } from '@/lib/theme';
 import { breadth, correlationMatrix, liquidityRatio, portfolioValueSeries, sectorIndexSeries, sectorStats, sharpeParts } from '@/lib/analytics';
 import { RiskPanel } from './RiskPanel';
 import { OrderFlowHeatmap } from '../OrderFlowHeatmap';
+import { CorrelationMatrix } from '../CorrelationMatrix';
+import { PeerMatrix } from './PeerMatrix';
+import { SlippageCard } from './SlippageCard';
 import type { DashboardProps } from './types';
 
 /** Diverging red ↔ green tile colour, saturating at ±3 %. */
@@ -17,12 +20,11 @@ function heat(pct: number): string {
   return alpha(pct >= 0 ? 'up' : 'down', 0.16 + a * 0.5);
 }
 
-/** Pearson r → diverging tint (green positive, red negative). */
-const corrTint = (r: number) => alpha(r >= 0 ? 'up' : 'down', 0.08 + Math.abs(r) * 0.62);
+
 
 const MATRIX_SIZE = 7;
 
-export function InstitutionalDashboard({ engine, quote, closes1D, holdings, favorites, onOpenRebalance }: DashboardProps) {
+export function InstitutionalDashboard({ engine, quote, closes1D, holdings, favorites, mode, onSelect, onOpenRebalance }: DashboardProps) {
   const all = Array.from(engine.quotes.values());
   const sectors = sectorStats(all);
   const b = breadth(all);
@@ -101,6 +103,8 @@ export function InstitutionalDashboard({ engine, quote, closes1D, holdings, favo
 
       <RiskPanel engine={engine} holdings={holdings} />
       <OrderFlowHeatmap engine={engine} symbol={quote.symbol} className={WIDE} />
+      <SlippageCard engine={engine} symbol={quote.symbol} className={WIDE} />
+      <PeerMatrix engine={engine} quote={quote} live={mode === 'live'} onSelect={onSelect} className={WIDE} />
 
       <Card title="Advance / decline gauge" right={<span className="num text-[10px] text-muted">{b.adv} ▲ · {b.dec} ▼</span>}>
         <Gauge value={gaugeVal} min={0} max={3} zones={[{ to: 0.8, color: 'rgb(var(--c-down) / 0.7)' }, { to: 1.25, color: 'rgb(var(--c-muted) / 0.55)' }, { to: 3, color: 'rgb(var(--c-up) / 0.7)' }]} label={b.ratio.toFixed(2)} sub={b.ratio >= 1.25 ? 'Broad advance' : b.ratio <= 0.8 ? 'Broad decline' : 'Balanced'} />
@@ -120,31 +124,8 @@ export function InstitutionalDashboard({ engine, quote, closes1D, holdings, favo
         <p className="mt-2 text-[10px] text-muted">Selected stock {quote.symbol}: {t2m.toFixed(3)}% · {fmtInt(all.length)} stocks tracked. Higher = more of the cap changed hands today.</p>
       </Card>
 
-      <Card title="Sector correlation · 4 × 4 Pearson r" right={<span className="text-[10px] text-muted">1Y daily returns</span>} className={WIDE}>
-        <div className="mx-auto max-w-[520px] overflow-x-auto">
-          <table className="num w-full border-separate border-spacing-1 text-center text-[11px]">
-            <thead>
-              <tr>
-                <th />
-                {secCorr.symbols.map((x) => (
-                  <th key={x} className="px-1 pb-1 font-semibold text-muted">{x}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {secCorr.symbols.map((rs, i) => (
-                <tr key={rs}>
-                  <th scope="row" className="pr-2 text-right font-semibold text-muted">{rs}</th>
-                  {secCorr.matrix[i].map((r, j) => (
-                    <td key={j} title={`${rs} × ${secCorr.symbols[j]}: r = ${r.toFixed(3)}`} data-testid="sector-corr-cell" className="rounded py-2.5 text-[12px] font-semibold text-ink" style={{ background: i === j ? alpha('muted', 0.18) : corrTint(r) }}>
-                      {i === j ? '1.00' : r.toFixed(2)}
-                    </td>
-                  ))}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+      <Card title="Sector correlation · 4 × 4 Pearson r" badges={['yahoo', 'computed']} right={<span className="text-[10px] text-muted">1Y daily returns</span>} className={WIDE}>
+        <CorrelationMatrix data={secCorr} compact cellTestId="sector-corr-cell" />
         <p className="mt-2 text-[10px] text-muted">Each sector = equal-weighted index of its three largest names. r = cov(x, y) ÷ (σx σy); lower cross-sector r means better diversification.</p>
       </Card>
 
@@ -172,31 +153,8 @@ export function InstitutionalDashboard({ engine, quote, closes1D, holdings, favo
         </div>
       </Card>
 
-      <Card title="Stock correlation · Pearson r" className={WIDE} right={<span className="text-[10px] text-muted">1Y daily returns</span>}>
-        <div className="overflow-x-auto">
-          <table className="num w-full border-separate border-spacing-0.5 text-center text-[11px]">
-            <thead>
-              <tr>
-                <th />
-                {corr.symbols.map((s) => (
-                  <th key={s} className={`px-1 pb-1 font-semibold ${s === quote.symbol ? 'text-accent' : 'text-muted'}`}>{s.length > 7 ? s.slice(0, 7) + '…' : s}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {corr.symbols.map((rs, i) => (
-                <tr key={rs}>
-                  <th scope="row" className={`pr-2 text-right font-semibold ${rs === quote.symbol ? 'text-accent' : 'text-muted'}`}>{rs.length > 9 ? rs.slice(0, 9) + '…' : rs}</th>
-                  {corr.matrix[i].map((r, j) => (
-                    <td key={j} title={`${rs} × ${corr.symbols[j]}: r = ${r.toFixed(3)}`} className="rounded py-1.5 text-ink" style={{ background: i === j ? alpha('muted', 0.18) : corrTint(r) }}>
-                      {i === j ? '1' : r.toFixed(2)}
-                    </td>
-                  ))}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+      <Card title="Stock correlation · Pearson r" badges={['yahoo', 'computed']} className={WIDE} right={<span className="text-[10px] text-muted">1Y daily returns</span>}>
+        <CorrelationMatrix data={corr} highlight={quote.symbol} />
         <p className="mt-2 text-[10px] text-muted">r = cov(x, y) ÷ (σx σy). Basket: selected stock, holdings, favourites, then largest caps. Low correlation between holdings means better diversification.</p>
       </Card>
 

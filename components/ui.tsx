@@ -1,12 +1,14 @@
 import type { ReactNode } from 'react';
 import { C, alpha } from '@/lib/theme';
+import { DataBadges } from './DataBadge';
+import type { SourceKind } from '@/lib/methodology';
 
-export function Card({ title, right, children, className = '' }: { title?: string; right?: ReactNode; children: ReactNode; className?: string }) {
+export function Card({ title, right, children, className = '', badges }: { title?: string; right?: ReactNode; children: ReactNode; className?: string; badges?: SourceKind[] }) {
   return (
     <section className={`rounded-md border border-line bg-panel ${className}`}>
       {title && (
         <header className="flex items-center justify-between gap-2 border-b border-line px-3 py-2">
-          <h3 className="text-[11px] font-semibold uppercase tracking-wider text-muted">{title}</h3>
+          <h3 className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-[11px] font-semibold uppercase tracking-wider text-muted"><span>{title}</span>{badges && <DataBadges kinds={badges} />}</h3>
           {right}
         </header>
       )}

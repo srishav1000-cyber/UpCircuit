@@ -1,5 +1,12 @@
 import type { Holding, Quote } from './types';
 import { hashStr } from './estimate';
+export { rsi14 } from './analytics/rsi';
+export { simpleReturns, sharpe, pearson, correlationMatrix, sharpeParts } from './analytics/correlation';
+export { vwapBands, type Trade, type VwapBands } from './analytics/vwapBands';
+export { annualVolPct, weightedRiskScore } from './analytics/varMath';
+import { simpleReturns } from './analytics/correlation';
+import { rsi14 } from './analytics/rsi';
+import type { Trade } from './analytics/vwapBands';
 
 /* ═══════════════ moving averages & oscillators ═══════════════ */
 
@@ -29,45 +36,7 @@ export function macd(closes: number[]): { line: number; signal: number; hist: nu
   return { line: line[i], signal: sig[i], hist: line[i] - sig[i] };
 }
 
-/** Wilder's 14-period RSI over a close series. */
-export function rsi14(closes: number[], period = 14): number | null {
-  if (closes.length <= period) return null;
-  let gain = 0;
-  let loss = 0;
-  for (let i = 1; i <= period; i++) {
-    const d = closes[i] - closes[i - 1];
-    if (d >= 0) gain += d;
-    else loss -= d;
-  }
-  let avgG = gain / period;
-  let avgL = loss / period;
-  for (let i = period + 1; i < closes.length; i++) {
-    const d = closes[i] - closes[i - 1];
-    avgG = (avgG * (period - 1) + Math.max(d, 0)) / period;
-    avgL = (avgL * (period - 1) + Math.max(-d, 0)) / period;
-  }
-  if (avgL === 0) return 100;
-  return 100 - 100 / (1 + avgG / avgL);
-}
-
 /* ═══════════════ risk / return statistics ═══════════════ */
-
-export const simpleReturns = (closes: number[]): number[] => {
-  const r: number[] = [];
-  for (let i = 1; i < closes.length; i++) r.push(closes[i] / closes[i - 1] - 1);
-  return r;
-};
-
-/** Annualised Sharpe from simple daily returns; rf is the annual risk-free rate (default 6.5 %). */
-export function sharpe(closes: number[], rf = 0.065): number | null {
-  if (closes.length < 30) return null;
-  const rfd = rf / 252;
-  const ex = simpleReturns(closes).map((r) => r - rfd);
-  const mean = ex.reduce((a, b) => a + b, 0) / ex.length;
-  const sd = Math.sqrt(ex.reduce((a, b) => a + (b - mean) ** 2, 0) / (ex.length - 1));
-  // a flat series has σ ≈ 1e-20 from float noise, not exactly 0 — treat that as "undefined"
-  return !Number.isFinite(sd) || sd < 1e-9 ? null : (mean / sd) * Math.sqrt(252);
-}
 
 /** Annualised growth implied by a log-linear regression on daily closes. */
 export function trendGrowthYoY(closes: number[]): number | null {
@@ -83,35 +52,6 @@ export function trendGrowthYoY(closes: number[]): number | null {
     den += (i - xm) ** 2;
   }
   return (Math.exp((num / den) * 252) - 1) * 100;
-}
-
-/** Pearson correlation r = cov(x, y) / (σx σy). Series are right-aligned to the shorter length. */
-export function pearson(a: number[], b: number[]): number {
-  const n = Math.min(a.length, b.length);
-  if (n < 3) return 0;
-  const x = a.slice(a.length - n);
-  const y = b.slice(b.length - n);
-  const mx = x.reduce((s, v) => s + v, 0) / n;
-  const my = y.reduce((s, v) => s + v, 0) / n;
-  let sxy = 0;
-  let sxx = 0;
-  let syy = 0;
-  for (let i = 0; i < n; i++) {
-    const dx = x[i] - mx;
-    const dy = y[i] - my;
-    sxy += dx * dy;
-    sxx += dx * dx;
-    syy += dy * dy;
-  }
-  return sxx === 0 || syy === 0 ? 0 : sxy / Math.sqrt(sxx * syy);
-}
-
-/** Correlation matrix of daily simple returns for the given close series. */
-export function correlationMatrix(series: Record<string, number[]>): { symbols: string[]; matrix: number[][] } {
-  const symbols = Object.keys(series);
-  const rets = symbols.map((s) => simpleReturns(series[s]));
-  const matrix = symbols.map((_, i) => symbols.map((__, j) => (i === j ? 1 : pearson(rets[i], rets[j]))));
-  return { symbols, matrix };
 }
 
 /** Herfindahl–Hirschman index on portfolio weights, 0–10 000. HHI = 10⁴ · Σ wᵢ². */
@@ -308,38 +248,6 @@ export function portfolioSummary(holdings: Holding[], quoteOf: (symbol: string) 
 
 /* ═══════════════ intraday / order-flow (day trader) ═══════════════ */
 
-export interface Trade {
-  t: number;
-  p: number;
-  v: number;
-}
-
-export interface VwapBands {
-  vwap: number;
-  /** volume-weighted standard deviation of price around the VWAP */
-  sd: number;
-  upper: number;
-  lower: number;
-  k: number;
-  n: number;
-}
-
-/** Rolling VWAP = ΣP·V/ΣV with ±k volume-weighted σ Bollinger-style bands. */
-export function vwapBands(trades: Trade[], k = 2): VwapBands | null {
-  let v = 0;
-  let pv = 0;
-  for (const t of trades) {
-    v += t.v;
-    pv += t.p * t.v;
-  }
-  if (v <= 0) return null;
-  const vwap = pv / v;
-  let varSum = 0;
-  for (const t of trades) varSum += t.v * (t.p - vwap) ** 2;
-  const sd = Math.sqrt(varSum / v);
-  return { vwap, sd, upper: vwap + k * sd, lower: vwap - k * sd, k, n: trades.length };
-}
-
 export interface TickVolBucket {
   /** bucket start, epoch ms */
   t: number;
@@ -391,18 +299,6 @@ export function sectorIndexSeries(members: number[][]): number[] {
   return out;
 }
 
-/** Sharpe = (Rp − Rf) / σ on a daily value series — the same estimator as `sharpe`, exposed with its parts. */
-export function sharpeParts(values: number[], rf = 0.065): { sharpe: number; annReturnPct: number; annVolPct: number } | null {
-  if (values.length < 30) return null;
-  const r = simpleReturns(values);
-  const mean = r.reduce((a, b) => a + b, 0) / r.length;
-  const sd = Math.sqrt(r.reduce((a, b) => a + (b - mean) ** 2, 0) / (r.length - 1));
-  if (!Number.isFinite(sd) || sd < 1e-9) return null;
-  const rp = mean * 252;
-  const vol = sd * Math.sqrt(252);
-  return { sharpe: (rp - rf) / vol, annReturnPct: rp * 100, annVolPct: vol * 100 };
-}
-
 /* ═══════════════ portfolio: series, risk, diversification ═══════════════ */
 
 /** Σ qtyᵢ · closeᵢ[t] over the common trailing window of all holdings. */
@@ -420,22 +316,6 @@ export function portfolioValueSeries(closes: number[][], qtys: number[]): number
 
 /** Rebase a series to 100 and return the cumulative return in % at each point. */
 export const cumulativeReturnPct = (series: number[]): number[] => (series.length ? series.map((v) => (v / series[0] - 1) * 100) : []);
-
-/** Weighted portfolio risk 0–100: Σ wᵢ·σᵢ (annualised vol) with 60 % vol ↔ 100. Weights are normalised. */
-export function weightedRiskScore(items: { weight: number; volPct: number }[]): { score: number; weightedVolPct: number } {
-  const tot = items.reduce((a, i) => a + i.weight, 0);
-  if (tot <= 0) return { score: 0, weightedVolPct: 0 };
-  const wv = items.reduce((a, i) => a + (i.weight / tot) * i.volPct, 0);
-  return { score: Math.round(Math.min(1, wv / 60) * 100), weightedVolPct: wv };
-}
-
-/** Annualised volatility (%) of a daily close series. */
-export function annualVolPct(closes: number[]): number {
-  const r = simpleReturns(closes);
-  if (r.length < 5) return 0;
-  const m = r.reduce((a, b) => a + b, 0) / r.length;
-  return Math.sqrt(r.reduce((a, b) => a + (b - m) ** 2, 0) / (r.length - 1)) * Math.sqrt(252) * 100;
-}
 
 export interface DivMonth {
   /** 0 = the current month */

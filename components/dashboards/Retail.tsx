@@ -1,7 +1,8 @@
 'use client';
 
 import { useMemo, useState } from 'react';
-import { Badge, Card, Meter, Stat, ZONE } from '../ui';
+import { Badge, Card, Stat } from '../ui';
+import { RSIGauge } from '../RSIGauge';
 import { BarChart, CARD_GRID, Donut, LineChart, WIDE } from './charts';
 import { C, alpha } from '@/lib/theme';
 import { fmt, fmtInt, fmtPct, fmtSigned, fmtSignedRupee, tone } from '@/lib/format';
@@ -58,8 +59,6 @@ export function RetailDashboard({ engine, quote, closes1D, holdings, favorites, 
   const yieldOnCost = s.invested > 0 ? (income / s.invested) * 100 : 0;
 
   const rsi = rsi14(closes1D);
-  const rsiLabel = rsi === null ? '…' : rsi >= 70 ? 'Overbought' : rsi <= 30 ? 'Oversold' : 'Neutral';
-  const rsiTone = rsi === null ? 'text-muted' : rsi >= 70 ? 'text-down' : rsi <= 30 ? 'text-up' : 'text-ink';
 
   // cumulative return vs NIFTY 50 (holdings back-cast at today's quantities)
   const cmp = useMemo(() => {
@@ -234,16 +233,9 @@ export function RetailDashboard({ engine, quote, closes1D, holdings, favorites, 
         )}
       </Card>
 
-      <Card title={`RSI (14) · ${quote.symbol}`} right={<span className={`text-[11px] font-semibold ${rsiTone}`}>{rsiLabel}</span>}>
-        <div className="num mb-2 text-3xl font-semibold text-ink">{rsi === null ? '—' : rsi.toFixed(1)}</div>
-        <Meter value={rsi ?? 50} zones={[{ to: 30, color: ZONE.up }, { to: 70, color: ZONE.muted }, { to: 100, color: ZONE.down }]} />
-        <div className="num mt-1 flex justify-between text-[10px] text-muted">
-          <span>0</span>
-          <span>30</span>
-          <span>70</span>
-          <span>100</span>
-        </div>
-        <p className="mt-2 text-[11px] text-muted">Wilder smoothing on daily closes.</p>
+      <Card title={`RSI (14) · ${quote.symbol}`} badges={['yahoo', 'computed']}>
+        <RSIGauge value={rsi} />
+        <p className="mt-2 text-center text-[11px] text-muted">Wilder smoothing on daily closes · ≤ 30 oversold · ≥ 70 overbought.</p>
       </Card>
 
       <Card title="Portfolio diagnostics" right={<button onClick={() => onAskAI('Diagnose my portfolio: concentration, diversification, sector exposure and rebalancing.')} className="rounded border border-line px-2 py-0.5 text-[10px] font-semibold text-accent hover:bg-accent/10">✨ Ask AI</button>}>

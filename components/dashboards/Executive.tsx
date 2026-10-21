@@ -8,6 +8,9 @@ import { annualVolPct, breadth, hhi, riskScore, trendGrowthYoY, weightedRiskScor
 import type { SentimentLabel } from '@/lib/types';
 import { CircuitTracker } from '../CircuitTracker';
 import { RiskPanel } from './RiskPanel';
+import { VarCard } from './VarCard';
+import { DrawdownCard } from './DrawdownCard';
+import { LimitMonitor } from './LimitMonitor';
 import { CircuitPredictor } from '../CircuitPredictor';
 import type { DashboardProps } from './types';
 
@@ -135,9 +138,12 @@ export function ExecutiveDashboard({ engine, holdings, onSelect }: DashboardProp
       </div>
 
       <RiskPanel engine={engine} holdings={holdings} />
+      <VarCard engine={engine} holdings={holdings} className={WIDE} />
+      <DrawdownCard engine={engine} holdings={holdings} className={WIDE} />
+      <LimitMonitor engine={engine} holdings={holdings} className={WIDE} />
       <CircuitPredictor engine={engine} onSelect={onSelect} className={WIDE} />
 
-      <Card title="Weighted portfolio risk score" right={<span className={`num text-[12px] font-semibold ${wTone}`}>{wrisk.score}/100</span>} className={WIDE}>
+      <Card title="Weighted portfolio risk score" badges={['yahoo', 'computed']} right={<span className={`num text-[12px] font-semibold ${wTone}`}>{wrisk.score}/100</span>} className={WIDE}>
         <Meter value={wrisk.score} zones={[{ to: 35, color: ZONE.up }, { to: 65, color: ZONE.warn }, { to: 100, color: ZONE.down }]} />
         <div className="num mt-1 flex justify-between text-[10px] text-muted"><span>0 Low</span><span>Moderate</span><span>High 100</span></div>
         <table className="num mt-3 w-full text-[12px]">

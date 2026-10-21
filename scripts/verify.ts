@@ -25,6 +25,21 @@ import { smartApiStatus } from '../lib/market';
 // @ts-expect-error plain .mjs helper
 import { pickEquities } from './sync-instruments.mjs';
 
+import { rsiSeries, rsiZone, rsi14 as rsi14New } from '../lib/analytics/rsi';
+import { vwapBandSet, bandZScore, bandZone } from '../lib/analytics/vwapBands';
+import { avgPairwise, extremePairs, corrWord, sharpeParts as sharpePartsNew } from '../lib/analytics/correlation';
+import { historicalVar, portfolioReturns, varRupees, annualVolPct as annVol } from '../lib/analytics/varMath';
+import { METHODOLOGY } from '../lib/methodology';
+import { openingRange } from '../lib/analytics/orb';
+import { bucketTrades, surgeZ, surgeLevel } from '../lib/analytics/velocity';
+import { planPosition } from '../lib/analytics/positionSize';
+import { estimateSlippage } from '../lib/analytics/slippage';
+import { quartileRanks, peerStat, ownPriceStat } from '../lib/analytics/peers';
+import { buildPeerTable } from '../lib/peerTable';
+import { buildResearchNote } from '../lib/researchNote';
+import { drawdownSeries, drawdownEpisodes, summariseDrawdown } from '../lib/analytics/drawdown';
+import { evaluateLimits, logBreaches, sanitiseLimits, statusOf, DEFAULT_LIMITS } from '../lib/analytics/limits';
+
 let passed = 0;
 const pending: Promise<void>[] = [];
 const t = (name: string, fn: () => void | Promise<void>) => {
@@ -816,6 +831,113 @@ t('portfolio briefing: risk context carries HHI + ₹ shocks; local fallback ren
   const a = answerAskLocally('Give me a portfolio health briefing', ctx, []); assert.match(a, /Portfolio health briefing/); assert.match(a, /HHI/); assert.match(a, /Rate-hike/); assert.match(a, /₹/);
   assert.equal(buildAskContext(e, [], null, 'delayed').risk, null); assert.match(answerAskLocally('portfolio health briefing', buildAskContext(e, [], null, 'delayed'), []), /no holdings/i);
   assert.match(ASK_SYSTEM, /context\.risk/);
+});
+
+t('RSI(14): Wilder reference values, bounds, flat series and re-export parity', () => {
+  // 33 closes; expected values cross-checked against an independent Python Wilder implementation (not the code under test)
+  const c = [44.3389, 44.0902, 44.1497, 43.6124, 44.3278, 44.8264, 45.0955, 45.4766, 45.3428, 45.8427, 46.0826, 45.8931, 46.0328, 45.614, 46.282, 46.282, 46.0028, 46.0328, 46.4116, 46.2222, 45.6439, 46.2122, 46.2521, 45.7137, 46.4515, 45.7835, 45.3548, 44.0288, 44.1783, 44.2220, 44.5738, 43.4244, 42.8660];
+  const s14 = rsiSeries(c); near(s14[14]!, 69.43372072, 1e-6); near(s14[15]!, 69.43372072, 1e-6); assert.equal(s14[13], null); near(s14[32]!, 33.77092998, 1e-6);
+  assert.equal(rsi14New([1, 2, 3]), null); assert.equal(rsi14New(Array(30).fill(10)), 50);
+  assert.equal(rsi14New(Array.from({ length: 30 }, (_, i) => 10 + i)), 100); near(rsi14New(Array.from({ length: 30 }, (_, i) => 100 - i))!, 0, 1e-9);
+  assert.equal(rsi14(c), rsi14New(c)); assert.equal(rsiZone(25), 'oversold'); assert.equal(rsiZone(70), 'overbought'); assert.equal(rsiZone(50), 'neutral'); assert.equal(rsiZone(null), null);
+  for (const v of s14) if (v !== null) assert.ok(v >= 0 && v <= 100);
+});
+t('VWAP ±1σ/±2σ bands: volume-weighted σ, nesting, z-score and zones', () => {
+  const tr = [{ t: 1, p: 100, v: 100 }, { t: 2, p: 102, v: 300 }, { t: 3, p: 98, v: 100 }];
+  const b = vwapBandSet(tr)!; const vw = (100 * 100 + 102 * 300 + 98 * 100) / 500; near(b.vwap, vw, 1e-12);
+  near(b.sd, Math.sqrt((100 * (100 - vw) ** 2 + 300 * (102 - vw) ** 2 + 100 * (98 - vw) ** 2) / 500), 1e-12);
+  near(b.upper1 - b.vwap, b.sd, 1e-12); near(b.upper2 - b.vwap, 2 * b.sd, 1e-12); near(b.vwap - b.lower2, 2 * b.sd, 1e-12); assert.ok(b.lower2 < b.lower1 && b.upper1 < b.upper2);
+  near(bandZScore(b.vwap + 1.5 * b.sd, b), 1.5, 1e-9); assert.equal(bandZone(b.vwap, b), 'inside'); assert.equal(bandZone(b.vwap + 1.5 * b.sd, b), 'above1'); assert.equal(bandZone(b.vwap + 2.5 * b.sd, b), 'above2'); assert.equal(bandZone(b.vwap - 1.5 * b.sd, b), 'below1'); assert.equal(bandZone(b.vwap - 3 * b.sd, b), 'below2');
+  assert.equal(vwapBandSet([]), null); assert.equal(vwapBandSet([{ t: 1, p: 100, v: 0 }]), null);
+  const flat = vwapBandSet([{ t: 1, p: 50, v: 10 }, { t: 2, p: 50, v: 20 }])!; assert.equal(flat.sd, 0); assert.equal(bandZScore(55, flat), 0);
+  assert.equal(vwapBands(tr, 2)!.upper, b.upper2);
+});
+t('Correlation matrix and Sharpe: identity, symmetry, summaries, Sharpe parts', () => {
+  const up = Array.from({ length: 80 }, (_, i) => 100 + i + Math.sin(i) * 3); const dn = up.map((v) => 300 - v); const m = correlationMatrix({ A: up, B: up.map((v) => v * 2), C: dn });
+  for (let i = 0; i < 3; i++) { near(m.matrix[i][i], 1, 1e-12); for (let j = 0; j < 3; j++) near(m.matrix[i][j], m.matrix[j][i], 1e-12); }
+  assert.ok(m.matrix[0][1] > 0.99); assert.ok(m.matrix[0][2] < -0.5); const ex = extremePairs(m)!; assert.deepEqual([ex.high.a, ex.high.b], ['A', 'B']); assert.deepEqual([ex.low.a, ex.low.b].sort(), ['A', 'C'].sort() ); 
+  near(avgPairwise(m)!, (m.matrix[0][1] + m.matrix[0][2] + m.matrix[1][2]) / 3, 1e-12); assert.equal(avgPairwise(correlationMatrix({ A: up })), null);
+  assert.equal(corrWord(0.85), 'strong positive'); assert.equal(corrWord(-0.5), 'moderate negative'); assert.equal(corrWord(0.05), 'negligible');
+  const g = Array.from({ length: 60 }, (_, i) => 100 * Math.pow(1.001, i) * (1 + (i % 2 ? 0.004 : -0.004))); const sp = sharpePartsNew(g, 0.065)!; near(sp.sharpe, (sp.annReturnPct / 100 - 0.065) / (sp.annVolPct / 100), 1e-9);
+  assert.equal(sharpePartsNew(Array(60).fill(100)), null); assert.equal(sharpePartsNew([1, 2, 3]), null);
+});
+t('Historical VaR 95% and Expected Shortfall: quantile definition, ES ≥ VaR, ₹ scaling, N/A', () => {
+  const r = Array.from({ length: 100 }, (_, i) => (i - 50) / 1000); // −5.0 % … +4.9 %, 100 obs
+  const v = historicalVar(r, 0.95)!; assert.equal(v.tail, 5); near(v.varPct, 0.046, 1e-12); near(v.esPct, (0.05 + 0.049 + 0.048 + 0.047 + 0.046) / 5, 1e-12); assert.ok(v.esPct >= v.varPct); assert.equal(v.n, 100);
+  assert.ok(historicalVar(r, 0.99)!.varPct >= v.varPct); assert.equal(historicalVar(r.slice(0, 40)), null); assert.equal(historicalVar(Array(100).fill(0.01))!.varPct, 0);
+  near(varRupees(v, 1_000_000).var, 46_000, 1e-6);
+  const pr = portfolioReturns([[100, 110, 99], [50, 50, 55]], [2, 4]); assert.equal(pr.length, 2); near(pr[0], (220 + 200) / (200 + 200) - 1, 1e-12); near(pr[1], (198 + 220) / (220 + 200) - 1, 1e-12); assert.deepEqual(portfolioReturns([], []), []);
+  assert.ok(annVol(Array.from({ length: 60 }, (_, i) => 100 + (i % 2) * 2)) > 0);
+});
+t('methodology reference: every analytic documents formula, inputs, window, source and caveat', () => {
+  assert.ok(METHODOLOGY.length >= 10); const ids = new Set(METHODOLOGY.map((m) => m.id)); assert.equal(ids.size, METHODOLOGY.length);
+  for (const id of ['rsi', 'vwap', 'corr', 'sharpe', 'var', 'wvol', 'hhi']) assert.ok(ids.has(id), id);
+  for (const m of METHODOLOGY) { assert.ok(m.formula.length > 15 && m.inputs && m.window && m.caveat && m.source.length >= 1, m.id); }
+});
+
+t('ORB: 09:15–09:30 range, first close outside, confirmation, volume ratio, forming/inside states', () => {
+  const day = 20_000 * 86400; const at = (hh: number, mm: number) => day + (hh * 60 + mm) * 60;
+  const bar = (hh: number, mm: number, hi: number, lo: number, cl: number, v: number) => ({ time: at(hh, mm), high: hi, low: lo, close: cl, volume: v });
+  const orBars = Array.from({ length: 15 }, (_, i) => bar(9, 15 + i, 101 + (i === 5 ? 1 : 0), 99 - (i === 9 ? 1 : 0), 100, 100)); // range 98..102
+  const f = openingRange(orBars)!; assert.equal(f.state, 'forming'); assert.equal(f.high, 102); assert.equal(f.low, 98); near(f.widthPct, (4 / 98) * 100, 1e-9); assert.equal(f.breakout, null); assert.equal(f.barsInRange, 15);
+  const up = openingRange([...orBars, bar(9, 30, 101, 100, 101, 90), bar(9, 31, 104, 101, 103, 250), bar(9, 32, 105, 102, 104, 120)])!;
+  assert.equal(up.state, 'above'); assert.equal(up.breakout!.dir, 'up'); assert.equal(up.breakout!.time, '09:31'); assert.equal(up.breakout!.confirmed, true); near(up.breakout!.volumeRatio!, 2.5, 1e-9); near(up.breakout!.distancePct, (1 / 102) * 100, 1e-9);
+  const poke = openingRange([...orBars, bar(9, 31, 104, 101, 103, 100), bar(9, 32, 103, 100, 101, 100)])!; assert.equal(poke.breakout!.confirmed, false); assert.equal(poke.state, 'inside');
+  const dn = openingRange([...orBars, bar(9, 40, 99, 96, 97, 100)])!; assert.equal(dn.breakout!.dir, 'down'); assert.equal(dn.state, 'below'); near(dn.breakout!.distancePct, (1 / 98) * 100, 1e-9);
+  assert.equal(openingRange([]), null); assert.equal(openingRange([bar(10, 0, 5, 4, 5, 1)]), null);
+  const prev = Array.from({ length: 3 }, (_, i) => ({ ...bar(9, 15 + i, 500, 490, 495, 10), time: at(9, 15 + i) - 86400 })); assert.equal(openingRange([...prev, ...orBars])!.high, 102);
+});
+t('tick velocity / volume surge z-score: baseline mean & sd, warm-up, levels, bucketing', () => {
+  const base = [10, 12, 9, 11, 10, 13, 8, 12, 11, 10]; const m = base.reduce((a, b) => a + b, 0) / base.length; const sd = Math.sqrt(base.reduce((a, b) => a + (b - m) ** 2, 0) / (base.length - 1));
+  const r = surgeZ([...base, 30, 30, 30], 3)!; near(r.z, (30 - m) / sd, 1e-9); near(r.baseline, m, 1e-12); near(r.recent, 30, 1e-12);
+  assert.equal(surgeZ([1, 2, 3], 3), null); assert.equal(surgeZ(Array(20).fill(5), 3), null);
+  assert.equal(surgeLevel(0.2), 'normal'); assert.equal(surgeLevel(1.5), 'elevated'); assert.equal(surgeLevel(2.4), 'surge'); assert.equal(surgeLevel(3.5), 'extreme'); assert.equal(surgeLevel(-1.4), 'quiet');
+  const b = bucketTrades([{ t: 1000, v: 5 }, { t: 1500, v: 7 }, { t: 2500, v: 3 }, { t: 9999, v: 1 }], 3000, 1000, 3); assert.deepEqual(b.counts, [0, 2, 1]); assert.deepEqual(b.volumes, [0, 12, 3]);
+});
+t('position size: qty = ⌊risk₹ ÷ |entry−stop|⌋, cash cap, R targets, short side, circuit/noise warnings, errors', () => {
+  const p = planPosition({ capital: 100000, riskPct: 1, entry: 500, stop: 490 }); assert.ok(!('error' in p)); if ('error' in p) return;
+  assert.equal(p.side, 'long'); assert.equal(p.riskRupees, 1000); assert.equal(p.qty, 100); assert.equal(p.positionValue, 50000); near(p.positionPct, 50, 1e-9); assert.equal(p.lossAtStop, 1000); assert.deepEqual(p.targets.map((x) => x.price), [510, 520, 530]); assert.deepEqual(p.targets.map((x) => x.gain), [1000, 2000, 3000]); assert.equal(p.warnings.length, 0);
+  const sh = planPosition({ capital: 100000, riskPct: 1, entry: 500, stop: 510 }) as Exclude<ReturnType<typeof planPosition>, { error: string }>; assert.equal(sh.side, 'short'); assert.deepEqual(sh.targets.map((x) => x.price), [490, 480, 470]);
+  const cap = planPosition({ capital: 10000, riskPct: 5, entry: 1000, stop: 999 }) as Exclude<ReturnType<typeof planPosition>, { error: string }>; assert.equal(cap.qty, 10); assert.equal(cap.cappedByCash, true); assert.match(cap.warnings.join(' '), /Cash-limited/);
+  const circ = planPosition({ capital: 100000, riskPct: 1, entry: 100, stop: 85, lowerCircuit: 90 }) as Exclude<ReturnType<typeof planPosition>, { error: string }>; assert.match(circ.warnings.join(' '), /lower circuit/);
+  const tight = planPosition({ capital: 100000, riskPct: 1, entry: 1000, stop: 999.5 }) as Exclude<ReturnType<typeof planPosition>, { error: string }>; assert.match(tight.warnings.join(' '), /0\.1 %/);
+  for (const bad of [{ capital: 0, riskPct: 1, entry: 1, stop: 1 }, { capital: 1, riskPct: 1, entry: 5, stop: 5 }, { capital: 1, riskPct: 0, entry: 5, stop: 4 }, { capital: NaN, riskPct: 1, entry: 5, stop: 4 }]) assert.ok('error' in (planPosition(bad) as object));
+});
+t('slippage estimator: walks asks/bids, average fill, bps, partial fill flag, N/A', () => {
+  const asks = [{ price: 100.1, qty: 100 }, { price: 100.2, qty: 200 }, { price: 100.5, qty: 300 }]; const bids = [{ price: 100.0, qty: 150 }, { price: 99.9, qty: 100 }];
+  const b = estimateSlippage(bids, asks, 'buy', 250)!; near(b.avgPrice, (100 * 100.1 + 150 * 100.2) / 250, 1e-9); assert.equal(b.best, 100.1); near(b.slipPerShare, b.avgPrice - 100.1, 1e-9); near(b.slipBps, (b.slipPerShare / 100.1) * 1e4, 1e-9); near(b.slipTotal, b.slipPerShare * 250, 1e-9); assert.equal(b.levelsUsed, 2); assert.equal(b.unfilled, 0);
+  near(b.halfSpreadBps!, ((100.1 - 100.0) / 2 / 100.05) * 1e4, 1e-6);
+  const s = estimateSlippage(bids, asks, 'sell', 400)!; assert.equal(s.filled, 250); assert.equal(s.unfilled, 150); assert.equal(s.best, 100.0); near(s.avgPrice, (150 * 100 + 100 * 99.9) / 250, 1e-9);
+  const one = estimateSlippage(bids, asks, 'buy', 50)!; assert.equal(one.slipPerShare, 0); assert.equal(estimateSlippage([], [], 'buy', 10), null); assert.equal(estimateSlippage(bids, asks, 'buy', 0), null);
+});
+t('peers: quartile ranks (best→worst, ties, N/A excluded), peer percentile/z, own-price stat, table + note', () => {
+  const r = quartileRanks([{ symbol: 'A', value: 10 }, { symbol: 'B', value: 20 }, { symbol: 'C', value: 30 }, { symbol: 'D', value: 40 }, { symbol: 'E', value: null }], 'lower');
+  assert.deepEqual(r.map((x) => x.rank), [1, 2, 3, 4, null]); assert.deepEqual(r.map((x) => x.quartile), [1, 2, 3, 4, null]); assert.equal(r[0].of, 4);
+  const h = quartileRanks([{ symbol: 'A', value: 10 }, { symbol: 'B', value: 20 }], 'higher'); assert.deepEqual(h.map((x) => x.rank), [2, 1]); assert.deepEqual(quartileRanks([{ symbol: 'A', value: 5 }, { symbol: 'B', value: 5 }], 'higher').map((x) => x.rank), [1, 1]);
+  const st = peerStat([10, 20, 30, 40], 30)!; near(st.mean, 25, 1e-12); near(st.sd, Math.sqrt(500 / 3), 1e-12); near(st.z!, 5 / Math.sqrt(500 / 3), 1e-12); near(st.percentile!, (2 / 3) * 100, 1e-9); assert.equal(peerStat([10], 10), null); assert.equal(peerStat([5, 5, 5], 5)!.z, null);
+  const c = Array.from({ length: 100 }, (_, i) => 100 + i); const o = ownPriceStat(c, 190)!; assert.equal(o.percentile, 90); near(o.z!, (190 - 149.5) / Math.sqrt(100 * 101 / 12), 1e-9); assert.equal(ownPriceStat([1, 2], 1), null);
+  const tab = buildPeerTable([{ symbol: 'A', mcapCr: 5000, pe: 12, roe: 18, de: 0.4, dy: 1.2, retPct: 10, volPct: 20, sharpe: 0.3 }, { symbol: 'B', mcapCr: 90000, pe: 30, roe: 12, de: null, dy: null, retPct: 25, volPct: 30, sharpe: 0.9 }, { symbol: 'C', mcapCr: null, pe: null, roe: null, de: null, dy: null, retPct: null, volPct: null, sharpe: null }]);
+  assert.equal(tab[0].valueQuartile, '#1 of 2'); assert.equal(tab[1].valueQuartile, '#2 of 2'); assert.equal(tab[2].valueQuartile, null); assert.equal(tab[0].q.pe, null); // < 4 peers → no quartile
+  const four = buildPeerTable([10, 20, 30, 40].map((pe, i) => ({ symbol: 'P' + i, mcapCr: 1, pe, roe: 40 - pe, de: 1, dy: 1, retPct: 1, volPct: 1, sharpe: 1 }))); assert.deepEqual(four.map((x) => x.valueQuartile), ['Q1', 'Q2', 'Q3', 'Q4']); assert.deepEqual(four.map((x) => x.q.roe), [1, 2, 3, 4]); assert.equal(tab[1].cells.de, 'N/A'); assert.equal(tab[2].cells.mcap, 'N/A'); assert.equal(tab[1].cells.mcap, '90,000');
+  const note = buildResearchNote({ symbol: 'A', name: 'Alpha Ltd', sector: 'IT', ltp: 100, changePct: 1.5, feed: 'Yahoo Delayed', now: new Date('2026-10-21T04:00:00Z'), fundamentals: [{ label: 'P/E', value: '12.0', source: 'Yahoo Delayed' }], peers: tab, valuation: [{ label: 'P/E percentile', value: 'N/A', source: 'Computed Math' }], risk: [{ label: 'Sharpe', value: '0.30', source: 'Computed Math' }] });
+  assert.match(note, /^# Research note — Alpha Ltd \(A\)/); assert.match(note, /\*\*A\*\*/); assert.match(note, /N\/A/); assert.match(note, /Computed Math/); assert.match(note, /not investment advice/i); assert.match(note, /9:30 am IST/i);
+});
+t('drawdown: running peak, max/current %, episodes with trough + recovery days, ongoing, min depth filter', () => {
+  const v = [100, 110, 99, 88, 95, 110, 120, 108, 114, 118]; const dd = drawdownSeries(v); near(dd[3], (88 / 110 - 1) * 100, 1e-9); assert.equal(dd[6], 0); near(dd[9], (118 / 120 - 1) * 100, 1e-9);
+  const e = drawdownEpisodes(v, 2); assert.equal(e.length, 2); assert.equal(e[0].peakIdx, 1); assert.equal(e[0].troughIdx, 3); assert.equal(e[0].recoveryIdx, 5); assert.equal(e[0].daysToTrough, 2); assert.equal(e[0].daysToRecover, 2); near(e[0].depthPct, -20, 1e-9);
+  assert.equal(e[1].peakIdx, 6); assert.equal(e[1].troughIdx, 7); assert.equal(e[1].recoveryIdx, null); assert.equal(e[1].daysToRecover, null); near(e[1].depthPct, -10, 1e-9);
+  assert.equal(drawdownEpisodes(v, 15).length, 1); assert.equal(drawdownEpisodes([1], 2).length, 0);
+  const long = [...Array.from({ length: 30 }, (_, i) => 100 + i), ...Array.from({ length: 10 }, (_, i) => 129 - i * 3)]; const sm = summariseDrawdown(long)!; assert.ok(sm.maxPct < -20); near(sm.currentPct, sm.maxPct, 1e-9); assert.equal(sm.underwaterDays, 9); assert.equal(sm.longestRecoveryDays, null); assert.equal(summariseDrawdown([1, 2, 3]), null);
+});
+t('policy limits: pass/near/breach, HHI, circuit exposure, sanitising, once-per-day breach log', () => {
+  assert.equal(statusOf(19, 20), 'near'); assert.equal(statusOf(17, 20), 'pass'); assert.equal(statusOf(20.1, 20), 'breach'); assert.equal(statusOf(20, 20), 'near');
+  const pos = [{ symbol: 'A', sector: 'IT', value: 600, nearCircuit: true }, { symbol: 'B', sector: 'IT', value: 100, nearCircuit: false }, { symbol: 'C', sector: 'Bank', value: 300, nearCircuit: false }];
+  const rows = evaluateLimits({ positions: pos }, DEFAULT_LIMITS)!; const by = Object.fromEntries(rows.map((r) => [r.id, r]));
+  near(by.stock.actual, 60, 1e-9); assert.equal(by.stock.status, 'breach'); assert.equal(by.stock.detail, 'A'); near(by.sector.actual, 70, 1e-9); assert.equal(by.sector.detail, 'IT'); near(by.hhi.actual, 70 ** 2 + 30 ** 2, 1e-9); assert.equal(by.hhi.status, 'breach'); near(by.circuit.actual, 60, 1e-9); assert.equal(by.circuit.detail, 'A');
+  assert.equal(evaluateLimits({ positions: [] }, DEFAULT_LIMITS), null);
+  assert.deepEqual(sanitiseLimits({ stock: 5, sector: 'x', hhi: -3, circuit: 500 }), { stock: 5, sector: 40, hhi: 2500, circuit: 20 }); assert.deepEqual(sanitiseLimits(null), DEFAULT_LIMITS);
+  const l1 = logBreaches([], rows, 1000, '2026-10-21'); assert.equal(l1.added.length, 4); const l2 = logBreaches(l1.log, rows, 2000, '2026-10-21'); assert.equal(l2.added.length, 0); assert.equal(l2.log.length, 4); const l3 = logBreaches(l2.log, rows, 3000, '2026-10-22'); assert.equal(l3.added.length, 4); assert.equal(l3.log.length, 8);
+  assert.equal(logBreaches([], rows.map((r) => ({ ...r, status: 'pass' as const })), 1, 'd').added.length, 0);
 });
 
 void Promise.all(pending).then(() => {

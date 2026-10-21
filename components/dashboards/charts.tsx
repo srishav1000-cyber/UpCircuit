@@ -225,7 +225,7 @@ export function Gauge({ value, min = 0, max = 100, zones, label, sub }: { value:
 }
 
 /** Price line with VWAP and ±kσ bands (day-trader card). */
-export function BandChart({ price, vwap, upper, lower, height = 120 }: { price: number[]; vwap: number; upper: number; lower: number; height?: number }) {
+export function BandChart({ price, vwap, upper, lower, upper1, lower1, height = 120 }: { price: number[]; vwap: number; upper: number; lower: number; upper1?: number; lower1?: number; height?: number }) {
   const W = 320;
   const padL = 44;
   const padR = 6;
@@ -249,6 +249,8 @@ export function BandChart({ price, vwap, upper, lower, height = 120 }: { price: 
     <svg viewBox={`0 0 ${W} ${height}`} className="w-full" style={{ height: 'auto', aspectRatio: `${W} / ${height}` }} role="img" aria-label="Price with VWAP bands">
       <rect x={padL} y={y(upper)} width={W - padL - padR} height={Math.max(0, y(lower) - y(upper))} style={{ fill: C.accent, opacity: 0.07 }} />
       {line(upper, C.down, '3 2')}
+      {upper1 !== undefined && line(upper1, C.down, '1 3')}
+      {lower1 !== undefined && line(lower1, C.up, '1 3')}
       {line(vwap, C.warn)}
       {line(lower, C.up, '3 2')}
       <polyline fill="none" strokeWidth="1.5" strokeLinejoin="round" style={{ stroke: C.ink }} points={price.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(' ')} />

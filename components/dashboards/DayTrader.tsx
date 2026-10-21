@@ -5,7 +5,12 @@ import { OrderFlowHeatmap } from '../OrderFlowHeatmap';
 import { CircuitPredictor } from '../CircuitPredictor';
 import { BandChart, BarChart, CARD_GRID, WIDE } from './charts';
 import { C, alpha } from '@/lib/theme';
-import { intradaySigma, tickVolumeBuckets, vwapBands } from '@/lib/analytics';
+import { intradaySigma, tickVolumeBuckets } from '@/lib/analytics';
+import { BAND_READ, bandZScore, bandZone, vwapBandSet } from '@/lib/analytics/vwapBands';
+import { liveKind } from '../DataBadge';
+import { OrbCard } from './OrbCard';
+import { SurgeMeter } from './SurgeMeter';
+import { PositionCalc } from './PositionCalc';
 import { fmt, fmtInt, fmtPct, fmtSigned, tone } from '@/lib/format';
 import type { DashboardProps } from './types';
 
@@ -39,7 +44,7 @@ export function DayTraderDashboard({ engine, quote, mode, onAction, onSelect }: 
   const tpm = engine.ticksPerMin();
 
   const trades5m = engine.recentTrades(winMs);
-  const bands = vwapBands(trades5m, 2);
+  const bands = vwapBandSet(trades5m);
   const bandPrices = (() => {
     const step = Math.max(1, Math.ceil(trades5m.length / 120));
     return trades5m.filter((_, i) => i % step === 0 || i === trades5m.length - 1).map((t) => t.p);
@@ -101,20 +106,25 @@ export function DayTraderDashboard({ engine, quote, mode, onAction, onSelect }: 
 
       <OrderFlowHeatmap engine={engine} symbol={quote.symbol} />
       <CircuitPredictor engine={engine} onSelect={onSelect} />
+      <OrbCard engine={engine} symbol={quote.symbol} />
+      <SurgeMeter engine={engine} mode={mode} />
+      <PositionCalc quote={quote} className={WIDE} />
 
-      <Card title="VWAP bands · ±2σ" right={<span className="num text-[10px] text-muted">last {winMs / 60_000} min · {bands?.n ?? 0} {live ? 'trades' : '1-min bars'}</span>}>
+      <Card title="VWAP bands · ±1σ / ±2σ" badges={[liveKind(mode), 'computed']} right={<span className="num text-[10px] text-muted">last {winMs / 60_000} min · {bands?.n ?? 0} {live ? 'trades' : '1-min bars'}</span>}>
         {bands ? (
-          <>
-            <BandChart price={bandPrices} vwap={bands.vwap} upper={bands.upper} lower={bands.lower} />
-            <div className="num mt-1 grid grid-cols-3 gap-2 text-center text-[11px]">
-              <div><div className="text-[10px] uppercase tracking-wider text-muted">Upper</div><b className="text-down">{fmt(bands.upper)}</b></div>
-              <div><div className="text-[10px] uppercase tracking-wider text-muted">VWAP</div><b className="text-warn">{fmt(bands.vwap)}</b></div>
-              <div><div className="text-[10px] uppercase tracking-wider text-muted">Lower</div><b className="text-up">{fmt(bands.lower)}</b></div>
+          <div data-testid="vwap-bands" data-z={bandZScore(quote.ltp, bands).toFixed(2)} data-zone={bandZone(quote.ltp, bands)}>
+            <BandChart price={bandPrices} vwap={bands.vwap} upper={bands.upper2} lower={bands.lower2} upper1={bands.upper1} lower1={bands.lower1} />
+            <div className="num mt-1 grid grid-cols-5 gap-1 text-center text-[11px]">
+              <div><div className="text-[9px] uppercase tracking-wider text-muted">+2σ</div><b className="text-down">{fmt(bands.upper2)}</b></div>
+              <div><div className="text-[9px] uppercase tracking-wider text-muted">+1σ</div><b className="text-down/80">{fmt(bands.upper1)}</b></div>
+              <div><div className="text-[9px] uppercase tracking-wider text-muted">VWAP</div><b className="text-warn">{fmt(bands.vwap)}</b></div>
+              <div><div className="text-[9px] uppercase tracking-wider text-muted">−1σ</div><b className="text-up/80">{fmt(bands.lower1)}</b></div>
+              <div><div className="text-[9px] uppercase tracking-wider text-muted">−2σ</div><b className="text-up">{fmt(bands.lower2)}</b></div>
             </div>
             <p className="mt-1.5 text-[10px] text-muted">
-              {quote.ltp > bands.upper ? 'Price is above the upper band — stretched vs VWAP.' : quote.ltp < bands.lower ? 'Price is below the lower band — stretched vs VWAP.' : `Price is inside the bands (σ ${bands.sd.toFixed(2)}).`} Bands = VWAP ± 2 × volume-weighted σ.
+              <b className="text-ink">z = {bandZScore(quote.ltp, bands).toFixed(2)}</b> · {BAND_READ[bandZone(quote.ltp, bands)]}. Bands = VWAP ± 1σ and ± 2σ (σ {bands.sd.toFixed(2)}, volume-weighted).
             </p>
-          </>
+          </div>
         ) : (
           <p className="py-6 text-center text-[12px] text-muted">Collecting trades…</p>
         )}

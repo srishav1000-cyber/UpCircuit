@@ -24,6 +24,7 @@ import { ExecutiveDashboard } from '@/components/dashboards/Executive';
 import { useMarket } from '@/hooks/useMarket';
 import { useInstruments } from '@/hooks/useInstruments';
 import { useWatchlist } from '@/hooks/useWatchlist';
+import { MethodologyDrawer } from '@/components/MethodologyDrawer';
 import { RebalanceModal } from '@/components/RebalanceModal';
 import { WatchlistSelectorModal } from '@/components/WatchlistSelectorModal';
 import { WatchlistDrawer } from '@/components/WatchlistDrawer';
@@ -82,6 +83,7 @@ function Terminal() {
   /** symbol whose "Add to Watchlist" selector (checkbox per list) is open */
   const [pickFor, setPickFor] = useState<string | null>(null);
   const [rebalanceOpen, setRebalanceOpen] = useState(false);
+  const [methodOpen, setMethodOpen] = useState(false);
   const { holdings: rawHoldings, setHoldings, resetHoldings } = useHoldings(DEMO_HOLDINGS);
   const { focus, toggle: toggleFocus } = useFocus();
   const { user, update: updateAccount, getToken } = useAuth();
@@ -393,8 +395,11 @@ function Terminal() {
           {instruments.length.toLocaleString('en-IN')} instruments indexed
           {bseOnly > 0 && <> · NSE {(instruments.length - bseOnly).toLocaleString('en-IN')} + BSE-only {bseOnly.toLocaleString('en-IN')}</>}
         </span>
+        <button type="button" onClick={() => setMethodOpen(true)} data-testid="methodology-open" className="cursor-pointer rounded border border-line px-1.5 py-px font-semibold text-accent hover:bg-accent/10">ƒ Methodology</button>
         <span className="ml-auto hidden sm:inline">{mode === 'live' ? 'Prices streamed via Angel One SmartAPI; fundamentals not available from the feed show N/A.' : 'Prices are real NSE session data; fundamentals not available from the feed show N/A.'} Not investment advice.</span>
       </footer>
+
+      <MethodologyDrawer open={methodOpen} onClose={() => setMethodOpen(false)} />
 
       {research && (
         <StockResearchModal
