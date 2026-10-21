@@ -39,6 +39,12 @@ import { buildPeerTable } from '../lib/peerTable';
 import { buildResearchNote } from '../lib/researchNote';
 import { drawdownSeries, drawdownEpisodes, summariseDrawdown } from '../lib/analytics/drawdown';
 import { evaluateLimits, logBreaches, sanitiseLimits, statusOf, DEFAULT_LIMITS } from '../lib/analytics/limits';
+import { createFramePump } from '../lib/frameScheduler';
+import { detectPatterns, aggregateBars, vwapSeries } from '../lib/analytics/patterns';
+import { periodReturnPct, relativeStrength } from '../lib/analytics/relative';
+import { healthLights } from '../lib/analytics/health';
+import { DEFAULT_FOCUS, initFocus, MAX_FOCUS, WELCOME_TEXT } from '../lib/focus';
+import { compactRows, parseSnapshot, MAX_AGE_MS } from '../lib/snapshotCache';
 
 let passed = 0;
 const pending: Promise<void>[] = [];
@@ -938,6 +944,69 @@ t('policy limits: pass/near/breach, HHI, circuit exposure, sanitising, once-per-
   assert.deepEqual(sanitiseLimits({ stock: 5, sector: 'x', hhi: -3, circuit: 500 }), { stock: 5, sector: 40, hhi: 2500, circuit: 20 }); assert.deepEqual(sanitiseLimits(null), DEFAULT_LIMITS);
   const l1 = logBreaches([], rows, 1000, '2026-10-21'); assert.equal(l1.added.length, 4); const l2 = logBreaches(l1.log, rows, 2000, '2026-10-21'); assert.equal(l2.added.length, 0); assert.equal(l2.log.length, 4); const l3 = logBreaches(l2.log, rows, 3000, '2026-10-22'); assert.equal(l3.added.length, 4); assert.equal(l3.log.length, 8);
   assert.equal(logBreaches([], rows.map((r) => ({ ...r, status: 'pass' as const })), 1, 'd').added.length, 0);
+});
+
+t('frame pump: first tick paints next frame, bursts coalesce to one trailing frame ≥ 100 ms later, cancel is reusable', () => {
+  let now = 0; const rafQ: (() => void)[] = []; const timers: { at: number; cb: () => void }[] = []; let flushes = 0;
+  const pump = createFramePump(() => { flushes++; }, 100, { now: () => now, raf: (cb) => { rafQ.push(cb); return 0; }, setTimer: (cb, ms) => { timers.push({ at: now + ms, cb }); return timers.length; }, clearTimer: () => { timers.length = 0; } });
+  const frame = () => { while (rafQ.length) rafQ.shift()!(); }; const advance = (to: number) => { now = to; for (const tm of timers.filter((x) => x.at <= now)) { timers.splice(timers.indexOf(tm), 1); tm.cb(); } };
+  pump.request(); assert.equal(rafQ.length, 1); assert.equal(timers.length, 0); frame(); assert.equal(flushes, 1); // idle → immediate frame
+  now = 30; for (let i = 0; i < 50; i++) pump.request(); assert.equal(rafQ.length, 0); assert.equal(timers.length, 1); assert.equal(timers[0].at, 100); // burst → one timer for the remaining gap
+  advance(100); frame(); assert.equal(flushes, 2); assert.deepEqual(pump.stats(), { requests: 51, flushes: 2 });
+  now = 500; pump.request(); frame(); assert.equal(flushes, 3); // long idle → immediate again
+  now = 520; pump.request(); pump.cancel(); assert.equal(timers.length, 0); now = 900; pump.request(); frame(); assert.equal(flushes, 4); // usable after cancel (strict mode)
+});
+t('patterns: bullish/bearish engulfing, resistance breakout (+ volume rule), double bottom, volatility doji, nothing on noise', () => {
+  const b = (o: number, h: number, l: number, c: number, v = 100) => ({ open: o, high: h, low: l, close: c, volume: v });
+  const flat = Array.from({ length: 20 }, () => b(100, 101, 99, 100.2));
+  const bull = detectPatterns([...flat, b(100.5, 100.6, 99.4, 99.6), b(99.4, 101.5, 99.3, 101.2)]); assert.ok(bull.some((p) => p.id === 'bullEngulf')); assert.ok(!bull.some((p) => p.id === 'bearEngulf'));
+  const bear = detectPatterns([...flat, b(99.5, 100.6, 99.4, 100.5), b(100.7, 100.8, 98.9, 99.2)]); assert.ok(bear.some((p) => p.id === 'bearEngulf'));
+  assert.ok(!detectPatterns([...flat, b(100, 101, 99, 99.5), b(99.6, 100.5, 99.2, 100.2)]).some((p) => p.id === 'bullEngulf')); // does not cover the previous body
+  const bo = detectPatterns([...flat.slice(0, 19), b(100.5, 103, 100.4, 102.8, 300)]); assert.ok(bo.some((p) => p.id === 'breakout')); assert.ok(!detectPatterns([...flat.slice(0, 19), b(100.5, 103, 100.4, 102.8, 100)]).some((p) => p.id === 'breakout')); // needs volume
+  assert.ok(!detectPatterns([...flat.slice(0, 19), b(100.5, 100.9, 100.4, 100.8, 300)]).some((p) => p.id === 'breakout')); // not above the prior high (101)
+  const px = [102, 101.5, 101, 100.5, 100, 100.3, 101, 102, 103, 103.5, 103, 102, 101, 100.2, 100.1, 100.6, 101.5, 102.5, 103.2, 104];
+  const db = detectPatterns(px.map((c, i) => b(c, c + 0.2, c - 0.2 - (i === 4 || i === 14 ? 0 : 0), c, 100))); assert.ok(db.some((p) => p.id === 'doubleBottom'), JSON.stringify(db.map((x) => x.id)));
+  const doji = detectPatterns([...flat, b(100, 104, 96, 100.2)]); assert.ok(doji.some((p) => p.id === 'volDoji')); assert.ok(!detectPatterns([...flat, b(100, 101.2, 98.9, 100.1)]).some((p) => p.id === 'volDoji')); // range not wide enough
+  assert.deepEqual(detectPatterns(flat), []); assert.deepEqual(detectPatterns([b(1, 2, 0, 1)]), []);
+});
+t('bars: 1m→5m aggregation (OHLCV) and session VWAP restarting each day', () => {
+  const m = (t: number, o: number, h: number, l: number, c: number, v: number) => ({ time: t, open: o, high: h, low: l, close: c, volume: v });
+  const base = 20_000 * 86400 + 9 * 3600 + 15 * 60; const one = Array.from({ length: 10 }, (_, i) => m(base + i * 60, 100 + i, 101 + i, 99 + i, 100.5 + i, 10 + i));
+  const a = aggregateBars(one, 5); assert.equal(a.length, 2); assert.equal(a[0].open, 100); assert.equal(a[0].close, 104.5); assert.equal(a[0].high, 105); assert.equal(a[0].low, 99); assert.equal(a[0].volume, 10 + 11 + 12 + 13 + 14); assert.equal(a[1].open, 105); assert.equal(a[1].time - a[0].time, 300);
+  const v = vwapSeries([m(base, 1, 3, 1, 2, 100), m(base + 60, 1, 5, 1, 3, 300), m(base + 86400, 1, 11, 1, 6, 50)]); near(v[0]!, 2, 1e-12); near(v[1]!, (2 * 100 + ((5 + 1 + 3) / 3) * 300) / 400, 1e-12); near(v[2]!, (11 + 1 + 6) / 3, 1e-12);
+  assert.equal(vwapSeries([m(base, 1, 1, 1, 1, 0)])[0], null);
+});
+t('relative strength: period returns, pp difference, short history → N/A', () => {
+  const s = [100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122]; near(periodReturnPct(s, 5)!, (122 / 117 - 1) * 100, 1e-9); near(periodReturnPct(s, 21)!, (122 / 101 - 1) * 100, 1e-9); assert.equal(periodReturnPct(s, 22), 100 * (122 / 100 - 1) === 22 ? 22 : periodReturnPct(s, 22)); assert.equal(periodReturnPct(s.slice(0, 3), 5), null);
+  const b = s.map((x) => 1000 + x * 2); const r = relativeStrength(s, b, 1.2, 0.5); assert.equal(r.length, 3); near(r[0].rs!, 0.7, 1e-12); near(r[1].rs!, periodReturnPct(s, 5)! - periodReturnPct(b, 5)!, 1e-12); near(r[2].rs!, periodReturnPct(s, 21)! - periodReturnPct(b, 21)!, 1e-12);
+  const na = relativeStrength([1, 2], [1, 2], null, 0.5); assert.deepEqual(na.map((x) => x.rs), [null, null, null]);
+});
+t('health lights: thresholds, banks (no D/E), loss-making P/E, momentum rules, N/A never guessed', () => {
+  const L = (x: Partial<Parameters<typeof healthLights>[0]>) => healthLights({ debtToEquity: null, roe: null, roce: null, pe: null, rsi: null, ret1mPct: null, aboveVwap: null, ...x });
+  assert.deepEqual(L({}).map((l) => l.light), ['na', 'na', 'na', 'na']);
+  assert.equal(L({ debtToEquity: 0.3 })[0].light, 'green'); assert.equal(L({ debtToEquity: 0.5 })[0].light, 'green'); assert.equal(L({ debtToEquity: 1.2 })[0].light, 'yellow'); assert.equal(L({ debtToEquity: 2 })[0].light, 'red'); assert.match(L({ debtToEquity: 2 })[0].summary, /2\.00×/);
+  assert.equal(L({ roe: 20 })[1].light, 'green'); assert.equal(L({ roe: 10 })[1].light, 'yellow'); assert.equal(L({ roe: 3 })[1].light, 'red'); assert.equal(L({ roce: 18 })[1].light, 'green'); assert.match(L({ roce: 18 })[1].summary, /ROCE/);
+  assert.equal(L({ pe: 18 })[2].light, 'green'); assert.equal(L({ pe: 25 })[2].light, 'green'); assert.equal(L({ pe: 40 })[2].light, 'yellow'); assert.equal(L({ pe: 80 })[2].light, 'red'); assert.equal(L({ pe: -5 })[2].light, 'red'); assert.match(L({ pe: -5 })[2].summary, /Loss-making/);
+  assert.equal(L({ rsi: 60, ret1mPct: 4, aboveVwap: true })[3].light, 'green'); assert.equal(L({ rsi: 40, ret1mPct: -4, aboveVwap: false })[3].light, 'red'); assert.equal(L({ rsi: 60, ret1mPct: -4, aboveVwap: true })[3].light, 'yellow'); assert.equal(L({ rsi: 80, ret1mPct: 9, aboveVwap: true })[3].light, 'yellow'); assert.match(L({ rsi: 80, ret1mPct: 9, aboveVwap: true })[3].summary, /stretched/);
+  assert.equal(L({ rsi: 60, ret1mPct: 4 })[3].light, 'green'); // VWAP unknown → judged on the rest
+});
+t('focus onboarding: new user gets 6 blue-chips once; saved lists and deliberately emptied baskets are left alone', () => {
+  assert.deepEqual([...DEFAULT_FOCUS], ['RELIANCE', 'HDFCBANK', 'TCS', 'INFY', 'ICICIBANK', 'SBIN']); assert.equal(DEFAULT_FOCUS.length, MAX_FOCUS);
+  const n = initFocus(null, false); assert.deepEqual(n, { list: [...DEFAULT_FOCUS], seeded: true }); assert.deepEqual(initFocus('[]', false), { list: [...DEFAULT_FOCUS], seeded: true }); assert.deepEqual(initFocus('garbage', false).list, [...DEFAULT_FOCUS]);
+  assert.deepEqual(initFocus('["ITC","wipro"]', false), { list: ['ITC', 'WIPRO'], seeded: false }); assert.deepEqual(initFocus('[]', true), { list: [], seeded: false }); assert.deepEqual(initFocus(null, true), { list: [], seeded: false });
+  assert.notEqual(initFocus(null, false).list, DEFAULT_FOCUS as unknown); assert.match(WELCOME_TEXT, /^👋 Welcome to UpCircuit Terminal! We've pre-loaded 6 blue-chip NIFTY stocks in your Focus Basket\. Click 'Edit' anytime to customize your watchlist\.$/);
+});
+t('snapshot cache: compacts real rows, rejects junk / stale / future, engine hydrates without alerts and is replaced by a live fetch', () => {
+  const rows = [{ symbol: 'RELIANCE', ltp: 100, prevClose: 99, open: 99.5, extra: 'x' } as never, { symbol: 'TCS', ltp: 0, prevClose: 1 }, { symbol: 'INFY', ltp: 10, prevClose: 9, volume: 5 }, { symbol: 'NIFTY', ltp: 20000, prevClose: 19900, isIndex: true }, { symbol: 'SBIN', ltp: 5, prevClose: 4 }];
+  const c = compactRows(rows); assert.deepEqual(c.map((r) => r.symbol), ['RELIANCE', 'INFY', 'NIFTY', 'SBIN']); assert.ok(!('extra' in c[0])); assert.equal(c[2].isIndex, true);
+  const now = 1_000_000_000_000; const ok = JSON.stringify({ t: now - 1000, rows: c }); assert.equal(parseSnapshot(ok, now)!.rows.length, 4);
+  assert.equal(parseSnapshot(null, now), null); assert.equal(parseSnapshot('{bad', now), null); assert.equal(parseSnapshot(JSON.stringify({ t: now - MAX_AGE_MS - 1, rows: c }), now), null); assert.equal(parseSnapshot(JSON.stringify({ t: now + 3_600_000, rows: c }), now), null); assert.equal(parseSnapshot(JSON.stringify({ t: now, rows: c.slice(0, 2) }), now), null);
+  const e = new MarketEngine(SEED_INSTRUMENTS); assert.equal(e.ready, false); const t0 = now - 5000;
+  assert.equal(e.ingestSnapshot([{ symbol: 'RELIANCE', ltp: 2500, prevClose: 2450 }, { symbol: 'TCS', ltp: 3900, prevClose: 3800 }, { symbol: 'NIFTY', ltp: 24000, prevClose: 23900, isIndex: true }], t0), true);
+  assert.equal(e.ready, true); assert.equal(e.snapshotAt, t0); assert.equal(e.quotes.get('RELIANCE')!.fetchedAt, t0); assert.equal(e.lastQuotesAt, 0); assert.equal(e.alerts.length, 0); assert.equal(e.indices.find((i) => i.id === 'NIFTY')!.loaded, true);
+  assert.equal(e.ingestSnapshot([{ symbol: 'SBIN', ltp: 1, prevClose: 1 }], t0), false); // never over a loaded engine
+  e.ingestRows([{ symbol: 'RELIANCE', ltp: 2510, prevClose: 2450 }], now); assert.equal(e.snapshotAt, 0); assert.equal(e.quotes.get('RELIANCE')!.ltp, 2510);
+  const back = compactRows(e.snapshotRows()); assert.ok(back.some((r) => r.symbol === 'RELIANCE' && r.ltp === 2510) && back.some((r) => r.isIndex && r.symbol === 'NIFTY'));
 });
 
 void Promise.all(pending).then(() => {

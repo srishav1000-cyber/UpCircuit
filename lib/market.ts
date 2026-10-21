@@ -200,6 +200,8 @@ export class MarketEngine {
   lastLiveTickAt = 0;
   /** epoch ms of the last Yahoo quote batch applied (0 = nothing loaded yet) */
   lastQuotesAt = 0;
+  /** epoch ms of the saved snapshot currently on screen; 0 once a fresh fetch has replaced it (lib/snapshotCache.ts) */
+  snapshotAt = 0;
   /** bumps whenever real history arrives, so memoised analytics recompute */
   histVer = 0;
 
@@ -283,6 +285,32 @@ export class MarketEngine {
 
   /* ── Yahoo (real, delayed) ── */
 
+  /**
+   * Hydrate from the previous session's saved REAL snapshot so the terminal can render before the network answers. Only when nothing is
+   * loaded yet; stamps quotes with the snapshot time (not now); raises no alerts and does not count as a fresh fetch (`snapshotAt` stays set
+   * until `ingestRows` delivers live data).
+   */
+  ingestSnapshot(rows: YahooRow[], t: number): boolean {
+    if (this.ready) return false;
+    let any = false;
+    for (const r of rows) {
+      if (r.isIndex) this.ingestIndex(r);
+      else if (this.ingestQuote(r, t)) any = true;
+    }
+    if (any) this.snapshotAt = t;
+    return any;
+  }
+
+  /** Current real quotes + loaded indices as rows, for lib/snapshotCache.ts. */
+  snapshotRows(): YahooRow[] {
+    const out: YahooRow[] = [];
+    for (const ix of this.indices) if (ix.loaded && ix.value > 0 && ix.prev > 0) out.push({ symbol: ix.id, ltp: ix.value, prevClose: ix.prev, isIndex: true });
+    for (const q of this.quotes.values()) {
+      out.push({ symbol: q.symbol, ltp: q.ltp, prevClose: q.prevClose, open: q.open, high: q.high, low: q.low, volume: q.volume, avgVolume: q.avgVolume, mcapCr: q.mcapCr > 0 ? q.mcapCr : undefined, sharesCr: this.shares.get(q.symbol), dividendYield: q.dividendYield, marketTime: q.marketTime });
+    }
+    return out;
+  }
+
   /** Apply a batch of Yahoo rows. Symbols with fresher SmartAPI ticks keep SmartAPI's price. */
   ingestRows(rows: YahooRow[], now = Date.now()) {
     let any = false;
@@ -290,6 +318,7 @@ export class MarketEngine {
       if (r.isIndex) this.ingestIndex(r);
       else if (this.ingestQuote(r, now)) any = true;
     }
+    if (rows.length) this.snapshotAt = 0;
     if (any) {
       this.lastQuotesAt = now;
       this.mcapTrend.push(this.totalMcapCr());

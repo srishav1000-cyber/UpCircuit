@@ -17,7 +17,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     // suppressHydrationWarning: next-themes sets the theme class on <html> before hydration
     <html lang="en" suppressHydrationWarning>
-      <body className="bg-bg font-sans text-ink antialiased">
+      <body className="min-h-screen bg-slate-950 font-sans text-slate-100 antialiased [.light_&]:bg-bg [.light_&]:text-ink">
         <Providers>{children}</Providers>
       </body>
     </html>

@@ -1,5 +1,7 @@
 'use client';
 
+import { createFramePump } from '@/lib/frameScheduler';
+import { loadSnapshot, saveSnapshot } from '@/lib/snapshotCache';
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { MarketEngine, isMarketOpen, isStreamWindow, type FeedConn, type FeedMode, type LiveReason } from '@/lib/market';
 import { DirectSmartApiStream, toEngineTick, type Listing, type MarketTick } from '@/lib/smartapiDirect';
@@ -27,7 +29,14 @@ const uniq = <T,>(a: T[]) => Array.from(new Set(a));
  * Nothing is generated locally: until the first Yahoo batch arrives `state` is 'loading', and if Yahoo cannot be reached it is 'error'.
  */
 export function useMarket(universe: Instrument[], selected: string, watch: string[], focus: string[] = []) {
-  const engine = useMemo(() => new MarketEngine(universe), [universe]);
+  // instant shell: the engine starts from the last saved REAL snapshot (if any), so the terminal renders before any network call returns;
+  // the SmartAPI session fetch and the Yahoo quotes then run in the background and replace it (lib/snapshotCache.ts)
+  const engine = useMemo(() => {
+    const e = new MarketEngine(universe);
+    const snap = loadSnapshot();
+    if (snap) e.ingestSnapshot(snap.rows, snap.t);
+    return e;
+  }, [universe]);
   const [version, bump] = useReducer((x: number) => x + 1, 0);
   const [conn, setConn] = useState<FeedConn>('idle');
   const [mode, setMode] = useState<FeedMode>('delayed');
@@ -82,6 +91,7 @@ export function useMarket(universe: Instrument[], selected: string, watch: strin
     let alive = true;
     let failures = 0;
     let lastSeed = 0;
+    let lastSave = 0;
     const timers: ReturnType<typeof setTimeout>[] = [];
     const priority = () => uniq([selRef.current, ...focusRef.current, ...watchRef.current, ...engine.wantedQuotes(), ...INDEX_IDS]);
 
@@ -93,6 +103,10 @@ export function useMarket(universe: Instrument[], selected: string, watch: strin
       if (ok) {
         failures = 0;
         setState('ok');
+        if (Date.now() - lastSave > 60_000) {
+          lastSave = Date.now();
+          saveSnapshot(engine.snapshotRows());
+        }
         if (Date.now() - lastSeed > 60_000) {
           lastSeed = Date.now();
           void fetchQuotes(seedRef.current).then(() => alive && bump());
@@ -112,6 +126,13 @@ export function useMarket(universe: Instrument[], selected: string, watch: strin
       document.removeEventListener('visibilitychange', onVis);
     };
   }, [engine, fetchQuotes]);
+
+  const loadRef = useRef<null | (() => Promise<void>)>(null);
+  // selecting a stock (or editing the focus basket) fetches its bars NOW instead of waiting up to 2.5 s for the next poll
+  useEffect(() => {
+    const id = setTimeout(() => void loadRef.current?.(), 60);
+    return () => clearTimeout(id);
+  }, [selected, focusKey]);
 
   /* ── Yahoo bars (history the UI asked for: 1-minute tape of the selected / focus symbols, daily closes for analytics, index sparklines) ── */
   useEffect(() => {
@@ -145,9 +166,11 @@ export function useMarket(universe: Instrument[], selected: string, watch: strin
         busy = false;
       }
     };
+    loadRef.current = load;
     const id = setInterval(load, 2500);
     void load();
     return () => {
+      loadRef.current = null;
       alive = false;
       clearInterval(id);
     };
@@ -156,6 +179,10 @@ export function useMarket(universe: Instrument[], selected: string, watch: strin
   /* ── SmartAPI, direct browser → exchange socket (optional; Yahoo keeps running underneath as the fallback) ── */
   const sampler = useRef(new TickSampler());
   const outbox = useRef<TickRow[]>([]);
+  // every tick is applied to the engine immediately; the screen repaints on the next animation frame, at most 10×/s (lib/frameScheduler.ts)
+  const pump = useRef<ReturnType<typeof createFramePump> | null>(null);
+  if (pump.current === null) pump.current = createFramePump(() => bump(), 100);
+  useEffect(() => () => pump.current?.cancel(), []);
   const applyTick = useCallback(
     (m: MarketTick) => {
       if (m.isIndex) engine.applyIndexTick(m.symbol, m.lastPrice, m.prevClose);
@@ -165,6 +192,7 @@ export function useMarket(universe: Instrument[], selected: string, watch: strin
         const row = sampler.current.offer({ symbol: m.symbol, lastPrice: m.lastPrice, volume: m.volume, high: m.high, low: m.low, timestamp: m.timestamp });
         if (row && outbox.current.length < 3000) outbox.current.push(row);
       }
+      pump.current?.request();
     },
     [engine],
   );

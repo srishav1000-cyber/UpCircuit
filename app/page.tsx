@@ -31,9 +31,12 @@ import { WatchlistDrawer } from '@/components/WatchlistDrawer';
 import { StockOverview } from '@/components/StockOverview';
 import { useHoldings } from '@/hooks/useHoldings';
 import { useFocus } from '@/hooks/useFocus';
-import { FocusBoard } from '@/components/FocusBoard';
+import { MyFocusBasket } from '@/components/MyFocusBasket';
+import { FocusDeepDive } from '@/components/FocusDeepDive';
+import { WelcomeBanner } from '@/components/WelcomeBanner';
 import { AuthProvider, useAuth } from '@/hooks/useAuth';
 import { AuthScreen } from '@/components/AuthScreen';
+import { TerminalSkeleton } from '@/components/TerminalSkeleton';
 import { PlansModal } from '@/components/PlansModal';
 import { allowedRoles, canUse, coerceRole, type Role } from '@/lib/auth';
 import { useHotkeys } from '@/hooks/useHotkeys';
@@ -53,16 +56,16 @@ const DEMO_HOLDINGS: Holding[] = ['RELIANCE', 'TCS', 'HDFCBANK', 'INFY', 'ITC', 
 const EMPTY_QUOTE = (symbol: string): Quote => ({ symbol, name: symbol, sector: 'Others', ltp: 0, prevClose: 1, open: 0, high: 0, low: 0, volume: 0, sumPV: 0, sumV: 0, mcapCr: 0, dividendYield: 0, avgVolume: 0, circuitBand: 20, upperCircuit: 0, lowerCircuit: 0 });
 
 function MarketGate({ state, onRetry }: { state: DataState; onRetry: () => void }) {
+  // always-dark skeleton (components/TerminalSkeleton.tsx) so the post-login handoff never flashes white, whatever the saved theme
   return (
-    <div data-testid="market-gate" className="flex h-screen flex-col items-center justify-center gap-3 bg-bg px-4 text-center text-[13px] text-muted">
+    <div data-testid="market-gate">
       {state === 'error' ? (
-        <>
-          <div className="text-[15px] font-semibold text-ink">Market data is temporarily unavailable</div>
+        <TerminalSkeleton message="Market data is temporarily unavailable">
           <p className="max-w-sm">UpCircuit shows only real market data and never fills gaps with simulated prices. Check your connection and try again.</p>
-          <button onClick={onRetry} data-testid="market-retry" className="rounded-md border border-accent px-3 py-1.5 font-semibold text-accent hover:bg-accent/10">Retry</button>
-        </>
+          <button onClick={onRetry} data-testid="market-retry" className="rounded-md border border-blue-500 px-3 py-1.5 font-semibold text-blue-400 hover:bg-blue-500/10">Retry</button>
+        </TerminalSkeleton>
       ) : (
-        <span className="animate-pulse">Connecting to SmartAPI Live Market Stream...</span>
+        <TerminalSkeleton message="Connecting to SmartAPI Live Market Stream..." />
       )}
     </div>
   );
@@ -85,7 +88,7 @@ function Terminal() {
   const [rebalanceOpen, setRebalanceOpen] = useState(false);
   const [methodOpen, setMethodOpen] = useState(false);
   const { holdings: rawHoldings, setHoldings, resetHoldings } = useHoldings(DEMO_HOLDINGS);
-  const { focus, toggle: toggleFocus } = useFocus();
+  const { focus, toggle: toggleFocus, welcome, dismissWelcome } = useFocus();
   const { user, update: updateAccount, getToken } = useAuth();
   const [plansFor, setPlansFor] = useState<Role | 'any' | null>(null);
   const { news, error: newsError } = useNews();
@@ -239,6 +242,13 @@ function Terminal() {
 
   // leaving the workspace view also leaves full screen
   const exitFs = dashFs.exit;
+  /** mini chart → full interactive chart canvas: leave full-screen dashboard and show the stock's chart workspace */
+  const expandChart = useCallback(() => {
+    dashFs.exit();
+    setChartIndex(null);
+    setPanel('overview');
+    setView('terminal');
+  }, [dashFs]);
   useEffect(() => {
     if (view !== 'terminal') exitFs();
   }, [view, exitFs]);
@@ -308,6 +318,7 @@ function Terminal() {
         />
         <CircuitAlerts log={circuit.log} glow={circuit.glow} audio={audio} onOpen={openChart} onOpenLog={() => setLogOpen(true)} />
         <CircuitLogDrawer open={logOpen} onClose={() => setLogOpen(false)} log={circuit.log} onOpen={openChart} onClear={circuit.clearLog} />
+        {welcome && <WelcomeBanner onDismiss={dismissWelcome} />}
       </div>
 
       {view === 'home' ? (
@@ -377,7 +388,12 @@ function Terminal() {
             {/* keyed on persona: each lens switch remounts the view and replays the 300 ms fade + scale-in */}
             <div key={persona} data-testid="persona-view" className={`animate-fade-in ${dashFs.fs ? 'p-3 sm:p-5' : ''}`}>
               {canUse(user?.plan, persona) && (persona === 'day' || persona === 'retail') && (
-                <FocusBoard persona={persona} engine={engine} version={version} focus={focus} glow={circuit.glow} candidates={focusCandidates} holdings={holdings} onSelect={setSymbol} onToggle={(sym) => { const r = toggleFocus(sym); return r.ok ? null : r.error; }} />
+                <>
+                  <MyFocusBasket persona={persona} engine={engine} version={version} focus={focus} selected={symbol} glow={circuit.glow} candidates={focusCandidates} holdings={holdings} onSelect={setSymbol} onToggle={(sym) => { const r = toggleFocus(sym); return r.ok ? null : r.error; }} />
+                  {focus.includes(symbol) && (
+                    <FocusDeepDive engine={engine} quote={quote} mode={mode} onExpand={expandChart} />
+                  )}
+                </>
               )}
               {canUse(user?.plan, persona) && persona === 'day' && <DayTraderDashboard {...dash} />}
               {canUse(user?.plan, persona) && persona === 'retail' && <RetailDashboard {...dash} />}
@@ -504,11 +520,7 @@ export default function Page() {
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
   if (!mounted) {
-    return (
-      <div className="flex h-screen items-center justify-center bg-bg text-[13px] text-muted">
-        <span className="animate-pulse">Initializing UpCircuit Market Analytics Engine...</span>
-      </div>
-    );
+    return <TerminalSkeleton />;
   }
   return (
     <AuthProvider>
@@ -520,7 +532,7 @@ export default function Page() {
 /** login wall → terminal. Keyed on the user id so switching accounts remounts every hook with its own storage namespace. */
 function Gate() {
   const { user, ready } = useAuth();
-  if (!ready) return <div className="flex h-screen items-center justify-center bg-bg text-[13px] text-muted"><span className="animate-pulse">Initializing UpCircuit Market Analytics Engine...</span></div>;
+  if (!ready) return <TerminalSkeleton />;
   if (!user) {
     // deep links (/terminal?symbol=…) go through /login and come back after sign-in; every redirect resolves via NEXT_PUBLIC_APP_URL
     const p = window.location.pathname;

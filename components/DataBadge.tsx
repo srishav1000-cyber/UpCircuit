@@ -9,11 +9,11 @@ const STYLE: Record<SourceKind, { label: string; cls: string; tip: string }> = {
 };
 
 /** Inline provenance tag: [SmartAPI Live] · [Yahoo Delayed] · [Computed Math] · [N/A]. */
-export function DataBadge({ kind }: { kind: SourceKind }) {
+export function DataBadge({ kind, label }: { kind: SourceKind; label?: string }) {
   const s = STYLE[kind];
   return (
     <span data-testid={`badge-${kind}`} title={s.tip} className={`inline-flex shrink-0 items-center whitespace-nowrap rounded border px-1 py-px text-[9px] font-semibold normal-case tracking-normal ${s.cls}`}>
-      [{s.label}]
+      [{label ?? s.label}]
     </span>
   );
 }
