@@ -3,7 +3,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { isMarketOpen, type MarketEngine } from '@/lib/market';
 import { CircuitTracker, circuitHit, type CircuitDir, type CircuitHit } from '@/lib/circuit';
-import { playChime } from '@/lib/chime';
 import { CircuitDedupe } from '@/lib/circuitDedupe';
 
 function safeStore() {
@@ -13,23 +12,25 @@ function safeStore() {
 export interface CircuitEvent extends CircuitHit {
   id: number;
   at: number;
+  /** listing venue (NSE unless the instrument is BSE-only) */
+  exch: 'NSE' | 'BSE';
+  /** day volume (shares) when the alert fired */
+  volume: number;
   /** produced by the ⚡ Demo Circuit Simulator — not market data */
   demo?: boolean;
 }
 
 /**
  * Watches the user's active watchlist + focus basket for upper / lower circuits on REAL prices.
- * A confirmed hit (once per symbol·direction per IST day, re-armed only by a higher band — see lib/circuitDedupe) → chime (if audio is on), banner event, and `onFire` (e-mail dispatch).
+ * A confirmed hit (once per symbol·direction per IST day, re-armed only by a higher band — see lib/circuitDedupe) → log entry + overlay event (CircuitAlertOverlay plays the alarm if audio is on), and `onFire` (e-mail dispatch).
  * `glow` maps each symbol currently sitting at a circuit to its direction (drives the pulsing card border).
  */
-export function useCircuitAlerts(engine: MarketEngine, version: number, symbols: string[], audioOn: boolean, onFire?: (hit: CircuitHit) => void, demo = false) {
+export function useCircuitAlerts(engine: MarketEngine, version: number, symbols: string[], onFire?: (hit: CircuitHit) => void, demo = false) {
   const tracker = useRef(new CircuitTracker(8000));
   const dedupe = useRef<CircuitDedupe | null>(null);
   const demoRef = useRef(false);
   const demoDedupe = useRef(new CircuitDedupe());
   const seq = useRef(1);
-  const audioRef = useRef(audioOn);
-  audioRef.current = audioOn;
   const fireRef = useRef(onFire);
   fireRef.current = onFire;
   const [events, setEvents] = useState<CircuitEvent[]>([]);
@@ -60,7 +61,7 @@ export function useCircuitAlerts(engine: MarketEngine, version: number, symbols:
       const hit = tracker.current.observe(q, now);
       if (!dedupe.current) dedupe.current = new CircuitDedupe(safeStore());
       // daily lock: one alert per symbol+direction per IST day; re-fires only on escalation to a higher band
-      if (hit && (demo ? demoDedupe.current : dedupe.current).shouldFire(hit.symbol, hit.band, hit.dir, now)) fresh.push({ ...hit, id: seq.current++, at: now, ...(demo ? { demo: true } : {}) });
+      if (hit && (demo ? demoDedupe.current : dedupe.current).shouldFire(hit.symbol, hit.band, hit.dir, now)) fresh.push({ ...hit, id: seq.current++, at: now, exch: q.exch ?? 'NSE', volume: q.volume ?? 0, ...(demo ? { demo: true } : {}) });
       const cur = circuitHit(q);
       if (cur && tracker.current.active().includes(s)) nextGlow[s] = cur.dir;
     }
@@ -72,7 +73,7 @@ export function useCircuitAlerts(engine: MarketEngine, version: number, symbols:
     if (fresh.length) {
       setEvents((e) => [...fresh, ...e].slice(0, 6));
       setLog((l) => [...fresh, ...l].slice(0, 500));
-      if (audioRef.current) playChime(fresh[0].dir);
+      // the alarm itself plays from CircuitAlertOverlay, once per card, so a queue of alerts sounds one after another
       if (!demo) fresh.forEach((h) => fireRef.current?.(h)); // demo hits are never e-mailed
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps

@@ -5,7 +5,7 @@ import type { IndexQuote, Instrument } from '@/lib/types';
 import { feedBadge, isMarketOpen, smartApiStatus, type FeedConn, type FeedMode, type Health, type LiveReason } from '@/lib/market';
 import type { Persona } from '@/lib/personas';
 import { useDismiss } from '@/hooks/useClickOutside';
-import { testChime } from '@/lib/chime';
+import { testChime } from '@/lib/audioAlerts';
 import { AnalysisActions } from './AnalysisActions';
 import { IndexCard } from './IndexCard';
 import { SearchBox } from './SearchBox';

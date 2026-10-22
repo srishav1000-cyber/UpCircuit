@@ -1,7 +1,8 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { audioState, onAudioStateChange, playChime, unlockAudioContext, type AudioStateName } from '@/lib/chime';
+import { audioState, onAudioStateChange, unlockAudioContext, type AudioStateName } from '@/lib/chime';
+import { playChime } from '@/lib/audioAlerts';
 import { scoped } from '@/lib/scope';
 
 const KEY = 'upcircuit:audio:v1';
@@ -33,7 +34,7 @@ export function useAudioAlerts() {
       } catch {
         /* in-memory only */
       }
-      if (next) setTimeout(() => playChime('upper', 0.08), 50); // soft confirmation
+      if (next) setTimeout(() => playChime('upper', 0.2), 50); // soft confirmation
       return next;
     });
   }, []);

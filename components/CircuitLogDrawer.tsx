@@ -7,9 +7,10 @@ import { fmt, fmtPct } from '@/lib/format';
 /** HH:MM:SS in IST (the market's clock). */
 export const istTime = (ms: number): string => new Date(ms).toLocaleTimeString('en-GB', { timeZone: 'Asia/Kolkata', hour12: false });
 
-/** `[HH:MM:SS] | SYMBOL | UPPER | ₹price | +x.xx%` */
-export function logLine(e: Pick<CircuitEvent, 'at' | 'symbol' | 'dir' | 'ltp' | 'pct'> & { demo?: boolean }): string {
-  return `[${istTime(e.at)}] | ${e.symbol} | ${e.dir.toUpperCase()}${e.demo ? ' (DEMO)' : ''} | ₹${fmt(e.ltp)} | ${fmtPct(e.pct)}`;
+/** `[HH:MM:SS] | SYMBOL | UPPER | ₹price | +x.xx% | band +5%` */
+export function logLine(e: Pick<CircuitEvent, 'at' | 'symbol' | 'dir' | 'ltp' | 'pct'> & { demo?: boolean; band?: number }): string {
+  const band = e.band ? ` | band ${e.dir === 'upper' ? '+' : '−'}${e.band}%` : '';
+  return `[${istTime(e.at)}] | ${e.symbol} | ${e.dir.toUpperCase()}${e.demo ? ' (DEMO)' : ''} | ₹${fmt(e.ltp)} | ${fmtPct(e.pct)}${band}`;
 }
 
 interface Props {

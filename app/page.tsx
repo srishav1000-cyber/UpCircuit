@@ -8,6 +8,7 @@ import { PortfolioUploadModal } from '@/components/PortfolioUploadModal';
 import { PriceAlertDialog } from '@/components/PriceAlertDialog';
 import { CircuitBanner } from '@/components/CircuitBanner';
 import { CircuitAlerts } from '@/components/CircuitAlerts';
+import { CircuitAlertOverlay } from '@/components/CircuitAlertOverlay';
 import { useCircuitAlerts } from '@/hooks/useCircuitAlerts';
 import { useDemoSimulator } from '@/hooks/useDemoSimulator';
 import { useAudioAlerts } from '@/hooks/useAudioAlerts';
@@ -133,7 +134,7 @@ function Terminal() {
   const circuitSymbols = useMemo(() => [...new Set([...favs, ...focus])], [favs, focus]);
   const demo = useDemoSimulator(engine, circuitSymbols);
   const watchedForCircuits = useMemo(() => [...new Set([...circuitSymbols, ...demo.symbols])], [circuitSymbols, demo.symbols]);
-  const circuit = useCircuitAlerts(engine, version, watchedForCircuits, audio.on, (hit) => {
+  const circuit = useCircuitAlerts(engine, version, watchedForCircuits, (hit) => {
     // e-mail the signed-in user (Supabase accounts only; the server uses the verified account address)
     void getToken().then((t) => sendCircuitEmail(hit, t));
   }, demo.active);
@@ -317,6 +318,7 @@ function Terminal() {
           onAsk={() => openAsk()}
         />
         <CircuitAlerts log={circuit.log} glow={circuit.glow} audio={audio} onOpen={openChart} onOpenLog={() => setLogOpen(true)} />
+        <CircuitAlertOverlay log={circuit.log} audioOn={audio.on} />
         <CircuitLogDrawer open={logOpen} onClose={() => setLogOpen(false)} log={circuit.log} onOpen={openChart} onClear={circuit.clearLog} />
         {welcome && <WelcomeBanner onDismiss={dismissWelcome} />}
       </div>

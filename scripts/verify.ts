@@ -556,7 +556,6 @@ t('report: CSV escaping + injection guard + sections', () => {
 });
 
 import { circuitHit, nearCircuit, limitPrice, CircuitTracker } from '../lib/circuit';
-import { CHIME_FREQ } from '../lib/chime';
 import { appUrl, terminalUrl, APP_URL } from '../lib/appUrl';
 import { buildCircuitEmail, sendEmail, esc } from '../lib/email';
 import { parseQuoteRows } from '../lib/yahooData';
@@ -685,9 +684,6 @@ t('CircuitTracker: inferred bands need a 2nd observation ≥ 8 s later; exchange
   tr.observe({ ...at, ltp: 205 }, 12000); assert.equal(tr.active().length, 0);
   const t2 = new CircuitTracker(8000); t2.observe({ ...at, bandKnown: true }, 0); assert.equal(t2.active().length, 1);
 });
-t('chime: upper ascends 880→1760 Hz, lower descends 440→220 Hz', () => {
-  assert.deepEqual(CHIME_FREQ.upper, [880, 1760]); assert.deepEqual(CHIME_FREQ.lower, [440, 220]);
-});
 t('app URLs resolve from NEXT_PUBLIC_APP_URL (default https://upcircuit.vercel.app)', () => {
   assert.ok(APP_URL.startsWith('http') && !APP_URL.endsWith('/'));
   assert.equal(appUrl('/login'), APP_URL + '/login'); assert.equal(terminalUrl('M&M'), APP_URL + '/terminal?symbol=M%26M');
@@ -713,30 +709,59 @@ t('sendEmail: Resend request shape, missing key, provider failure', async () => 
 });
 
 
-import { playChime, unlockAudioContext, audioState, testChime, SWEEP_SEC, FIFTH } from '../lib/chime';
+import { unlockAudioContext, audioState } from '../lib/chime';
+import { playChime, testChime, MASTER_GAIN, SIREN, SIREN_CENTER, SIREN_DEPTH, SIREN_SEC, ARPEGGIO_HZ, ARP_STEP_SEC, RING_HZ, alarmSeconds } from '../lib/audioAlerts';
+import { OVERLAY_MS, OVERLAY_TEXT, bandLabel } from '../components/CircuitAlertOverlay';
 import { logLine, istTime } from '../components/CircuitLogDrawer';
-t('chime sweeps: upper 880→1760 Hz, lower 440→220 Hz over 0.35 s; locked until unlockAudioContext()', async () => {
-  const rec: { type: string; set: [number, number][]; ramp: [number, number][] }[] = [];
+t('alarm audio: locked until a gesture; master gain 0.85; lower = 350↔750 Hz saw klaxon 3×(0.4 on/0.1 off) @4 Hz; upper = C5→E5→G5→C6 sine+triangle + ring', async () => {
+  type Rec = { kind: 'osc' | 'gain'; type: string; set: [number, number][]; ramp: [number, number][]; to: unknown[]; start_: number; stop_: number };
+  let rec: Rec[] = [];
+  const mk = (kind: Rec['kind']): Rec => ({ kind, type: '', set: [], ramp: [], to: [], start_: 0, stop_: 0 });
   class FakeCtx {
-    state = 'suspended'; currentTime = 10; destination = {};
+    state = 'suspended'; currentTime = 10; destination = { dest: true };
     addEventListener() {}
     async resume() { this.state = 'running'; }
-    createGain() { const g = { gain: { setValueAtTime() {}, exponentialRampToValueAtTime() {} }, connect: () => g }; return g; }
-    createOscillator() { const o = { type: '', set: [] as [number, number][], ramp: [] as [number, number][], frequency: { setValueAtTime: (v: number, at: number) => o.set.push([v, at]), exponentialRampToValueAtTime: (v: number, at: number) => o.ramp.push([v, at]) }, connect: (x: unknown) => x, start() {}, stop() {} }; rec.push(o); return o; }
+    createGain() { const r = mk('gain'); rec.push(r); const g = { gain: { setValueAtTime: (v: number, t: number) => r.set.push([v, t]), exponentialRampToValueAtTime: (v: number, t: number) => r.ramp.push([v, t]) }, connect: (x: unknown) => { r.to.push(x); return x; } }; return g; }
+    createOscillator() { const r = mk('osc'); rec.push(r); const o = { set type(v: string) { r.type = v; }, frequency: { setValueAtTime: (v: number, t: number) => r.set.push([v, t]) }, connect: (x: unknown) => { r.to.push(x); return x; }, start: (t: number) => { r.start_ = t; }, stop: (t: number) => { r.stop_ = t; } }; return o; }
   }
   (globalThis as unknown as { window: unknown }).window = { AudioContext: FakeCtx };
-  assert.equal(audioState(), 'suspended'); assert.equal(playChime('upper'), false, 'locked before a gesture');
-  assert.equal(await unlockAudioContext(), 'running'); assert.equal(audioState(), 'running');
-  assert.equal(playChime('upper'), true);
-  near(rec[0].set[0][0], 880, 0); near(rec[0].ramp[0][0], 1760, 0); near(rec[0].ramp[0][1] - rec[0].set[0][1], SWEEP_SEC, 1e-9); near(rec[1].set[0][0], 880 * FIFTH, 0);
-  rec.length = 0; assert.equal(await testChime('lower'), true);
-  near(rec[0].set[0][0], 440, 0); near(rec[0].ramp[0][0], 220, 0); near(rec[0].ramp[0][1] - rec[0].set[0][1], SWEEP_SEC, 1e-9);
+  assert.equal(audioState(), 'suspended'); assert.equal(playChime('upper'), false, 'locked before a gesture'); assert.equal(playChime('lower'), false);
+  assert.equal(await unlockAudioContext(), 'running');
+  const oscs = () => rec.filter((r) => r.kind === 'osc');
+  const masterOf = () => rec.find((r) => r.kind === 'gain' && r.to.some((x) => (x as { dest?: boolean }).dest))!;
+  // ── lower: klaxon
+  rec = []; assert.equal(playChime('lower'), true);
+  near(masterOf().set[0][0], MASTER_GAIN, 1e-12); assert.equal(MASTER_GAIN, 0.85); near(masterOf().set[0][1], 10, 1e-12);
+  const saws = oscs().filter((o) => o.type === 'sawtooth'); const lfos = oscs().filter((o) => o.type === 'sine');
+  assert.equal(saws.length, 6, '3 pulses × 2 sawtooth voices'); assert.equal(lfos.length, 6);
+  for (const l of lfos) near(l.set[0][0], SIREN.lfoHz, 0); assert.equal(SIREN.lfoHz, 4);
+  near(SIREN_CENTER - SIREN_DEPTH, 350, 1e-9); near(SIREN_CENTER + SIREN_DEPTH, 750, 1e-9);
+  const starts = [...new Set(saws.map((o) => Math.round(o.start_ * 1000)))].sort((a, b) => a - b); assert.equal(starts.length, 3); near(starts[1] - starts[0], 500, 1); near(starts[2] - starts[1], 500, 1);
+  for (const s of saws) near(s.stop_ - s.start_, 0.4 + 0.02, 1e-9); // 0.4 s ON (+20 ms stop guard)
+  near(SIREN_SEC, 1.4, 1e-12); near(alarmSeconds('lower'), 1.4, 1e-12);
+  const depthGain = rec.filter((r) => r.kind === 'gain' && r.set[0] && Math.abs(r.set[0][0] - SIREN_DEPTH) < 2); assert.ok(depthGain.length >= 6, 'LFO depth ≈ ±200 Hz wired to the carrier frequency');
+  // ── upper: arpeggio
+  rec = []; assert.equal(playChime('upper'), true);
+  const o2 = oscs(); const sine = o2.filter((o) => o.type === 'sine'); const tri = o2.filter((o) => o.type === 'triangle');
+  [523, 659, 784, 1046].forEach((f, i) => near(tri[i].set[0][0], f, 1)); // equal-tempered C5 E5 G5 C6 (1046.5 ≈ 1046)
+  sine.slice(0, 4).forEach((o, i) => near(o.set[0][0], ARPEGGIO_HZ[i], 0)); // sine blended under each triangle note
+  for (let i = 1; i < 4; i++) near(tri[i].start_ - tri[i - 1].start_, ARP_STEP_SEC, 1e-9);
+  const ring = sine[4]; assert.equal(ring.set[0][0], RING_HZ); assert.ok(RING_HZ > 2000); assert.ok(ring.stop_ - ring.start_ > 1, 'sustained ring'); assert.ok(tri[3].stop_ - tri[3].start_ > 1, 'final C6 sustains');
+  // ── level scaling (audio-ON confirmation) + test button
+  rec = []; playChime('upper', 0.2); near(masterOf().set[0][0], 0.17, 1e-12); rec = []; playChime('upper', 5); near(masterOf().set[0][0], 0.85, 1e-12);
+  rec = []; assert.equal(await testChime('lower'), true); assert.equal(oscs().length, 12);
   delete (globalThis as unknown as { window?: unknown }).window;
+});
+t('alert overlay copy: banners, status notes, signed band labels, 3 s minimum', () => {
+  assert.equal(OVERLAY_TEXT.lower.banner, '▼ LOWER CIRCUIT HALT DETECTED'); assert.equal(OVERLAY_TEXT.lower.note, 'Liquidity Frozen • Sellers Only • Order Execution Paused');
+  assert.equal(OVERLAY_TEXT.upper.banner, '▲ UPPER CIRCUIT BREACH DETECTED'); assert.equal(OVERLAY_TEXT.upper.note, 'Maximum Daily Range Hit • Buyers Only • Circuit Lock Active');
+  assert.equal(bandLabel('lower', 5), '−5%'); assert.equal(bandLabel('upper', 20), '+20%'); assert.ok(OVERLAY_MS >= 3000);
 });
 t('circuit log line: [HH:MM:SS] | SYMBOL | TYPE | ₹price | %change (IST)', () => {
   const at = Date.parse('2026-10-19T09:45:07+05:30');
   assert.equal(istTime(at), '09:45:07');
   assert.equal(logLine({ at, symbol: 'ABC', dir: 'upper', ltp: 220.05, pct: 10.02 }), '[09:45:07] | ABC | UPPER | ₹220.05 | +10.02%');
+  assert.equal(logLine({ at, symbol: 'ABC', dir: 'upper', ltp: 220.05, pct: 10.02, band: 10 }), '[09:45:07] | ABC | UPPER | ₹220.05 | +10.02% | band +10%');
   assert.match(logLine({ at, symbol: 'XYZ', dir: 'lower', ltp: 90, pct: -10 }), /^\[09:45:07\] \| XYZ \| LOWER \| ₹90\.00 \| [-−]10\.00%$/);
 });
 
