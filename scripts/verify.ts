@@ -710,11 +710,11 @@ t('sendEmail: Resend request shape, missing key, provider failure', async () => 
 
 
 import { unlockAudioContext, audioState } from '../lib/chime';
-import { playChime, testChime, MASTER_GAIN, HORN, HORN_SEC, ARPEGGIO_HZ, ARP_STEP_SEC, RING_HZ, alarmSeconds } from '../lib/audioAlerts';
+import { playChime, testChime, MASTER_GAIN, WAIL, WAIL_SEC, ARPEGGIO_HZ, ARP_STEP_SEC, RING_HZ, alarmSeconds } from '../lib/audioAlerts';
 import { OVERLAY_MS, OVERLAY_TEXT, bandLabel } from '../components/CircuitAlertOverlay';
 import { logLine, istTime } from '../components/CircuitLogDrawer';
-t('alarm audio: locked until a gesture; master 0.85 + limiter; lower = danger horn (saw 110 + square 116 + sub 55, lowpass Q6 300→1200→400 Hz, 3×0.45 s / 0.1 s gaps); upper = C5→E5→G5→C6 sine+triangle + ring', async () => {
-  type Rec = { kind: 'osc' | 'gain' | 'filter' | 'comp'; type: string; set: [number, number][]; ramp: [number, number][]; to: unknown[]; start_: number; stop_: number; q: number[] };
+t('alarm audio: locked until a gesture; master 0.85; lower = synthesised 3 s air-raid siren spin-up (260→560 Hz, saws + octave, vibrato, lowpass, swell + fade); upper = C5→E5→G5→C6 sine+triangle + ring', async () => {
+  type Rec = { kind: 'osc' | 'gain' | 'filter'; type: string; set: [number, number][]; ramp: [number, number][]; to: unknown[]; start_: number; stop_: number; q: number[] };
   let rec: Rec[] = [];
   const mk = (kind: Rec['kind']): Rec => ({ kind, type: '', set: [], ramp: [], to: [], start_: 0, stop_: 0, q: [] });
   class FakeCtx {
@@ -722,26 +722,24 @@ t('alarm audio: locked until a gesture; master 0.85 + limiter; lower = danger ho
     addEventListener() {}
     async resume() { this.state = 'running'; }
     createGain() { const r = mk('gain'); rec.push(r); const g = { gain: { setValueAtTime: (v: number, t: number) => r.set.push([v, t]), exponentialRampToValueAtTime: (v: number, t: number) => r.ramp.push([v, t]) }, connect: (x: unknown) => { r.to.push(x); return x; } }; return g; }
-    createDynamicsCompressor() { const r = mk('comp'); rec.push(r); const p = () => ({ setValueAtTime() {} }); return { threshold: p(), knee: p(), ratio: p(), attack: p(), release: p(), connect: (x: unknown) => { r.to.push(x); return x; } }; }
     createBiquadFilter() { const r = mk('filter'); rec.push(r); return { set type(v: string) { r.type = v; }, Q: { setValueAtTime: (v: number) => r.q.push(v) }, frequency: { setValueAtTime: (v: number, t: number) => r.set.push([v, t]), exponentialRampToValueAtTime: (v: number, t: number) => r.ramp.push([v, t]) }, connect: (x: unknown) => { r.to.push(x); return x; } }; }
-    createOscillator() { const r = mk('osc'); rec.push(r); const o = { set type(v: string) { r.type = v; }, frequency: { setValueAtTime: (v: number, t: number) => r.set.push([v, t]) }, connect: (x: unknown) => { r.to.push(x); return x; }, start: (t: number) => { r.start_ = t; }, stop: (t: number) => { r.stop_ = t; } }; return o; }
+    createOscillator() { const r = mk('osc'); rec.push(r); const o = { set type(v: string) { r.type = v; }, frequency: { setValueAtTime: (v: number, t: number) => r.set.push([v, t]), exponentialRampToValueAtTime: (v: number, t: number) => r.ramp.push([v, t]) }, connect: (x: unknown) => { r.to.push(x); return x; }, start: (t: number) => { r.start_ = t; }, stop: (t: number) => { r.stop_ = t; } }; return o; }
   }
   (globalThis as unknown as { window: unknown }).window = { AudioContext: FakeCtx };
   assert.equal(audioState(), 'suspended'); assert.equal(playChime('upper'), false, 'locked before a gesture'); assert.equal(playChime('lower'), false);
   assert.equal(await unlockAudioContext(), 'running');
   const oscs = () => rec.filter((r) => r.kind === 'osc');
-  const masterOf = () => rec.find((r) => r.kind === 'gain' && r.set[0] && r.set[0][1] === 10)!; // the only gain scheduled at currentTime
-  const chain = () => rec.find((r) => r.kind === 'comp')!;
-  // ── lower: danger horn
+  const masterOf = () => rec.find((r) => r.kind === 'gain' && r.to.some((x) => (x as { dest?: boolean }).dest))!;
+  // ── lower: air-raid siren spin-up (synthesised, no samples)
   rec = []; assert.equal(playChime('lower'), true);
-  near(masterOf().set[0][0], MASTER_GAIN, 1e-12); assert.equal(MASTER_GAIN, 0.85); assert.ok(chain().to.some((x) => (x as { dest?: boolean }).dest), 'limiter feeds the destination'); assert.equal(masterOf().to[0] !== undefined, true);
-  const saws = oscs().filter((o) => o.type === 'sawtooth'); const sqs = oscs().filter((o) => o.type === 'square'); const subs = oscs().filter((o) => o.type === 'sine');
-  assert.equal(saws.length, 3); assert.equal(sqs.length, 3); assert.equal(subs.length, 3, '3 blasts × (saw + square + sub)');
-  saws.forEach((o) => near(o.set[0][0], 110, 0)); sqs.forEach((o) => near(o.set[0][0], 116, 0)); subs.forEach((o) => near(o.set[0][0], 55, 0)); near(116 - 110, 6, 0);
-  const filters = rec.filter((r) => r.kind === 'filter'); assert.equal(filters.length, 3);
-  for (const f of filters) { assert.equal(f.type, 'lowpass'); assert.deepEqual(f.q, [6]); assert.equal(f.set[0][0], 300); assert.equal(f.ramp[0][0], 1200); assert.equal(f.ramp[1][0], 400); near(f.ramp[1][1] - f.set[0][1], 0.5, 1e-9); assert.ok(f.ramp[0][1] > f.set[0][1] && f.ramp[0][1] < f.ramp[1][1], 'peaks mid-sweep'); }
-  const st = saws.map((o) => o.start_); near(st[1] - st[0], 0.55, 1e-9); near(st[2] - st[1], 0.55, 1e-9); for (const o of saws) near(o.stop_ - o.start_, 0.45 + 0.02, 1e-9); // 0.45 s blast, 0.1 s gap (+20 ms stop guard)
-  near(HORN_SEC, 1.55, 1e-12); near(alarmSeconds('lower'), 1.55, 1e-12);
+  near(masterOf().set[0][0], MASTER_GAIN, 1e-12); assert.equal(MASTER_GAIN, 0.85); near(masterOf().set[0][1], 10, 1e-12);
+  const saws = oscs().filter((o) => o.type === 'sawtooth'); const tris = oscs().filter((o) => o.type === 'triangle'); const lfo = oscs().filter((o) => o.type === 'sine');
+  assert.equal(saws.length, 2, 'two detuned sawtooth voices'); assert.equal(tris.length, 1, 'octave triangle'); assert.equal(lfo.length, 1, 'vibrato LFO');
+  near(saws[0].set[0][0], 260, 0); near(saws[0].ramp[0][0], 560, 0); near(saws[1].set[0][0], 260 * WAIL.detune, 1e-9); near(tris[0].set[0][0], 520, 0); near(tris[0].ramp[0][0], 1120, 0); near(lfo[0].set[0][0], 5, 0);
+  assert.ok(saws[0].ramp[0][1] > saws[0].set[0][1] + 2, 'pitch climbs over ~2.7 s'); for (const o of [...saws, ...tris]) near(o.stop_ - o.start_, 3.02, 1e-9);
+  const lp = rec.filter((r) => r.kind === 'filter'); assert.equal(lp.length, 1); assert.equal(lp[0].type, 'lowpass'); assert.equal(lp[0].set[0][0], WAIL.cutoffStart); assert.equal(lp[0].ramp[0][0], WAIL.cutoffEnd);
+  const env = rec.find((r) => r.kind === 'gain' && r.set[0] && r.set[0][0] === 0.0001 && r.ramp.length === 2 && r.ramp[0][0] === 1)!; assert.ok(env, 'swell → hold → fade envelope'); near(env.ramp[0][1] - env.set[0][1], WAIL.swellSec, 1e-9); near(env.ramp[1][1] - env.set[0][1], 3, 1e-9);
+  near(WAIL_SEC, 3, 0); near(alarmSeconds('lower'), 3, 0);
   // ── upper: arpeggio
   rec = []; assert.equal(playChime('upper'), true);
   const o2 = oscs(); const sine = o2.filter((o) => o.type === 'sine'); const tri = o2.filter((o) => o.type === 'triangle');
@@ -751,12 +749,13 @@ t('alarm audio: locked until a gesture; master 0.85 + limiter; lower = danger ho
   const ring = sine[4]; assert.equal(ring.set[0][0], RING_HZ); assert.ok(RING_HZ > 2000); assert.ok(ring.stop_ - ring.start_ > 1, 'sustained ring'); assert.ok(tri[3].stop_ - tri[3].start_ > 1, 'final C6 sustains');
   // ── level scaling (audio-ON confirmation) + test button
   rec = []; playChime('upper', 0.2); near(masterOf().set[0][0], 0.17, 1e-12); rec = []; playChime('upper', 5); near(masterOf().set[0][0], 0.85, 1e-12);
-  rec = []; assert.equal(await testChime('lower'), true); assert.equal(oscs().length, 9);
+  rec = []; assert.equal(await testChime('lower'), true); assert.equal(oscs().length, 4);
+
   delete (globalThis as unknown as { window?: unknown }).window;
 });
 t('alert overlay copy: banners, status notes, signed band labels, 3 s minimum', () => {
-  assert.equal(OVERLAY_TEXT.lower.banner, '▼ LOWER CIRCUIT HALT DETECTED'); assert.equal(OVERLAY_TEXT.lower.note, 'BEAR MARKET FREEZE • SELLERS ONLY • EXECUTION PAUSED');
-  assert.equal(OVERLAY_TEXT.upper.banner, '▲ UPPER CIRCUIT BREACH DETECTED'); assert.equal(OVERLAY_TEXT.upper.note, 'BULL MARKET BREAKOUT • BUYERS ONLY • CIRCUIT LOCK ACTIVE');
+  assert.equal(OVERLAY_TEXT.lower.banner, '▼ LOWER CIRCUIT HALT DETECTED'); assert.equal(OVERLAY_TEXT.lower.note, 'Liquidity Frozen • Sellers Only • Order Execution Paused');
+  assert.equal(OVERLAY_TEXT.upper.banner, '▲ UPPER CIRCUIT BREACH DETECTED'); assert.equal(OVERLAY_TEXT.upper.note, 'Maximum Daily Range Hit • Buyers Only • Circuit Lock Active');
   assert.equal(bandLabel('lower', 5), '−5%'); assert.equal(bandLabel('upper', 20), '+20%'); assert.ok(OVERLAY_MS >= 3000);
 });
 t('circuit log line: [HH:MM:SS] | SYMBOL | TYPE | ₹price | %change (IST)', () => {
