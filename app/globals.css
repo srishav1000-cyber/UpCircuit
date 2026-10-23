@@ -71,3 +71,15 @@ kbd {
 }
 
 .scrollbar-thin { scrollbar-width: thin; }
+
+/* Settings → Market & Layout → density */
+html[data-density='compact'] { font-size: 14px; }
+
+/* Live price flash (components/TickPriceFlash.tsx): clean green / red pulse, no harsh flicker */
+.tick-flash {
+  border-radius: 3px;
+  transition: background-color 250ms ease, color 250ms ease;
+}
+.tick-flash[data-flash='up'] { background-color: rgb(var(--c-up) / 0.28); }
+.tick-flash[data-flash='down'] { background-color: rgb(var(--c-down) / 0.28); }
+@media (prefers-reduced-motion: reduce) { .tick-flash { transition: none; } }

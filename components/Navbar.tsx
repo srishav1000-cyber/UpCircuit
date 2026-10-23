@@ -10,6 +10,7 @@ import { AnalysisActions } from './AnalysisActions';
 import { IndexCard } from './IndexCard';
 import { SearchBox } from './SearchBox';
 import { ThemeToggle } from './ThemeToggle';
+import { ProfilePopover } from './ProfilePopover';
 import { ROLES, canUse, planFor, planOf } from '@/lib/auth';
 import { useAuth } from '@/hooks/useAuth';
 
@@ -337,56 +338,8 @@ function PersonaDropdown({ persona, onPersona, className = '', testId = 'persona
   );
 }
 
-function AvatarMenu({ mode, onPlans }: { mode: FeedMode; onPlans?: () => void }) {
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-  const close = useCallback(() => setOpen(false), []);
-  useDismiss(ref, open, close);
-  const { user, signOut, required, getToken } = useAuth();
-  const [csvMsg, setCsvMsg] = useState('');
-  const exportTicks = async () => {
-    setCsvMsg('Preparing…');
-    try {
-      const token = await getToken();
-      const r = await fetch('/api/market/export-csv', { headers: token ? { Authorization: `Bearer ${token}` } : {}, cache: 'no-store' });
-      if (!r.ok) {
-        const j = (await r.json().catch(() => ({}))) as { message?: string };
-        return setCsvMsg(j.message ?? 'No ticks available yet.');
-      }
-      const url = URL.createObjectURL(await r.blob());
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = /filename="([^"]+)"/.exec(r.headers.get('content-disposition') ?? '')?.[1] ?? 'upcircuit-ticks.csv';
-      a.click();
-      URL.revokeObjectURL(url);
-      setCsvMsg('');
-    } catch {
-      setCsvMsg('Export failed.');
-    }
-  };
-  const email = user?.email ?? '';
-  const initials = (email.split('@')[0] || 'U').slice(0, 2).toUpperCase();
-  return (
-    <div ref={ref} className="relative">
-      <button onClick={() => setOpen((o) => !o)} aria-haspopup="menu" aria-expanded={open} aria-label="Account menu" data-testid="account-menu" className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent/20 text-[12px] font-bold text-accent ring-1 ring-accent/50 hover:bg-accent/30">
-        {initials}
-      </button>
-      {open && (
-        <div role="menu" className="absolute right-0 top-full z-50 mt-2 w-60 rounded-md border border-line bg-panel py-1 text-[13px] shadow-2xl shadow-black/40">
-          <div className="border-b border-line px-3 py-2">
-            <div className="truncate font-semibold text-ink" data-testid="account-email">{email}</div>
-            <div className="text-[11px] text-muted" data-testid="account-plan">Tier {planOf(user?.plan).tier} · {planOf(user?.plan).name} · {mode === 'live' ? 'Live feed' : mode === 'snapshot' ? 'Off-market · SmartAPI data' : 'Offline session data'}</div>
-          </div>
-          <button role="menuitem" data-testid="account-plans" className="block w-full px-3 py-1.5 text-left text-ink hover:bg-line" onClick={() => { close(); onPlans?.(); }}>💳 Plans &amp; upgrade</button>
-          <button role="menuitem" data-testid="account-export-ticks" className="block w-full px-3 py-1.5 text-left text-ink hover:bg-line" onClick={() => void exportTicks()}>⬇ Export session ticks (CSV)</button>
-          {csvMsg && <div className="px-3 pb-1 text-[11px] text-muted" data-testid="account-export-msg">{csvMsg}</div>}
-          {required && (
-            <button role="menuitem" data-testid="account-logout" className="block w-full border-t border-line px-3 py-1.5 text-left text-down hover:bg-line" onClick={() => { close(); void signOut(); }}>Log out</button>
-          )}
-        </div>
-      )}
-    </div>
-  );
+function AvatarMenu({ mode, conn, liveReason, onPlans }: { mode: FeedMode; conn: FeedConn; liveReason?: LiveReason; onPlans?: () => void }) {
+  return <ProfilePopover mode={mode} conn={conn} liveReason={liveReason} onPlans={onPlans} />;
 }
 
 
@@ -427,7 +380,7 @@ export function Navbar({ view, onView, persona, onPersona, onPlans, audioOn = tr
           <AnalysisActions {...actionProps} variant="responsive" />
         </div>
         <div className="hidden sm:block">
-          <AvatarMenu mode={mode} onPlans={onPlans} />
+          <AvatarMenu mode={mode} conn={conn} liveReason={liveReason} onPlans={onPlans} />
         </div>
       </div>
 
@@ -439,7 +392,7 @@ export function Navbar({ view, onView, persona, onPersona, onPlans, audioOn = tr
         <PersonaDropdown persona={persona} onPersona={onPersona} className="sm:hidden" testId="persona-dropdown-mobile" compact />
         <ActionsMenu {...actionProps} />
         <UploadButton onClick={onOpenImport} />
-        <div className="sm:hidden"><AvatarMenu mode={mode} onPlans={onPlans} /></div>
+        <div className="sm:hidden"><AvatarMenu mode={mode} conn={conn} liveReason={liveReason} onPlans={onPlans} /></div>
       </div>
 
       {/* feed status + index ticker */}

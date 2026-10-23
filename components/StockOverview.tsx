@@ -6,6 +6,7 @@ import type { Fundamentals, Instrument, Quote } from '@/lib/types';
 import { fundamentalsOf, orNA, ratioTone, type Tone } from '@/lib/fundamentals';
 import { getScreener, peerCandidates, rangePct } from '@/lib/screener';
 import { mergeLive } from '@/lib/yahooFundamentals';
+import { liveFundamentals, smartApiLabel } from '@/lib/liveFundamentals';
 import { useFundamentals } from '@/hooks/useFundamentals';
 import { dayPct } from '@/lib/analytics';
 import { fmt, fmtCr, fmtPct, tone as signTone } from '@/lib/format';
@@ -13,12 +14,13 @@ import { Badge, Card } from './ui';
 
 const DOT: Record<Tone, string> = { good: 'bg-up', ok: 'bg-warn', bad: 'bg-down', na: 'bg-muted/50' };
 
-function Ratio({ label, value, sub, t = 'na' }: { label: string; value: React.ReactNode; sub?: React.ReactNode; t?: Tone }) {
+function Ratio({ label, value, sub, t = 'na', live }: { label: string; value: React.ReactNode; sub?: React.ReactNode; t?: Tone; live?: string }) {
   return (
     <div className="min-w-0 rounded-md border border-line bg-bg/50 p-2.5" data-testid="ratio-cell">
       <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted">
         <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${DOT[t]}`} aria-hidden />
         <span className="truncate">{label}</span>
+        {live && <span data-testid="ratio-live" className="ml-auto shrink-0 rounded border border-emerald-500/40 bg-emerald-500/10 px-1 text-[8.5px] font-semibold normal-case tracking-normal text-emerald-400">[{live}]</span>}
       </div>
       <div className="num mt-1 truncate text-[15px] font-semibold text-ink">{value}</div>
       {sub && <div className="num truncate text-[10.5px] text-muted">{sub}</div>}
@@ -85,6 +87,8 @@ export function StockOverview({ quote: rawQuote, engine, instruments, onOpenPeer
   } as typeof rawQuote;
   const live = useFundamentals(quote.symbol, quote.exch ?? 'NSE');
   const s = useMemo(() => mergeLive(getScreener(quote), live.data, quote.ltp), [quote.symbol, quote.sector, quote.mcapCr, Math.round(quote.ltp * 20), Math.round(quote.high * 20), Math.round(quote.low * 20), live.data]); // eslint-disable-line react-hooks/exhaustive-deps
+  const lf = liveFundamentals({ ltp: quote.ltp, mode: engine.mode, sharesCr: engine.sharesOf(quote.symbol), eps: s.eps, bookValue: s.bookValue, yahooMcapCr: s.marketCapCr, yahooPe: s.pe });
+  const sa = (c: { source: string }) => (c.source === 'smartapi' ? smartApiLabel(engine.mode) : undefined);
   const f: Fundamentals = fundamentalsOf(s);
   const [qMode, setQMode] = useState<'values' | 'qoq'>('values');
 
@@ -140,10 +144,10 @@ export function StockOverview({ quote: rawQuote, engine, instruments, onOpenPeer
 
       {/* 1 · key ratios */}
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-4" aria-label="Key ratios">
-        <Ratio label="Market Cap" value={orNA(s.marketCapCr, (n) => `₹${fmtCr(n).replace(/^₹/, '')}`)} sub={s.marketCapCr === null ? undefined : `₹${fmt(s.marketCapCr, 0)} Cr`} />
+        <Ratio label="Market Cap" live={sa(lf.marketCapCr)} value={orNA(lf.marketCapCr.value, (n) => `₹${fmtCr(n).replace(/^₹/, '')}`)} sub={lf.marketCapCr.value === null ? undefined : `₹${fmt(lf.marketCapCr.value, 0)} Cr`} />
         <Ratio label="Current Price" value={`₹${fmt(quote.ltp)}`} sub={s.high52 === null || s.low52 === null ? '52W N/A' : `52W ${fmt(s.high52)} / ${fmt(s.low52)}`} />
-        <Ratio label="Stock P/E" value={orNA(s.pe, (n) => n.toFixed(1))} sub="Industry P/E N/A" t={ratioTone('pe', f)} />
-        <Ratio label="Book Value" value={orNA(s.bookValue, (n) => `₹${fmt(n)}`)} sub={s.bookValue === null ? undefined : `P/B ${(quote.ltp / s.bookValue).toFixed(1)}`} />
+        <Ratio label="Stock P/E" live={sa(lf.pe)} value={orNA(lf.pe.value, (n) => n.toFixed(1))} sub="Industry P/E N/A" t={ratioTone('pe', f)} />
+        <Ratio label="Book Value" live={sa(lf.pb)} value={orNA(s.bookValue, (n) => `₹${fmt(n)}`)} sub={lf.pb.value === null ? undefined : `P/B ${lf.pb.value.toFixed(1)}`} />
         <Ratio label="Dividend Yield" value={orNA(s.dividendYield, (n) => `${n.toFixed(2)}%`)} t={ratioTone('dividendYield', f)} />
         <Ratio label="ROCE / ROE" value={`${orNA(s.roce, (n) => `${n.toFixed(1)}%`)} / ${orNA(s.roe, (n) => `${n.toFixed(1)}%`)}`} t={ratioTone('roce', f)} />
         <Ratio label="Face Value / D:E" value={`${orNA(s.faceValue, (n) => `₹${n}`)} / ${orNA(s.debtToEquity, (n) => n.toFixed(2))}`} t={ratioTone('debtToEquity', f)} />

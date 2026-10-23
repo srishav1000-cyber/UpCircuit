@@ -3,8 +3,11 @@ import type { Instrument } from './types';
 interface Entry {
   item: Instrument;
   sym: string; // alnum-only, lowercase
+  code: string; // BSE scrip code ('' when unknown)
   nameN: string;
   words: string[];
+  symMask: number;
+  wordMasks: number[];
 }
 
 export interface SearchIndex {
@@ -12,14 +15,20 @@ export interface SearchIndex {
 }
 
 const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
+/** 32-bit character-set signature (collisions only loosen it, so it stays a safe pre-filter) */
+const cmask = (s: string): number => { let m = 0; for (let i = 0; i < s.length; i++) m |= 1 << (s.charCodeAt(i) & 31); return m; };
+const pop = (x: number): number => { x -= (x >>> 1) & 0x55555555; x = (x & 0x33333333) + ((x >>> 2) & 0x33333333); return (((x + (x >>> 4)) & 0x0f0f0f0f) * 0x01010101) >>> 24; };
 
 export function buildIndex(items: Instrument[]): SearchIndex {
   return {
     entries: items.map((item) => ({
       item,
       sym: norm(item.symbol),
+      code: item.code ?? '',
       nameN: norm(item.name),
       words: item.name.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean),
+      symMask: cmask(norm(item.symbol)),
+      wordMasks: item.name.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean).map(cmask),
     })),
   };
 }
@@ -56,8 +65,14 @@ function lev(a: string, b: string): number {
   return dp[n];
 }
 
+const DIGITS = /^\d{3,}$/;
 function score(e: Entry, q: string, tokens: string[]): number {
   if (e.sym === q) return 1000;
+  // BSE scrip code: "500325" → exact, "5003" → prefix (a purely numeric query of ≥ 3 digits)
+  if (e.code && DIGITS.test(q)) {
+    if (e.code === q) return 1000;
+    if (e.code.startsWith(q)) return 880 - (e.code.length - q.length) * 5;
+  }
   if (e.sym.startsWith(q)) return 900 - (e.sym.length - q.length) * 2;
 
   // every token is a prefix of a distinct-ish name word ("south ind" → South Indian Bank)
@@ -80,14 +95,21 @@ function score(e: Entry, q: string, tokens: string[]): number {
   const ni = e.nameN.indexOf(q);
   if (ni >= 0) return 400 - Math.min(ni, 100);
 
+  return 0;
+}
+
+/** Typo / subsequence tolerance — only evaluated when the cheap rules above found fewer than `limit` matches (keeps an 8k master at ~1 ms per keystroke). */
+function scoreFuzzy(e: Entry, q: string): number {
   const gaps = isSubsequence(q, e.sym);
   if (gaps >= 0 && q.length >= 3) return 260 - gaps * 25;
 
   // typo tolerance: compare against the symbol prefix and each name word prefix
   if (q.length >= 4) {
     const maxD = q.length >= 7 ? 2 : 1;
-    let d = lev(q, e.sym.slice(0, q.length));
-    for (const w of e.words) d = Math.min(d, lev(q, w.slice(0, q.length)));
+    // each edit can account for at most one distinct missing character, so a signature mismatch above maxD rules a candidate out without running lev
+    const qm = cmask(q);
+    let d = pop(qm & ~e.symMask) > maxD ? 99 : lev(q, e.sym.slice(0, q.length));
+    for (let k = 0; k < e.words.length; k++) if (pop(qm & ~e.wordMasks[k]) <= maxD) d = Math.min(d, lev(q, e.words[k].slice(0, q.length)));
     if (d <= maxD) return 200 - d * 40;
   }
   return 0;
@@ -98,8 +120,16 @@ export function searchInstruments(index: SearchIndex, query: string, limit = 8):
   if (!q) return [];
   const tokens = query.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
   const scored: { item: Instrument; s: number }[] = [];
+  const tk = tokens.length > 1 ? tokens : [];
+  const rest: Entry[] = [];
   for (const e of index.entries) {
-    const s = score(e, q, tokens.length > 1 ? tokens : []);
+    const s = score(e, q, tk);
+    if (s > 0) scored.push({ item: e.item, s });
+    else rest.push(e);
+  }
+  // every fuzzy score (≤ 260) is below every cheap score (≥ 300), so they can only fill free slots
+  if (scored.length < limit) for (const e of rest) {
+    const s = scoreFuzzy(e, q);
     if (s > 0) scored.push({ item: e.item, s });
   }
   scored.sort((a, b) => b.s - a.s || a.item.symbol.length - b.item.symbol.length || a.item.symbol.localeCompare(b.item.symbol));

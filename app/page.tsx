@@ -15,6 +15,12 @@ import { useAudioAlerts } from '@/hooks/useAudioAlerts';
 import { appUrl } from '@/lib/appUrl';
 import { CircuitLogDrawer } from '@/components/CircuitLogDrawer';
 import { sendCircuitEmail } from '@/lib/alertEmail';
+import { sendCircuitPush } from '@/lib/alertPush';
+import { currentPushEndpoint } from '@/lib/pushNotifications';
+import { getNotify } from '@/lib/notifyStore';
+import { useCloud } from '@/hooks/useCloud';
+import { useNotifySync } from '@/hooks/useNotify';
+import { mergeHolding } from '@/lib/holdingsStore';
 import { HomePage } from '@/components/HomePage';
 import { ChartWorkspace } from '@/components/ChartWorkspace';
 import { StockResearchModal } from '@/components/StockResearchModal';
@@ -129,14 +135,28 @@ function Terminal() {
   const watch = useMemo(() => [...allWatched, ...rawHoldings.map((h) => h.symbol), ...alertSymbols], [allWatched, rawHoldings, alertSymbols]);
   const { engine, version, mode, conn, liveReason, state: dataState, retry: retryData } = useMarket(instruments, symbol, watch, focus);
 
+  useNotifySync();
+  const { cloud, userId: cloudUser } = useCloud();
   const audio = useAudioAlerts();
+  // startup screen (Settings → Market & Layout): once per page load, only when the URL did not already pick a view / symbol
+  const landed = useRef(false);
+  useEffect(() => {
+    if (landed.current || !user) return;
+    landed.current = true;
+    if (getNotify().landing === 'terminal' && !window.location.pathname.startsWith('/terminal') && !new URLSearchParams(window.location.search).get('symbol')) setView('terminal');
+  }, [user]);
   const [logOpen, setLogOpen] = useState(false);
   const circuitSymbols = useMemo(() => [...new Set([...favs, ...focus])], [favs, focus]);
   const demo = useDemoSimulator(engine, circuitSymbols);
   const watchedForCircuits = useMemo(() => [...new Set([...circuitSymbols, ...demo.symbols])], [circuitSymbols, demo.symbols]);
   const circuit = useCircuitAlerts(engine, version, watchedForCircuits, (hit) => {
-    // e-mail the signed-in user (Supabase accounts only; the server uses the verified account address)
-    void getToken().then((t) => sendCircuitEmail(hit, t));
+    // every real hit is logged to the account's alert_history; e-mail / push follow the Settings toggles (Supabase accounts only)
+    if (cloud && cloudUser) void cloud.logAlert(cloudUser, { symbol: hit.symbol, direction: hit.dir === 'upper' ? 'UPPER' : 'LOWER', band: hit.band, price: hit.ltp }).catch(() => undefined);
+    const n = getNotify();
+    void getToken().then(async (t) => {
+      if (n.email) void sendCircuitEmail(hit, t);
+      if (n.push) void sendCircuitPush(hit, t, await currentPushEndpoint());
+    });
   }, demo.active);
 
   const quote = engine.touch(symbol) ?? engine.quotes.get('RELIANCE') ?? engine.quotes.values().next().value ?? EMPTY_QUOTE(symbol);
@@ -206,6 +226,17 @@ function Terminal() {
       setImportOpen(false);
     },
     [setHoldings, flash, user?.plan],
+  );
+
+  const holdingsRef = useRef(rawHoldings);
+  holdingsRef.current = rawHoldings;
+  const addHolding = useCallback(
+    (h: Holding): string | null => {
+      setHoldings(mergeHolding(holdingsRef.current, h));
+      flash(`Added ${h.qty} × ${h.symbol} to your portfolio`);
+      return null;
+    },
+    [setHoldings, flash],
   );
 
   const act = useCallback(
@@ -331,6 +362,7 @@ function Terminal() {
         <main className="grid min-h-0 flex-1 lg:grid-cols-[minmax(0,1.45fr)_minmax(400px,1fr)]">
           <section className="min-h-[600px] min-w-0 border-r border-line lg:min-h-0">
             <ChartWorkspace
+              subscribeTicks={engine.onTick}
               quote={quote}
               tf={tf}
               onTf={setTf}
@@ -391,7 +423,7 @@ function Terminal() {
             <div key={persona} data-testid="persona-view" className={`animate-fade-in ${dashFs.fs ? 'p-3 sm:p-5' : ''}`}>
               {canUse(user?.plan, persona) && (persona === 'day' || persona === 'retail') && (
                 <>
-                  <MyFocusBasket persona={persona} engine={engine} version={version} focus={focus} selected={symbol} glow={circuit.glow} candidates={focusCandidates} holdings={holdings} onSelect={setSymbol} onToggle={(sym) => { const r = toggleFocus(sym); return r.ok ? null : r.error; }} />
+                  <MyFocusBasket persona={persona} engine={engine} version={version} focus={focus} selected={symbol} glow={circuit.glow} candidates={focusCandidates} instruments={instruments} priceOf={(s) => engine.touch(s)?.ltp} holdings={holdings} onSelect={setSymbol} onToggle={(sym) => { const r = toggleFocus(sym); return r.ok ? null : r.error; }} />
                   {focus.includes(symbol) && (
                     <FocusDeepDive engine={engine} quote={quote} mode={mode} onExpand={expandChart} />
                   )}
@@ -440,7 +472,7 @@ function Terminal() {
         />
       )}
 
-      {importOpen && <PortfolioUploadModal instruments={instruments} engine={engine} mode={mode} onImport={importPortfolio} onReset={() => { resetHoldings(); setImportOpen(false); }} onClose={() => setImportOpen(false)} />}
+      {importOpen && <PortfolioUploadModal instruments={instruments} engine={engine} mode={mode} onAddHolding={addHolding} onImport={importPortfolio} onReset={() => { resetHoldings(); setImportOpen(false); }} onClose={() => setImportOpen(false)} />}
 
       <WatchlistDrawer
         open={watchOpen}

@@ -4,7 +4,8 @@ import { useEffect, useRef, useState } from 'react';
 import type { CircuitDir } from '@/lib/circuit';
 import type { CircuitEvent } from '@/hooks/useCircuitAlerts';
 import { fmt, fmtInt, fmtPct } from '@/lib/format';
-import { playChime } from '@/lib/audioAlerts';
+import { playChime, soundFor } from '@/lib/audioAlerts';
+import { getNotify } from '@/lib/notifyStore';
 
 /** minimum time (ms) each alert stays on screen before it auto-advances */
 export const OVERLAY_MS = 3000;
@@ -99,7 +100,7 @@ export function CircuitAlertOverlay({ log, audioOn = true }: { log: CircuitEvent
   }, [head]);
   // the alarm is tied to the card on screen, so every queued alert gets its own sound (klaxon for lower, arpeggio for upper)
   useEffect(() => {
-    if (head && audioOn) playChime(head.dir);
+    if (head && audioOn) { const n = getNotify(); playChime(soundFor(head.dir, n.sound), n.volume); }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [head]);
   useEffect(() => {

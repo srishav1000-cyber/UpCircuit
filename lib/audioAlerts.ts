@@ -5,6 +5,8 @@
 import { getAudioContext, unlockAudioContext } from './chime';
 
 export type ChimeKind = 'upper' | 'lower';
+/** Settings → alarm sound: 'default' = siren for lower circuits + chime for upper; 'arpeggio' = the arpeggio for both */
+export const soundFor = (dir: ChimeKind, sound: 'default' | 'arpeggio'): ChimeKind => (sound === 'arpeggio' ? 'upper' : dir);
 /** master output level */
 export const MASTER_GAIN = 0.85;
 

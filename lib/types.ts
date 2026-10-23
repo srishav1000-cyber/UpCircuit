@@ -4,6 +4,8 @@ export interface Instrument {
   sector: string;
   /** listing venue; absent = NSE. BSE-only names carry "BSE" (dual-listed names are kept as NSE). */
   exch?: 'NSE' | 'BSE';
+  /** BSE scrip code (e.g. 500325 = RELIANCE) — searchable by number; present once the master was synced from Angel One's scrip master */
+  code?: string;
 }
 
 export interface Quote extends Instrument {

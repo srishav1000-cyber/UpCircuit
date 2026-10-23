@@ -5,6 +5,10 @@ import { Providers } from '@/components/Providers';
 export const metadata: Metadata = {
   title: 'UpCircuit — Trading Terminal',
   description: 'Discovery, stock research and role-based analytics for NSE equities.',
+  manifest: '/manifest.json',
+  applicationName: 'UpCircuit',
+  appleWebApp: { capable: true, title: 'UpCircuit', statusBarStyle: 'black-translucent' },
+  icons: { icon: '/icon.svg', apple: '/icons/apple-touch-icon.png' },
 };
 export const viewport: Viewport = {
   themeColor: [

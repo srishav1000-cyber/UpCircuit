@@ -1,3 +1,4 @@
+-- NOTE: superseded by docs/PERSISTENCE_SCHEMA.sql (adds portfolios, per-symbol watchlists, alert_history, push_subscriptions, Google/phone profile fields). Run that file instead; it migrates this schema in place.
 -- UpCircuit — Supabase schema. Run in the Supabase SQL editor.
 -- The browser (anon key) may read its own profile and change ONLY `role`; `plan` is written by billing (service-role key / webhook).
 

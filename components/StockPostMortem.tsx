@@ -1,5 +1,6 @@
 'use client';
 
+import { TickPriceFlash } from './TickPriceFlash';
 import { useMemo } from 'react';
 import { Card } from './ui';
 import { DataBadge, liveKind } from './DataBadge';
@@ -8,6 +9,7 @@ import { OrderFlowHeatmap } from './OrderFlowHeatmap';
 import { useFundamentals } from '@/hooks/useFundamentals';
 import { getScreener } from '@/lib/screener';
 import { mergeLive } from '@/lib/yahooFundamentals';
+import { liveFundamentals, smartApiLabel, type LiveCell } from '@/lib/liveFundamentals';
 import { fmt, fmtInt, fmtPct, tone } from '@/lib/format';
 import { rsi14 } from '@/lib/analytics/rsi';
 import { relativeStrength } from '@/lib/analytics/relative';
@@ -20,9 +22,9 @@ const DOT: Record<Light, string> = { green: 'bg-up shadow-[0_0_10px_rgb(var(--c-
 const WORD: Record<Light, string> = { green: 'Healthy', yellow: 'Watch', red: 'Weak', na: 'N/A' };
 
 /** Fundamentals + provenance tag: real value → [Yahoo Fundamentals], missing → [N/A]. Never estimated. */
-function Cell({ label, value, kind, label2 }: { label: string; value: string; kind: SourceKind; label2?: string }) {
+function Cell({ label, value, kind, label2, title }: { label: string; value: string; kind: SourceKind; label2?: string; title?: string }) {
   return (
-    <div className="rounded border border-line bg-bg px-2.5 py-2" data-testid="pm-cell" data-field={label}>
+    <div className="rounded border border-line bg-bg px-2.5 py-2" data-testid="pm-cell" data-field={label} data-kind={kind} title={title}>
       <div className="text-[10px] font-medium uppercase tracking-wider text-muted">{label}</div>
       <div className={`num mt-0.5 text-[15px] font-semibold ${kind === 'na' ? 'text-muted' : 'text-ink'}`}>{value}</div>
       <div className="mt-1"><DataBadge kind={kind} label={label2} /></div>
@@ -47,11 +49,13 @@ export function StockPostMortem({ engine, quote, mode }: { engine: MarketEngine;
   const lights = healthLights({ debtToEquity: s.debtToEquity, roe: s.roe, roce: s.roce, pe: s.pe, rsi, ret1mPct: ret1m, aboveVwap: vwap === null ? null : quote.ltp >= vwap });
 
   const yf = (v: number | null, f: (n: number) => string): { value: string; kind: SourceKind } => (v === null || !Number.isFinite(v) ? { value: 'N/A', kind: 'na' } : { value: f(v), kind: 'yahoo' });
-  const pb = s.bookValue !== null && s.bookValue > 0 ? quote.ltp / s.bookValue : null;
-  const cells: { label: string; value: string; kind: SourceKind; label2?: string }[] = [
-    { label: 'Market cap (₹ Cr)', ...yf(s.marketCapCr, (n) => fmtInt(Math.round(n))), label2: 'Yahoo Fundamentals' },
-    { label: 'P/E ratio', ...yf(s.pe, (n) => n.toFixed(1)), label2: 'Yahoo Fundamentals' },
-    { label: 'P/B ratio', value: pb === null ? 'N/A' : pb.toFixed(2), kind: pb === null ? 'na' : 'computed' },
+  const lf = liveFundamentals({ ltp: quote.ltp, mode, sharesCr: engine.sharesOf(symbol), eps: s.eps, bookValue: s.bookValue, yahooMcapCr: s.marketCapCr, yahooPe: s.pe });
+  const lc = (c: LiveCell, f: (n: number) => string): { value: string; kind: SourceKind; label2?: string; title?: string } =>
+    c.value === null ? { value: 'N/A', kind: 'na' } : c.source === 'smartapi' ? { value: f(c.value), kind: 'smartapi', label2: smartApiLabel(mode), title: c.formula } : c.source === 'computed' ? { value: f(c.value), kind: 'computed', title: c.formula } : { value: f(c.value), kind: 'yahoo', label2: 'Yahoo Fundamentals' };
+  const cells: { label: string; value: string; kind: SourceKind; label2?: string; title?: string }[] = [
+    { label: 'Market cap (₹ Cr)', ...lc(lf.marketCapCr, (n) => fmtInt(Math.round(n))) },
+    { label: 'P/E ratio', ...lc(lf.pe, (n) => n.toFixed(1)) },
+    { label: 'P/B ratio', ...lc(lf.pb, (n) => n.toFixed(2)) },
     { label: 'ROE (%)', ...yf(s.roe, (n) => n.toFixed(1)), label2: 'Yahoo Fundamentals' },
     { label: 'ROCE (%)', ...yf(s.roce, (n) => n.toFixed(1)), label2: 'Yahoo Fundamentals' },
     { label: 'Debt to equity', ...yf(s.debtToEquity, (n) => n.toFixed(2)), label2: 'Yahoo Fundamentals' },
@@ -63,7 +67,7 @@ export function StockPostMortem({ engine, quote, mode }: { engine: MarketEngine;
 
   return (
     <div data-testid="post-mortem" data-symbol={symbol} className="space-y-3">
-      <Card title={`Screener fundamentals · ${symbol}`} right={<span className="flex items-center gap-1.5 text-[10px] text-muted">Last price <b className="num text-ink">₹{fmt(quote.ltp)}</b> <DataBadge kind={liveKind(mode as FeedMode)} /></span>}>
+      <Card title={`Screener fundamentals · ${symbol}`} right={<span className="flex items-center gap-1.5 text-[10px] text-muted">Last price <b className="num text-ink"><TickPriceFlash value={quote.ltp}>₹{fmt(quote.ltp)}</TickPriceFlash></b> <DataBadge kind={liveKind(mode as FeedMode)} /></span>}>
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
           {cells.map((c) => <Cell key={c.label} {...c} />)}
         </div>
@@ -71,13 +75,13 @@ export function StockPostMortem({ engine, quote, mode }: { engine: MarketEngine;
       </Card>
 
       <div className="grid gap-3 lg:grid-cols-2">
-        <Card title={`Relative strength vs NIFTY 50`} badges={['yahoo', 'computed']}>
+        <Card title={`Relative strength vs NIFTY 50`} right={<span className="flex items-center gap-1"><DataBadge kind={liveKind(mode as FeedMode)} label={mode === 'live' ? 'SmartAPI Live · 1D' : mode === 'snapshot' ? 'SmartAPI Last Price · 1D' : 'Yahoo Delayed · 1D'} /><DataBadge kind="yahoo" label="Yahoo · 1W / 1M" /></span>}>
           <table className="num w-full text-[12px]" data-testid="rel-strength">
             <thead><tr className="text-left text-[10px] uppercase tracking-wider text-muted"><th className="pb-1 font-medium">Period</th><th className="pb-1 text-right font-medium">{symbol}</th><th className="pb-1 text-right font-medium">NIFTY 50</th><th className="pb-1 text-right font-medium">Relative</th></tr></thead>
             <tbody>
               {rel.map((r) => (
                 <tr key={r.id} data-testid={`rs-${r.id}`} data-rs={r.rs === null ? 'na' : r.rs.toFixed(2)}>
-                  <td className="py-1 text-muted">{r.id}</td>
+                  <td className="py-1 text-muted">{r.id}{r.id === '1D' && (mode === 'live' || mode === 'snapshot') && <span className="ml-1 text-[9px] text-up" title="Live LTP % change − NIFTY 50 live % change">●</span>}</td>
                   <td className="py-1 text-right">{pct(r.stock)}</td>
                   <td className="py-1 text-right">{pct(r.bench)}</td>
                   <td className="py-1 text-right font-semibold">{r.rs === null ? <span className="text-muted">N/A</span> : <span className={tone(r.rs)}>{r.rs >= 0 ? '+' : '−'}{Math.abs(r.rs).toFixed(2)} pp {r.rs >= 0 ? '▲' : '▼'}</span>}</td>

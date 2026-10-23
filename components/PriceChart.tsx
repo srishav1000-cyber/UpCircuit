@@ -34,9 +34,11 @@ interface Props {
   className?: string;
   /** true while SmartAPI ticks stream: the last candle then follows the LTP. On Yahoo data the candles are the real bars, refreshed every minute. */
   live?: boolean;
+  /** zero-delay tick feed (engine.onTick): when given, every exchange tick updates the candle series immediately, outside React's render cycle */
+  subscribeTicks?: (fn: (e: { symbol: string; ltp: number; volume: number; ts: number }) => void) => () => void;
 }
 
-export function PriceChart({ symbol, ltp, volume, tf, onTf, className = '', live = false }: Props) {
+export function PriceChart({ symbol, ltp, volume, tf, onTf, className = '', live = false, subscribeTicks }: Props) {
   const [dataState, setDataState] = useState<'loading' | 'ok' | 'empty'>('loading');
   const [reload, setReload] = useState(0);
   const loadedKey = useRef('');
@@ -222,27 +224,55 @@ export function PriceChart({ symbol, ltp, volume, tf, onTf, className = '', live
   }, []);
 
 
-  // live tick → update / roll the last candle
-  useEffect(() => {
+  // live tick → update / roll the last candle. `applyLive` is the single code path: it runs synchronously from the engine's tick listener
+  // (every exchange tick, no batching) and, when no listener is wired, from the throttled React props as before.
+  const tfRef = useRef(tf);
+  tfRef.current = tf;
+  const readout = useRef<{ timer: ReturnType<typeof setTimeout> | null; bar: Candle | null }>({ timer: null, bar: null });
+  const applyLive = useCallback((px: number, vol: number, now: number) => {
     const candles = candleRef.current;
-    const vol = volRef.current;
+    const v = volRef.current;
     const cur = last.current;
-    if (!candles || !vol || !cur || !liveRef.current) return; // Yahoo data: candles are the real bars, never extended locally
-    const dv = Math.max(0, volume - prevVolume.current);
-    prevVolume.current = volume;
-    const bucket = bucketTime(tf, Date.now());
+    if (!candles || !v || !cur || !liveRef.current || !(px > 0)) return; // Yahoo data: candles are the real bars, never extended locally
+    const dv = Math.max(0, vol - prevVolume.current);
+    prevVolume.current = vol;
+    const bucket = bucketTime(tfRef.current, now);
     const next: Candle =
       bucket > cur.time
-        ? { time: bucket, open: cur.close, high: Math.max(cur.close, ltp), low: Math.min(cur.close, ltp), close: ltp, volume: dv }
-        : { ...cur, high: Math.max(cur.high, ltp), low: Math.min(cur.low, ltp), close: ltp, volume: cur.volume + dv };
+        ? { time: bucket, open: cur.close, high: Math.max(cur.close, px), low: Math.min(cur.close, px), close: px, volume: dv }
+        : { ...cur, high: Math.max(cur.high, px), low: Math.min(cur.low, px), close: px, volume: cur.volume + dv };
     last.current = next;
     if (bucket > cur.time) barsRef.current = [...barsRef.current, next];
     else barsRef.current[barsRef.current.length - 1] = next;
     byTime.current.set(next.time, next);
     candles.update(toBar(next));
-    if (!isIndexRef.current) vol.update(toVol(next, thRef.current));
-    setLiveBar(next);
-  }, [ltp, volume, tf]);
+    if (!isIndexRef.current) v.update(toVol(next, thRef.current));
+    if (host.current) { // diagnostics: how many candle updates the canvas received (verifies the zero-batching path)
+      host.current.dataset.liveUpdates = String(Number(host.current.dataset.liveUpdates ?? 0) + 1);
+      host.current.dataset.lastPx = String(px);
+    }
+    // the O/H/L/C text readout is DOM: refresh it at most every 250 ms (the canvas above is NOT throttled)
+    readout.current.bar = next;
+    if (!readout.current.timer) {
+      readout.current.timer = setTimeout(() => {
+        readout.current.timer = null;
+        if (readout.current.bar) setLiveBar(readout.current.bar);
+      }, 250);
+    }
+  }, []);
+  useEffect(() => () => { if (readout.current.timer) clearTimeout(readout.current.timer); }, []);
+  const direct = !!subscribeTicks && live;
+  useEffect(() => {
+    if (!direct || !subscribeTicks) return;
+    const id = resolveIndex(symbol)?.id ?? symbol;
+    return subscribeTicks((e) => {
+      if (e.symbol === id) applyLive(e.ltp, e.volume, Date.now());
+    });
+  }, [direct, subscribeTicks, symbol, applyLive]);
+  useEffect(() => {
+    if (direct) return; // the listener above already applied this tick
+    applyLive(ltp, volume, Date.now());
+  }, [ltp, volume, tf, direct, applyLive]);
 
   const shown = hover ?? liveBar;
 

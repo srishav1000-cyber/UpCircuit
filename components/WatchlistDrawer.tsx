@@ -1,5 +1,6 @@
 'use client';
 
+import { TickPriceFlash } from './TickPriceFlash';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { MarketEngine } from '@/lib/market';
 import { buildIndex, searchInstruments } from '@/lib/fuzzy';
@@ -206,7 +207,7 @@ export function WatchlistDrawer({ open, onClose, instruments, engine, lists, act
                       <div className="truncate text-[11px] text-muted">{inst?.name ?? quote?.name ?? ''}</div>
                     </button>
                     <div className="num text-right">
-                      <div className="text-[13px] font-semibold text-ink">{quote ? `₹${fmt(quote.ltp)}` : '—'}</div>
+                      <div className="text-[13px] font-semibold text-ink">{quote ? <TickPriceFlash value={quote.ltp}>{`₹${fmt(quote.ltp)}`}</TickPriceFlash> : '—'}</div>
                       <div className={`text-[11px] ${tone(pct)}`}>{quote ? fmtPct(pct) : ''}</div>
                     </div>
                     <button onClick={() => onRemove(s)} aria-label={`Remove ${s} from ${active.name}`} title="Remove" className="flex h-7 w-7 shrink-0 items-center justify-center rounded border border-line text-[15px] leading-none text-muted hover:border-down hover:text-down">×</button>

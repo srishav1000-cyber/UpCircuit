@@ -1,6 +1,6 @@
 'use client';
 
-import { createFramePump } from '@/lib/frameScheduler';
+import { createFramePump, DOM_BATCH_MS } from '@/lib/frameScheduler';
 import { loadSnapshot, saveSnapshot } from '@/lib/snapshotCache';
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { MarketEngine, isMarketOpen, isStreamWindow, type FeedConn, type FeedMode, type LiveReason } from '@/lib/market';
@@ -179,9 +179,10 @@ export function useMarket(universe: Instrument[], selected: string, watch: strin
   /* ── SmartAPI, direct browser → exchange socket (optional; Yahoo keeps running underneath as the fallback) ── */
   const sampler = useRef(new TickSampler());
   const outbox = useRef<TickRow[]>([]);
-  // every tick is applied to the engine immediately; the screen repaints on the next animation frame, at most 10×/s (lib/frameScheduler.ts)
+  // every tick is applied to the engine immediately and the chart canvas gets it through engine.onTick with NO batching; the React DOM
+  // (tickers, tables, cards) repaints on an animation frame at most every DOM_BATCH_MS (≈4×/s) so prices stay crisp without millisecond jitter
   const pump = useRef<ReturnType<typeof createFramePump> | null>(null);
-  if (pump.current === null) pump.current = createFramePump(() => bump(), 100);
+  if (pump.current === null) pump.current = createFramePump(() => bump(), DOM_BATCH_MS);
   useEffect(() => () => pump.current?.cancel(), []);
   const applyTick = useCallback(
     (m: MarketTick) => {

@@ -1,6 +1,8 @@
 'use client';
 
 import { scoped } from '@/lib/scope';
+import { createSaver } from '@/lib/debouncedSaver';
+import { ensureMigrated, useCloud, useCloudPull } from './useCloud';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   DEFAULT_WATCHLIST, WATCHLIST_KEY, WATCHLISTS_KEY, activeList, addSymbol, allSymbols, createList, defaultState, deleteList, mapList, parseState, parseWatchlist, removeSymbol, renameList, setActive,
@@ -25,17 +27,20 @@ function load(): WatchlistState {
 export function useWatchlist() {
   const [state, setState] = useState<WatchlistState>(() => defaultState());
   const ref = useRef(state); // latest committed state, so create / rename / delete can report their outcome synchronously
+  const { cloud, userId } = useCloud();
+  const saver = useMemo(() => (cloud && userId ? createSaver<WatchlistState>((v) => cloud.saveWatchlists(userId, v)) : null), [cloud, userId]);
 
   const apply = useCallback((next: WatchlistState, persist: boolean) => {
     ref.current = next;
     setState(next);
     if (!persist) return;
+    saver?.schedule(next);
     try {
       localStorage.setItem(scoped(WATCHLISTS_KEY), JSON.stringify(next));
     } catch {
       /* storage unavailable — in-memory only */
     }
-  }, []);
+  }, [saver]);
 
   useEffect(() => {
     apply(load(), false);
@@ -47,6 +52,28 @@ export function useWatchlist() {
     window.addEventListener('storage', onStorage);
     return () => window.removeEventListener('storage', onStorage);
   }, [apply]);
+
+  // signed in with Supabase: the account's lists are the source of truth (refreshed on focus / every minute); localStorage is the offline cache
+  useCloudPull(!!(cloud && userId && saver), async () => {
+    if (!cloud || !userId || !saver || saver.dirty()) return;
+    await ensureMigrated(cloud, userId);
+    const remote = await cloud.loadWatchlists(userId);
+    if (!remote || saver.dirty()) return;
+    if (JSON.stringify(remote) !== JSON.stringify(ref.current)) {
+      ref.current = remote;
+      setState(remote);
+      try { localStorage.setItem(scoped(WATCHLISTS_KEY), JSON.stringify(remote)); } catch { /* ignore */ }
+    }
+  });
+  useEffect(() => {
+    if (!saver) return;
+    const hide = () => void saver.flush();
+    window.addEventListener('pagehide', hide);
+    return () => {
+      window.removeEventListener('pagehide', hide);
+      void saver.flush();
+    };
+  }, [saver]);
 
   const commit = useCallback(
     (fn: (s: WatchlistState) => WatchlistState) => {

@@ -3,20 +3,16 @@
 import { useCallback, useEffect, useState } from 'react';
 import { audioState, onAudioStateChange, unlockAudioContext, type AudioStateName } from '@/lib/chime';
 import { playChime } from '@/lib/audioAlerts';
-import { scoped } from '@/lib/scope';
+import { useNotify } from './useNotify';
 
-const KEY = 'upcircuit:audio:v1';
-
-/** 🔔 Audio Alerts ON/OFF (per user, default ON). Browsers keep audio locked until a gesture, so the first click anywhere unlocks it. */
+/**
+ * 🔔 Audio Alarm Chimes ON/OFF — the `audio` toggle of the notification settings (per user, default ON, synced to the account).
+ * Browsers keep audio locked until a gesture, so the first click anywhere unlocks it.
+ */
 export function useAudioAlerts() {
-  const [on, setOn] = useState(true);
+  const { prefs, set } = useNotify();
+  const on = prefs.audio;
   useEffect(() => {
-    try {
-      const v = localStorage.getItem(scoped(KEY));
-      if (v === '0') setOn(false);
-    } catch {
-      /* default ON */
-    }
     const unlock = () => void unlockAudioContext();
     window.addEventListener('pointerdown', unlock);
     window.addEventListener('keydown', unlock);
@@ -27,17 +23,10 @@ export function useAudioAlerts() {
   }, []);
   const toggle = useCallback(() => {
     void unlockAudioContext();
-    setOn((cur) => {
-      const next = !cur;
-      try {
-        localStorage.setItem(scoped(KEY), next ? '1' : '0');
-      } catch {
-        /* in-memory only */
-      }
-      if (next) setTimeout(() => playChime('upper', 0.2), 50); // soft confirmation
-      return next;
-    });
-  }, []);
+    const next = !on;
+    set({ audio: next });
+    if (next) setTimeout(() => playChime('upper', 0.2), 50); // soft confirmation
+  }, [on, set]);
   const [state, setState] = useState<AudioStateName>('running'); // assume fine until measured (no SSR flash)
   useEffect(() => {
     const sync = () => setState(audioState());

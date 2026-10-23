@@ -1,5 +1,6 @@
 'use client';
 
+import { TickPriceFlash } from './TickPriceFlash';
 import { useMemo, useState } from 'react';
 import type { MarketEngine } from '@/lib/market';
 import type { NewsResponse, Quote } from '@/lib/types';
@@ -58,7 +59,7 @@ function MoverTable({ title, rows, kind, onOpen }: { title: string; rows: Quote[
                     <div className="max-w-[130px] truncate text-[10px] text-muted">{q.name}</div>
                   </button>
                 </td>
-                <td className="text-right text-ink">{fmt(q.ltp)}</td>
+                <td className="text-right text-ink"><TickPriceFlash value={q.ltp}>{fmt(q.ltp)}</TickPriceFlash></td>
                 <td className={`text-right ${kind === 'volume' ? 'text-ink' : tone(p)}`}>
                   {kind === 'volume' ? (
                     <>

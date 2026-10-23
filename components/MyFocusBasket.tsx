@@ -1,8 +1,10 @@
 'use client';
 
+import { TickPriceFlash } from './TickPriceFlash';
 import { useState } from 'react';
 import type { MarketEngine } from '@/lib/market';
-import type { Holding } from '@/lib/types';
+import type { Holding, Instrument } from '@/lib/types';
+import { StockAutocomplete } from './StockAutocomplete';
 import type { Persona } from '@/lib/personas';
 import { MAX_FOCUS } from '@/lib/focus';
 import { fmt, fmtInt, fmtPct, tone } from '@/lib/format';
@@ -16,6 +18,9 @@ interface Props {
   focus: string[];
   /** symbols the user can add: watchlists + holdings */
   candidates: string[];
+  /** the full instrument master — the "+ Add" box searches ALL of it, not just `candidates` */
+  instruments: Instrument[];
+  priceOf?: (symbol: string) => number | undefined;
   holdings: Holding[];
   onToggle: (sym: string) => string | null;
   onSelect: (sym: string) => void;
@@ -28,7 +33,7 @@ interface Props {
 }
 
 /** Live tiles for the user's 5–6 focus tickers ("My Focus"), shown at the top of the Day Trader and Retail dashboards. Clicking a tile selects that stock everywhere. */
-export function MyFocusBasket({ persona, engine, focus, candidates, holdings, onToggle, onSelect, selected, glow = {} }: Props) {
+export function MyFocusBasket({ persona, engine, focus, candidates, instruments, priceOf, holdings, onToggle, onSelect, selected, glow = {} }: Props) {
   const [err, setErr] = useState<string | null>(null);
   const [pick, setPick] = useState(false);
   const toggle = (s: string) => setErr(onToggle(s));
@@ -48,7 +53,13 @@ export function MyFocusBasket({ persona, engine, focus, candidates, holdings, on
         <div className="grid grid-cols-2 gap-2 md:grid-cols-3">
           {focus.map((s) => {
             const q = engine.touch(s);
-            if (!q) return null;
+            if (!q)
+              return (
+                <div key={s} data-testid={`focus-${s}`} data-loading="true" className="rounded-md border border-dashed border-line bg-bg/40 p-2 text-[11px]">
+                  <div className="flex items-center justify-between"><span className="font-bold text-ink">{s}</span>{pick && <button onClick={() => toggle(s)} aria-label={`Remove ${s}`} className="text-muted hover:text-down">✕</button>}</div>
+                  <div className="mt-1 animate-pulse text-muted">Resolving token &amp; loading quote…</div>
+                </div>
+              );
             const chg = q.ltp - q.prevClose;
             const pct = q.prevClose ? (chg / q.prevClose) * 100 : 0;
             const pos = q.high > q.low ? ((q.ltp - q.low) / (q.high - q.low)) * 100 : 50;
@@ -73,7 +84,7 @@ export function MyFocusBasket({ persona, engine, focus, candidates, holdings, on
                   {pick && <button onClick={(e) => { e.stopPropagation(); toggle(s); }} aria-label={`Remove ${s}`} className="text-muted hover:text-down">✕</button>}
                 </div>
                 <div className="num flex items-baseline gap-1.5">
-                  <span className={`text-[15px] font-semibold ${tone(chg)}`}>{fmt(q.ltp)}</span>
+                  <span className={`text-[15px] font-semibold ${tone(chg)}`}><TickPriceFlash value={q.ltp}>{fmt(q.ltp)}</TickPriceFlash></span>
                   <span className={tone(chg)}>{fmtPct(pct)}</span>
                 </div>
                 <div className="my-1 h-1 rounded bg-line" title="Position in today's range"><div className="h-1 rounded bg-accent" style={{ width: `${Math.max(2, Math.min(100, pos))}%` }} /></div>
@@ -91,11 +102,23 @@ export function MyFocusBasket({ persona, engine, focus, candidates, holdings, on
           })}
         </div>
         {pick && (
-          <div className="mt-2 flex flex-wrap gap-1.5" data-testid="focus-picker">
-            {avail.length === 0 && <span className="text-[11px] text-muted">Add stocks to a watchlist (⭐) to choose them here.</span>}
-            {avail.map((s) => (
-              <button key={s} onClick={() => toggle(s)} data-testid={`focus-add-${s}`} className="rounded-full border border-line px-2 py-0.5 text-[11px] text-ink hover:bg-accent/10">+ {s}</button>
-            ))}
+          <div className="mt-3" data-testid="focus-picker">
+            <StockAutocomplete
+              testid="focus-search"
+              instruments={instruments}
+              exclude={focus}
+              priceOf={priceOf}
+              placeholder={`Add any stock — ticker, company or BSE code (${instruments.length.toLocaleString('en-IN')} listed)`}
+              onAdd={(i) => onToggle(i.symbol)}
+            />
+            {candidates.filter((c) => !focus.includes(c)).length > 0 && (
+              <div className="mt-2 flex flex-wrap items-center gap-1.5" data-testid="focus-suggest">
+                <span className="text-[10px] uppercase tracking-wider text-muted">From your lists</span>
+                {candidates.filter((c) => !focus.includes(c)).slice(0, 8).map((s) => (
+                  <button key={s} onClick={() => toggle(s)} data-testid={`focus-add-${s}`} className="rounded-full border border-line px-2 py-0.5 text-[11px] text-ink hover:bg-accent/10">+ {s}</button>
+                ))}
+              </div>
+            )}
           </div>
         )}
         {err && <p role="alert" className="mt-2 text-[11px] text-warn">{err}</p>}

@@ -64,3 +64,6 @@ export function createFramePump(flush: () => void, minGapMs = 100, deps?: Partia
     stats: () => ({ requests, flushes }),
   };
 }
+
+/** React DOM cadence for high-frequency ticks (header ticker, watchlists, cards, screener). The chart canvas bypasses it via engine.onTick. */
+export const DOM_BATCH_MS = 250;

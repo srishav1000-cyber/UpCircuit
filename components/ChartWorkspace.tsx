@@ -1,11 +1,13 @@
 'use client';
 
+import { TickPriceFlash } from './TickPriceFlash';
 import type { IndexQuote, Quote, Timeframe } from '@/lib/types';
 import { fmt, fmtInt, fmtPct, fmtSigned, tone } from '@/lib/format';
 import { AnalysisActions } from './AnalysisActions';
 import { PriceChart } from './PriceChart';
 import { Badge } from './ui';
 
+type Props_Subscribe = (fn: (e: { symbol: string; ltp: number; volume: number; ts: number }) => void) => () => void;
 interface Props {
   quote: Quote;
   tf: Timeframe;
@@ -22,10 +24,12 @@ interface Props {
   index?: IndexQuote | null;
   /** SmartAPI ticks are streaming → the last candle follows the LTP */
   live?: boolean;
+  /** engine.onTick — lets the chart canvas update on every exchange tick */
+  subscribeTicks?: Props_Subscribe;
 }
 
-export function ChartWorkspace({ quote, tf, onTf, onResearch, favorite, onToggleFavorite, onSetAlert, activeAlerts, index, live }: Props) {
-  if (index) return <IndexWorkspace index={index} tf={tf} onTf={onTf} live={live} />;
+export function ChartWorkspace({ quote, tf, onTf, onResearch, favorite, onToggleFavorite, onSetAlert, activeAlerts, index, live, subscribeTicks }: Props) {
+  if (index) return <IndexWorkspace index={index} tf={tf} onTf={onTf} live={live} subscribeTicks={subscribeTicks} />;
   const chg = quote.ltp - quote.prevClose;
   const pct = (chg / quote.prevClose) * 100;
 
@@ -47,7 +51,7 @@ export function ChartWorkspace({ quote, tf, onTf, onResearch, favorite, onToggle
           <div className="truncate text-[11px] text-muted">{quote.name}</div>
         </div>
         <div className="num flex items-baseline gap-2">
-          <span className={`text-2xl font-semibold ${tone(chg)}`}>{fmt(quote.ltp)}</span>
+          <span className={`text-2xl font-semibold ${tone(chg)}`}><TickPriceFlash value={quote.ltp}>{fmt(quote.ltp)}</TickPriceFlash></span>
           <span className={`text-[13px] ${tone(chg)}`}>
             {fmtSigned(chg)} ({fmtPct(pct)})
           </span>
@@ -62,7 +66,7 @@ export function ChartWorkspace({ quote, tf, onTf, onResearch, favorite, onToggle
         </div>
       </div>
 
-      <PriceChart symbol={quote.symbol} ltp={quote.ltp} volume={quote.volume} tf={tf} onTf={onTf} live={live} className="min-h-[520px] flex-1" />
+      <PriceChart symbol={quote.symbol} ltp={quote.ltp} volume={quote.volume} tf={tf} onTf={onTf} live={live} subscribeTicks={subscribeTicks} className="min-h-[520px] flex-1" />
 
       {/* analytical actions */}
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-line bg-panel px-3 py-2.5">
@@ -75,7 +79,7 @@ export function ChartWorkspace({ quote, tf, onTf, onResearch, favorite, onToggle
   );
 }
 
-function IndexWorkspace({ index, tf, onTf, live }: { index: IndexQuote; tf: Timeframe; onTf: (tf: Timeframe) => void; live?: boolean }) {
+function IndexWorkspace({ index, tf, onTf, live, subscribeTicks }: { index: IndexQuote; tf: Timeframe; onTf: (tf: Timeframe) => void; live?: boolean; subscribeTicks?: Props_Subscribe }) {
   return (
     <div className="flex h-full min-h-0 flex-col" data-testid="index-workspace">
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-b border-line bg-panel px-3 py-2">
@@ -96,7 +100,7 @@ function IndexWorkspace({ index, tf, onTf, live }: { index: IndexQuote; tf: Time
           <span>PC <b className="text-ink">{fmt(index.prev)}</b></span>
         </div>
       </div>
-      <PriceChart symbol={index.label} ltp={index.value} volume={0} tf={tf} onTf={onTf} live={live} className="min-h-[520px] flex-1" />
+      <PriceChart symbol={index.label} ltp={index.value} volume={0} tf={tf} onTf={onTf} live={live} subscribeTicks={subscribeTicks} className="min-h-[520px] flex-1" />
     </div>
   );
 }

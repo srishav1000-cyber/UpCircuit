@@ -78,7 +78,7 @@ const mem = () => {
         if (b.password === 'wrongpass1') return json({ error_description: 'Invalid login credentials' }, 400);
         return json({ access_token: 'AT', refresh_token: 'RT', user: { id: 'uid-1', email: b.email } });
       }
-      if (url.includes('/rest/v1/profiles') && (init?.method ?? 'GET') === 'GET') return json([{ role: 'retail', plan: 'retail' }]);
+      if (url.includes('/rest/v1/profiles') && (init?.method ?? 'GET') === 'GET') return json([{ primary_role: 'retail', plan: 'retail' }]);
       if (url.includes('/rest/v1/profiles')) return new Response(null, { status: 204 });
       if (url.includes('/auth/v1/user')) return json({ id: 'uid-1', email: 'x@y.co' });
       return json({});

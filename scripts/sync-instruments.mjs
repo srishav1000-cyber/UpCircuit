@@ -53,6 +53,7 @@ const BSE_TICKER = /^[A-Z][A-Z0-9&-]{0,19}$/;
 export function pickEquities(rows) {
   const nse = new Map();
   const bse = new Map();
+  const codes = new Map(); // ticker → BSE scrip code (the BSE row's token), also for dual-listed names that are kept as NSE
   for (const r of rows) {
     if (!r || typeof r.symbol !== 'string' || (r.instrumenttype ?? '') !== '') continue; // derivatives / indices carry an instrumenttype
     if (r.exch_seg === 'NSE' && NSE_SERIES.test(r.symbol)) {
@@ -60,9 +61,10 @@ export function pickEquities(rows) {
       if (t && !nse.has(t)) nse.set(t, t);
     } else if (r.exch_seg === 'BSE' && BSE_TICKER.test(r.symbol)) {
       if (!bse.has(r.symbol)) bse.set(r.symbol, String(r.name || r.symbol));
+      if (/^\d{5,6}$/.test(String(r.token ?? '')) && !codes.has(r.symbol)) codes.set(r.symbol, String(r.token));
     }
   }
-  return { nse, bse };
+  return { nse, bse, codes };
 }
 
 async function getText(url, ms, headers = {}) {
@@ -114,7 +116,7 @@ async function main() {
 
   const byTicker = new Map();
   const add = (symbol, name, exch) => {
-    if (!byTicker.has(symbol)) byTicker.set(symbol, { symbol, name, sector: sectorOf(symbol), ...(exch === 'BSE' ? { exch } : {}) });
+    if (!byTicker.has(symbol)) byTicker.set(symbol, { symbol, name, sector: sectorOf(symbol), ...(exch === 'BSE' ? { exch } : {}), ...(scrip?.codes.get(symbol) ? { code: scrip.codes.get(symbol) } : {}) });
   };
   // NSE first so that dual-listed names stay NSE
   if (scrip) for (const t of scrip.nse.keys()) add(t, names.get(t) ?? t, 'NSE');

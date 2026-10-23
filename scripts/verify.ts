@@ -39,7 +39,29 @@ import { buildPeerTable } from '../lib/peerTable';
 import { buildResearchNote } from '../lib/researchNote';
 import { drawdownSeries, drawdownEpisodes, summariseDrawdown } from '../lib/analytics/drawdown';
 import { evaluateLimits, logBreaches, sanitiseLimits, statusOf, DEFAULT_LIMITS } from '../lib/analytics/limits';
-import { createFramePump } from '../lib/frameScheduler';
+import { readFileSync, existsSync } from 'node:fs';
+import { createCloud, holdingsToRows, rowsToHoldings, watchlistsToRows, rowsToWatchlists, watchlistMeta, parseNotify, inList, DEFAULT_NOTIFY } from '../lib/cloud';
+import { migrateLocalStorage } from '../lib/migrateLocalStorage';
+import { createSaver } from '../lib/debouncedSaver';
+import { parseHoldings } from '../lib/holdingsStore';
+import { getNotify, setNotify, loadNotifyLocal, applyCloudNotify, attachNotifySaver, NOTIFY_KEY } from '../lib/notifyStore';
+import { setScope } from '../lib/scope';
+import { urlBase64ToUint8Array, toPushSub } from '../lib/pushNotifications';
+import { circuitPushPayload, fanOut, isPushEndpoint } from '../lib/pushSender';
+import { sendCircuitPush } from '../lib/alertPush';
+import { safeNext, exchangeCode, bridgeHtml, scriptJson } from '../lib/oauthCallback';
+import { challengeOf, isVerifier } from '../lib/pkce';
+import { normalizeIndianMobile, maskPhone } from '../lib/auth';
+import { createSupabaseBackend } from '../lib/authBackends';
+import { buildBackup, readSnapshot, forceSync, backupFilename } from '../lib/backup';
+import { purgeUserCache, cleanBeforeSignOut } from '../lib/signOutClean';
+import { getSync, setSyncAvailable, reportSync, syncLabel } from '../lib/syncStatus';
+import { soundFor } from '../lib/audioAlerts';
+import { mergeHolding } from '../lib/holdingsStore';
+import { liveFundamentals, smartApiLabel } from '../lib/liveFundamentals';
+import type { Instrument } from '../lib/types';
+import { defaultState as wlDefault, type WatchlistState as WLState } from '../lib/watchlist';
+import { createFramePump, DOM_BATCH_MS } from '../lib/frameScheduler';
 import { detectPatterns, aggregateBars, vwapSeries } from '../lib/analytics/patterns';
 import { periodReturnPct, relativeStrength } from '../lib/analytics/relative';
 import { healthLights } from '../lib/analytics/health';
@@ -1033,6 +1055,238 @@ t('snapshot cache: compacts real rows, rejects junk / stale / future, engine hyd
   assert.equal(e.ingestSnapshot([{ symbol: 'SBIN', ltp: 1, prevClose: 1 }], t0), false); // never over a loaded engine
   e.ingestRows([{ symbol: 'RELIANCE', ltp: 2510, prevClose: 2450 }], now); assert.equal(e.snapshotAt, 0); assert.equal(e.quotes.get('RELIANCE')!.ltp, 2510);
   const back = compactRows(e.snapshotRows()); assert.ok(back.some((r) => r.symbol === 'RELIANCE' && r.ltp === 2510) && back.some((r) => r.isIndex && r.symbol === 'NIFTY'));
+});
+
+/* ───────────── Round 29: cloud sync, Google/phone auth, PWA + push ───────────── */
+const rec = () => { const calls: { url: string; method: string; body: unknown; headers: Record<string, string> }[] = []; return { calls, f: ((url: string, init: RequestInit = {}) => { calls.push({ url, method: init.method ?? 'GET', body: init.body ? JSON.parse(init.body as string) : undefined, headers: init.headers as Record<string, string> }); return Promise.resolve(new Response('[]', { status: 200 })); }) as unknown as typeof fetch }; };
+const mkCloud = (f: typeof fetch, token: string | null = 'tok') => createCloud({ url: 'https://x.supabase.co/', anonKey: 'anon', getToken: async () => token, fetch: f });
+t('cloud rows: holdings ↔ rows (skips un-priced demo, bad symbols, dupes) and watchlists ↔ rows + meta', () => {
+  const rows = holdingsToRows('u1', [{ symbol: 'tcs', qty: 10, avg: 3500 }, { symbol: 'TCS', qty: 1, avg: 1 }, { symbol: 'ITC', qty: 5, avg: 0 }, { symbol: 'M&M', qty: 2, avg: 1500.5 }, { symbol: 'bad sym', qty: 1, avg: 1 }], (s) => (s === 'TCS' ? 'IT' : undefined));
+  assert.deepEqual(rows, [{ user_id: 'u1', symbol: 'TCS', quantity: 10, buy_price: 3500, sector: 'IT' }, { user_id: 'u1', symbol: 'M&M', quantity: 2, buy_price: 1500.5, sector: null }]);
+  assert.deepEqual(rowsToHoldings([{ symbol: 'TCS', quantity: '10', buy_price: '3500.50' }, { symbol: 'X', quantity: 0, buy_price: 5 }, { symbol: 'Y', quantity: 1 }]), [{ symbol: 'TCS', qty: 10, avg: 3500.5 }]);
+  assert.deepEqual(rowsToHoldings(null), []);
+  const st: WLState = { lists: [{ id: 'main', name: 'Main', symbols: ['TCS', 'INFY'] }, { id: 'future', name: 'future', symbols: [] }], active: 'future' };
+  assert.deepEqual(watchlistsToRows('u1', st), [{ user_id: 'u1', list_id: 'main', symbol: 'TCS', position: 0 }, { user_id: 'u1', list_id: 'main', symbol: 'INFY', position: 1 }]);
+  const back = rowsToWatchlists([{ list_id: 'main', symbol: 'INFY', position: 1 }, { list_id: 'main', symbol: 'TCS', position: 0 }], watchlistMeta(st)); assert.deepEqual(back, st);
+  assert.deepEqual(rowsToWatchlists([{ list_id: 'main', symbol: 'ITC', position: 0 }], null), { lists: [{ id: 'main', name: 'Main', symbols: ['ITC'] }], active: 'main' }); assert.equal(rowsToWatchlists([], null), null);
+  assert.equal(inList(['A&B', 'C"D']), '("A&B","CD")');
+  assert.deepEqual(parseNotify({ push: true }), { ...DEFAULT_NOTIFY, push: true }); assert.deepEqual(parseNotify(null), DEFAULT_NOTIFY);
+});
+t('cloud client: bearer + apikey on every call; portfolio save = UPSERT first, then delete the rest (symbols URL-encoded); empty save only deletes', async () => {
+  const r = rec(); const c = mkCloud(r.f);
+  await c.savePortfolio('u 1', [{ symbol: 'M&M', qty: 2, avg: 1500 }, { symbol: 'TCS', qty: 1, avg: 3500 }]);
+  assert.equal(r.calls.length, 2); assert.equal(r.calls[0].method, 'POST'); assert.match(r.calls[0].url, /^https:\/\/x\.supabase\.co\/rest\/v1\/portfolios\?on_conflict=user_id,symbol$/); assert.equal(r.calls[0].headers.Prefer, 'resolution=merge-duplicates,return=minimal');
+  assert.equal(r.calls[1].method, 'DELETE'); assert.ok(r.calls[1].url.includes('user_id=eq.u%201') && r.calls[1].url.includes('symbol=not.in.(%22M%26M%22%2C%22TCS%22)'), r.calls[1].url);
+  for (const k of r.calls) { assert.equal(k.headers.Authorization, 'Bearer tok'); assert.equal(k.headers.apikey, 'anon'); }
+  r.calls.length = 0; await c.savePortfolio('u1', []); assert.equal(r.calls.length, 1); assert.equal(r.calls[0].method, 'DELETE'); assert.ok(!r.calls[0].url.includes('symbol='));
+  await assert.rejects(() => mkCloud(r.f, null).loadPortfolio('u1'), /not signed in/);
+  const bad = (async () => new Response('{}', { status: 401 })) as unknown as typeof fetch; await assert.rejects(() => mkCloud(bad).loadPortfolio('u1'), /cloud 401/);
+});
+t('cloud client: watchlists save (upsert, per-list prune, drop removed lists, meta), prefs, alert log, push subscription CRUD', async () => {
+  const r = rec(); const c = mkCloud(r.f); const st: WLState = { lists: [{ id: 'main', name: 'Main', symbols: ['TCS'] }, { id: 'empty', name: 'Empty', symbols: [] }], active: 'main' };
+  await c.saveWatchlists('u1', st); const m = r.calls.map((k) => `${k.method} ${k.url.replace('https://x.supabase.co/rest/v1/', '')}`);
+  assert.deepEqual(m, ['POST watchlists?on_conflict=user_id,list_id,symbol', 'DELETE watchlists?user_id=eq.u1&list_id=eq.main&symbol=not.in.(%22TCS%22)', 'DELETE watchlists?user_id=eq.u1&list_id=eq.empty', 'DELETE watchlists?user_id=eq.u1&list_id=not.in.(%22main%22%2C%22empty%22)', 'POST preferences?on_conflict=user_id']);
+  assert.deepEqual((r.calls[4].body as { watchlist_meta: unknown }[])[0].watchlist_meta, { lists: [{ id: 'main', name: 'Main' }, { id: 'empty', name: 'Empty' }], active: 'main' });
+  r.calls.length = 0; await c.savePrefs('u1', { focus: ['TCS'], notify: { ...DEFAULT_NOTIFY, push: true, email: false, audio: true } }); assert.deepEqual((r.calls[0].body as { focus: string[]; notify: unknown }[])[0].notify, { ...DEFAULT_NOTIFY, push: true, email: false, audio: true });
+  r.calls.length = 0; await c.logAlert('u1', { symbol: 'TCS', direction: 'UPPER', band: 5, price: 3700, at: Date.parse('2026-10-22T04:00:00Z') }); const a = (r.calls[0].body as Record<string, unknown>[])[0]; assert.equal(a.direction, 'UPPER'); assert.equal(a.triggered_at, '2026-10-22T04:00:00.000Z'); assert.equal(a.user_id, 'u1');
+  r.calls.length = 0; await c.savePushSubscription('u1', { endpoint: 'https://push.example/abc', keys: { p256dh: 'k', auth: 'a' } }); assert.match(r.calls[0].url, /push_subscriptions\?on_conflict=user_id,endpoint/); await c.deletePushSubscription('u1', 'https://push.example/abc'); assert.equal(r.calls[1].method, 'DELETE'); assert.ok(r.calls[1].url.includes('endpoint=eq.https%3A%2F%2Fpush.example%2Fabc'));
+});
+t('migrateLocalStorage: uploads legacy portfolio / watchlist / focus once, never overwrites cloud data, purges only after success', async () => {
+  const mem = (init: Record<string, string> = {}) => { const m = new Map(Object.entries(init)); return { m, getItem: (k: string) => m.get(k) ?? null, setItem: (k: string, v: string) => void m.set(k, v), removeItem: (k: string) => void m.delete(k) }; };
+  const fake = (over: Partial<Record<string, unknown>> = {}) => { const log: string[] = []; return { log, cloud: { loadPortfolio: async () => (over.portfolio as never) ?? [], savePortfolio: async (_u: string, h: unknown[]) => { log.push('savePortfolio:' + h.length); if (over.failPortfolio) throw new Error('x'); }, loadWatchlists: async () => (over.watch as never) ?? null, saveWatchlists: async (_u: string, s: WLState) => { log.push('saveWatchlists:' + s.lists.reduce((n, l) => n + l.symbols.length, 0)); }, loadPrefs: async () => (over.prefs as never) ?? { focus: null, notify: null }, savePrefs: async (_u: string, p: { focus?: string[] }) => { log.push('savePrefs:' + (p.focus?.length ?? 0)); } } as never }; };
+  // 1. everything local, cloud empty → all uploaded, legacy keys purged, flag set
+  let st = mem({ upcircuit_portfolio: JSON.stringify([{ symbol: 'TCS', qty: 5, avg: 3500 }]), 'upcircuit:holdings:v1:u1': JSON.stringify([{ symbol: 'INFY', qty: 2, avg: 1500 }]), upcircuit_watchlist: JSON.stringify(['ITC', 'SBIN']), 'upcircuit:focus:v1:u1': JSON.stringify(['TCS', 'INFY']) }); let f = fake();
+  let rep = await migrateLocalStorage(f.cloud, 'u1', st); assert.deepEqual(f.log, ['savePortfolio:2', 'saveWatchlists:2', 'savePrefs:2']); assert.equal(rep.holdings, 2); assert.equal(rep.watchlistSymbols, 2); assert.equal(rep.focus, 2); assert.deepEqual(rep.errors, []);
+  assert.equal(st.getItem('upcircuit_portfolio'), null); assert.equal(st.getItem('upcircuit_watchlist'), null); assert.ok(st.getItem('upcircuit:holdings:v1:u1') !== null, 'the per-user cache stays as the offline copy'); assert.equal(st.getItem('upcircuit:cloud-migrated:u1'), '1');
+  rep = await migrateLocalStorage(f.cloud, 'u1', st); assert.equal(rep.skipped, true); assert.equal(f.log.length, 3, 'runs once');
+  // 2. cloud already has data → nothing uploaded (never overwrite), legacy keys still cleaned
+  st = mem({ upcircuit_portfolio: JSON.stringify([{ symbol: 'TCS', qty: 5, avg: 3500 }]) }); f = fake({ portfolio: [{ symbol: 'RELIANCE', qty: 1, avg: 2500 }] });
+  rep = await migrateLocalStorage(f.cloud, 'u1', st); assert.deepEqual(f.log, []); assert.equal(st.getItem('upcircuit_portfolio'), null);
+  // 3. upload fails → keys kept, no flag (retry next login)
+  st = mem({ upcircuit_portfolio: JSON.stringify([{ symbol: 'TCS', qty: 5, avg: 3500 }]) }); f = fake({ failPortfolio: true });
+  rep = await migrateLocalStorage(f.cloud, 'u1', st); assert.deepEqual(rep.errors, ['portfolio']); assert.ok(st.getItem('upcircuit_portfolio') !== null); assert.equal(st.getItem('upcircuit:cloud-migrated:u1'), null);
+  // 4. nothing local → no writes
+  f = fake(); rep = await migrateLocalStorage(f.cloud, 'u2', mem()); assert.deepEqual(f.log, []); assert.deepEqual(parseHoldings('[{"symbol":"x","quantity":"3","buy_price":"2.5"}]'), [{ symbol: 'X', qty: 3, avg: 2.5 }]); assert.deepEqual(parseHoldings('nope'), []);
+});
+t('debounced saver: coalesces bursts, reports dirty, retries after a failure with the newest value, flush saves now', async () => {
+  const timers: { cb: () => void; ms: number; id: number }[] = []; let id = 0; const deps = { setTimer: (cb: () => void, ms: number) => { timers.push({ cb, ms, id: ++id }); return id; }, clearTimer: (x: unknown) => { const i = timers.findIndex((t) => t.id === x); if (i >= 0) timers.splice(i, 1); } };
+  const saved: number[] = []; let fail = false; const sv = createSaver<number>(async (v) => { if (fail) throw new Error('offline'); saved.push(v); }, 700, deps);
+  sv.schedule(1); sv.schedule(2); sv.schedule(3); assert.equal(timers.length, 1); assert.equal(sv.dirty(), true); timers.shift()!.cb(); await new Promise((r) => setImmediate(r)); assert.deepEqual(saved, [3]); assert.equal(sv.dirty(), false);
+  fail = true; sv.schedule(4); timers.shift()!.cb(); await new Promise((r) => setImmediate(r)); assert.equal(sv.dirty(), true, 'failed save stays dirty'); assert.equal(timers[0].ms, 2800, 'slower retry scheduled');
+  fail = false; sv.schedule(5); await sv.flush(); assert.deepEqual(saved, [3, 5]); assert.equal(sv.dirty(), false);
+});
+t('notification toggles: defaults, legacy audio mute carried over, persists per user, cloud values do not echo back', () => {
+  const mem = new Map<string, string>(); (globalThis as unknown as { localStorage: unknown }).localStorage = { getItem: (k: string) => mem.get(k) ?? null, setItem: (k: string, v: string) => void mem.set(k, v), removeItem: (k: string) => void mem.delete(k) };
+  setScope('u9'); mem.set('upcircuit:audio:v1:u9', '0'); loadNotifyLocal(); assert.deepEqual(getNotify(), { ...DEFAULT_NOTIFY, push: false, email: true, audio: false }, 'old mute kept');
+  const saves: unknown[] = []; attachNotifySaver((p) => saves.push(p)); setNotify({ push: true }); assert.deepEqual(getNotify(), { ...DEFAULT_NOTIFY, push: true, email: true, audio: false }); assert.equal(saves.length, 1); assert.deepEqual(JSON.parse(mem.get(`${NOTIFY_KEY}:u9`)!), { ...DEFAULT_NOTIFY, push: true, email: true, audio: false });
+  applyCloudNotify({ ...DEFAULT_NOTIFY, push: false, email: false, audio: true }); assert.equal(saves.length, 1, 'no echo'); assert.deepEqual(getNotify(), { ...DEFAULT_NOTIFY, push: false, email: false, audio: true });
+  setScope('u10'); loadNotifyLocal(); assert.deepEqual(getNotify(), { ...DEFAULT_NOTIFY, push: false, email: true, audio: true }, 'another account has its own'); attachNotifySaver(null); setScope(null); delete (globalThis as unknown as { localStorage?: unknown }).localStorage;
+});
+t('web push: VAPID key decoding, subscription JSON, payload, fan-out (exclude this device, prune 404/410), endpoint guard, client dispatch', async () => {
+  assert.deepEqual([...urlBase64ToUint8Array('AQID_w')], [1, 2, 3, 255]); assert.deepEqual([...urlBase64ToUint8Array('AQIDBA')], [1, 2, 3, 4]);
+  assert.deepEqual(toPushSub({ toJSON: () => ({ endpoint: 'https://p/x', keys: { p256dh: 'a', auth: 'b' } }) }), { endpoint: 'https://p/x', keys: { p256dh: 'a', auth: 'b' } }); assert.equal(toPushSub({ toJSON: () => ({ endpoint: 'https://p/x' }) }), null);
+  const pl = circuitPushPayload({ symbol: 'TCS', dir: 'lower', band: 10, ltp: 3150, pct: -10 }); assert.equal(pl.title, '▼ LOWER CIRCUIT · TCS'); assert.match(pl.body, /₹3150\.00 \(−10\.00%\) hit the −10% band\. Sellers only/); assert.ok(pl.url.endsWith('/terminal?symbol=TCS')); assert.equal(pl.tag, 'circuit-TCS-lower-10');
+  assert.match(circuitPushPayload({ symbol: 'ITC', dir: 'upper', band: 5, ltp: 500, pct: 5 }).title, /^▲ UPPER CIRCUIT · ITC$/);
+  const subs = ['https://p/a', 'https://p/b', 'https://p/c', 'https://p/d'].map((endpoint) => ({ endpoint, keys: { p256dh: 'k', auth: 'a' } })); const sent: string[] = [];
+  const res = await fanOut(subs, pl, async (s) => { if (s.endpoint.endsWith('b')) throw Object.assign(new Error('gone'), { statusCode: 410 }); if (s.endpoint.endsWith('c')) throw Object.assign(new Error('boom'), { statusCode: 500 }); sent.push(s.endpoint); }, 'https://p/d');
+  assert.deepEqual(res, { sent: 1, failed: 1, gone: ['https://p/b'] }); assert.deepEqual(sent, ['https://p/a']);
+  assert.ok(isPushEndpoint('https://fcm.googleapis.com/fcm/send/abc')); assert.ok(isPushEndpoint('https://updates.push.services.mozilla.com/wpush/v2/x')); assert.ok(isPushEndpoint('https://web.push.apple.com/Q')); assert.ok(isPushEndpoint('https://wns2-par02p.notify.windows.com/w/?token=1'));
+  assert.ok(!isPushEndpoint('http://fcm.googleapis.com/x')); assert.ok(!isPushEndpoint('https://127.0.0.1/x')); assert.ok(!isPushEndpoint('https://169.254.169.254/latest/meta-data')); assert.ok(!isPushEndpoint('https://evil.com/fcm.googleapis.com/x')); assert.ok(!isPushEndpoint('https://fcm.googleapis.com.evil.com/x')); assert.ok(!isPushEndpoint('https://u:p@fcm.googleapis.com/x')); assert.ok(!isPushEndpoint('javascript:alert(1)')); assert.ok(isPushEndpoint('https://localhost:4443/p/1', 'localhost'), 'env allowlist for self-hosted / tests');
+  const r = rec(); assert.equal(await sendCircuitPush({ symbol: 'TCS', dir: 'upper', band: 5, ltp: 3700, pct: 5, limit: 3700, exact: false }, 'tok', 'https://p/me', r.f), 'sent'); assert.equal(r.calls[0].url, '/api/alerts/push'); assert.equal(r.calls[0].headers.Authorization, 'Bearer tok'); assert.equal((r.calls[0].body as { exclude: string }).exclude, 'https://p/me');
+  assert.equal(await sendCircuitPush({ symbol: 'T', dir: 'upper', band: 5, ltp: 1, pct: 5, limit: 1, exact: false }, null, null, r.f), 'skipped');
+});
+t('Google OAuth callback: PKCE challenge (RFC 7636 vector), code exchange, safe redirects, token bridge page is script-injection-proof', async () => {
+  assert.equal(await challengeOf('dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk'), 'E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM'); assert.ok(isVerifier('dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk')); assert.ok(!isVerifier('short'));
+  assert.equal(safeNext('/settings'), '/settings'); assert.equal(safeNext('//evil.com'), '/'); assert.equal(safeNext('https://evil.com'), '/'); assert.equal(safeNext(null), '/'); assert.equal(safeNext('/a?x=1&y=2'), '/a?x=1&y=2'); assert.equal(safeNext('/\\evil'), '/');
+  const v = 'dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk'; let seen: { url: string; body: unknown; headers: Record<string, string> } | null = null;
+  const ok = (async (url: string, init: RequestInit) => { seen = { url, body: JSON.parse(init.body as string), headers: init.headers as Record<string, string> }; return new Response(JSON.stringify({ access_token: 'AT', refresh_token: 'RT' }), { status: 200 }); }) as unknown as typeof fetch;
+  assert.deepEqual(await exchangeCode('https://x.supabase.co/', 'anon', 'abc12345', v, ok), { ok: true, access: 'AT', refresh: 'RT' }); const sx = seen as unknown as { url: string; body: unknown; headers: Record<string, string> }; assert.equal(sx.url, 'https://x.supabase.co/auth/v1/token?grant_type=pkce'); assert.deepEqual(sx.body, { auth_code: 'abc12345', code_verifier: v }); assert.equal(sx.headers.apikey, 'anon');
+  assert.equal((await exchangeCode('https://x', 'k', null, v, ok)).ok, false); assert.equal((await exchangeCode('https://x', 'k', 'abc12345', undefined, ok)).ok, false); assert.equal((await exchangeCode('https://x', 'k', 'bad code!', v, ok)).ok, false);
+  const denied = (async () => new Response(JSON.stringify({ error_description: 'invalid grant' }), { status: 400 })) as unknown as typeof fetch; assert.deepEqual(await exchangeCode('https://x', 'k', 'abc12345', v, denied), { ok: false, error: 'invalid grant' });
+  const html = bridgeHtml({ access: 'a</script><script>alert(1)//', refresh: 'r' }, '/settings'); assert.ok(!html.includes('</script><script>alert')); assert.ok(html.includes('upcircuit:auth:sb') && html.includes('location.replace("/settings")')); assert.equal(scriptJson('</script>'), '"\\u003c/script\\u003e"');
+});
+t('phone OTP: Indian mobile normalisation to +91 E.164', () => {
+  assert.equal(normalizeIndianMobile('9876543210'), '+919876543210'); assert.equal(normalizeIndianMobile('98765 43210'), '+919876543210'); assert.equal(normalizeIndianMobile('+91 98765-43210'), '+919876543210'); assert.equal(normalizeIndianMobile('919876543210'), '+919876543210'); assert.equal(normalizeIndianMobile('09876543210'), '+919876543210');
+  assert.equal(normalizeIndianMobile('5876543210'), null); assert.equal(normalizeIndianMobile('987654321'), null); assert.equal(normalizeIndianMobile('98765432101'), null); assert.equal(normalizeIndianMobile('abcdefghij'), null); assert.equal(normalizeIndianMobile(''), null);
+});
+t('PWA assets: manifest fields + icons exist with the right sizes; service worker handles push + notification click; schema has RLS on every table', () => {
+  const man = JSON.parse(readFileSync('public/manifest.json', 'utf8')); assert.equal(man.name, 'UpCircuit Financial Terminal'); assert.equal(man.short_name, 'UpCircuit'); assert.equal(man.display, 'standalone'); assert.equal(man.background_color, '#020617'); assert.equal(man.theme_color, '#3b82f6');
+  for (const sz of ['192x192', '512x512']) assert.ok(man.icons.some((i: { sizes: string; purpose: string }) => i.sizes === sz && i.purpose === 'any'), sz); assert.ok(man.icons.some((i: { purpose: string }) => i.purpose === 'maskable'));
+  const dim = (p: string) => { const b = readFileSync(p); assert.equal(b.subarray(1, 4).toString(), 'PNG'); return [b.readUInt32BE(16), b.readUInt32BE(20)]; };
+  assert.deepEqual(dim('public/icons/icon-192.png'), [192, 192]); assert.deepEqual(dim('public/icons/icon-512.png'), [512, 512]); assert.deepEqual(dim('public/icons/badge-72.png'), [72, 72]); assert.ok(existsSync('public/icons/icon-maskable-512.png'));
+  const sw = readFileSync('public/sw.js', 'utf8'); assert.ok(/addEventListener\('push'/.test(sw) && /showNotification/.test(sw) && /vibrate: \[200, 100, 200\]/.test(sw) && /\/icons\/icon-192\.png/.test(sw) && /\/icons\/badge-72\.png/.test(sw) && /addEventListener\('notificationclick'/.test(sw) && /\|\| '\/terminal'/.test(sw));
+  const sql = readFileSync('docs/PERSISTENCE_SCHEMA.sql', 'utf8'); for (const tb of ['profiles', 'portfolios', 'watchlists', 'alert_history', 'push_subscriptions']) { assert.match(sql, new RegExp(`create table if not exists public\\.${tb}\\b`)); assert.match(sql, new RegExp(`alter table public\\.${tb}\\s+enable row level security`, 'i')); }
+  for (const tb of ['portfolios', 'watchlists', 'alert_history', 'push_subscriptions']) assert.match(sql, new RegExp(`create policy "Users access own data" on public\\.${tb}\\s+for all using \\(auth\\.uid\\(\\) = user_id\\)`)); assert.match(sql, /grant\s+update \(primary_role, full_name, avatar_url, updated_at\)/); assert.ok(!/grant\s+update \([^)]*\bphone\b/.test(sql), 'phone is trigger-owned'); assert.match(sql, /phone_verified boolean/); assert.match(sql, /create trigger on_auth_user_phone_changed/); assert.ok(!/grant\s+update \([^)]*\bplan\b/.test(sql), 'plan stays billing-owned');
+  const layout = readFileSync('app/layout.tsx', 'utf8'); assert.match(layout, /manifest: '\/manifest\.json'/);
+});
+
+t('Round 30 · phone: +91 E.164 normalisation edge cases and masking for the profile card', () => {
+  for (const [i, o] of [['9876543210', '+919876543210'], ['+91 98765 43210', '+919876543210'], ['(98765) 43210', '+919876543210'], ['6000000000', '+916000000000'], ['5999999999', null], ['+1 9876543210', null], ['98765x43210', null], ['+91+919876543210', null]] as [string, string | null][]) assert.equal(normalizeIndianMobile(i), o, i);
+  assert.equal(maskPhone('+919876543210'), '+91 XXXXX X3210'); assert.equal(maskPhone('+14155550123'), '+XXXXXXX0123');
+});
+t('Round 30 · preferences blob: sound / volume / landing / density validated, old 3-field blobs upgrade, soundFor maps the picker', () => {
+  assert.deepEqual(parseNotify({ push: true, email: false, audio: true }), { ...DEFAULT_NOTIFY, push: true, email: false });
+  assert.deepEqual(parseNotify({ sound: 'arpeggio', volume: 0.55, landing: 'terminal', density: 'compact' }), { ...DEFAULT_NOTIFY, sound: 'arpeggio', volume: 0.55, landing: 'terminal', density: 'compact' });
+  assert.equal(parseNotify({ volume: 9 }).volume, 1); assert.equal(parseNotify({ volume: 0 }).volume, 0.1); assert.equal(parseNotify({ volume: 'x' }).volume, 1);
+  assert.deepEqual([parseNotify({ sound: 'rm -rf', landing: 'x', density: 7 }).sound, parseNotify({ landing: 'x' }).landing, parseNotify({ density: 7 }).density], ['default', 'home', 'comfortable']);
+  assert.equal(soundFor('lower', 'default'), 'lower'); assert.equal(soundFor('upper', 'default'), 'upper'); assert.equal(soundFor('lower', 'arpeggio'), 'upper');
+});
+t('Round 30 · popover/settings state: alert toggles, sound, landing, density persist per user, reach the cloud saver once each, and Mute = audio off', () => {
+  const mem = new Map<string, string>(); (globalThis as unknown as { localStorage: unknown }).localStorage = { getItem: (k: string) => mem.get(k) ?? null, setItem: (k: string, v: string) => void mem.set(k, v), removeItem: (k: string) => void mem.delete(k) };
+  setScope('u30'); loadNotifyLocal(); const saves: unknown[] = []; attachNotifySaver((p) => saves.push(p));
+  setNotify({ email: false }); setNotify({ audio: true, sound: 'arpeggio' }); setNotify({ landing: 'terminal' }); setNotify({ density: 'compact', volume: 0.4 }); setNotify({ audio: false });
+  assert.deepEqual(getNotify(), { push: false, email: false, audio: false, sound: 'arpeggio', volume: 0.4, landing: 'terminal', density: 'compact' }); assert.equal(saves.length, 5);
+  assert.deepEqual(JSON.parse(mem.get(`${NOTIFY_KEY}:u30`)!), getNotify());
+  setScope('u31'); loadNotifyLocal(); assert.deepEqual(getNotify(), DEFAULT_NOTIFY, 'other account unaffected'); setScope('u30'); loadNotifyLocal(); assert.equal(getNotify().landing, 'terminal', 'restored after reload');
+  attachNotifySaver(null); setScope(null); delete (globalThis as unknown as { localStorage?: unknown }).localStorage;
+});
+t('Round 30 · phone binding (Supabase): PUT /user sends the code, phone_change verify returns the refreshed user with phoneVerified; wrong code → friendly error; old schema without phone_verified still loads', async () => {
+  const kv = new Map<string, string>([['upcircuit:auth:sb', JSON.stringify({ access: 'AT', refresh: 'RT' })]]); const store = { getItem: (k: string) => kv.get(k) ?? null, setItem: (k: string, v: string) => void kv.set(k, v), removeItem: (k: string) => void kv.delete(k) };
+  const calls: { url: string; method: string; body: unknown; auth?: string }[] = []; let profileHasVerified = true; let verifyStatus = 200;
+  const f = (async (url: string, init: RequestInit = {}) => {
+    const h = (init.headers ?? {}) as Record<string, string>; calls.push({ url, method: init.method ?? 'GET', body: init.body ? JSON.parse(init.body as string) : undefined, auth: h.Authorization });
+    if (url.includes('/auth/v1/verify')) return verifyStatus === 200 ? Response.json({ access_token: 'AT2', refresh_token: 'RT2', user: { id: 'u1', email: 'a@b.co', phone: '919876543210', phone_confirmed_at: '2026-10-23T00:00:00Z', identities: [{ provider: 'email' }], app_metadata: { providers: ['email'] } } }) : Response.json({ msg: 'Token has expired or is invalid' }, { status: 403 });
+    if (url.includes('/rest/v1/profiles')) { if (url.includes('phone_verified') && !profileHasVerified) return new Response('{}', { status: 400 }); return Response.json([{ primary_role: 'retail', plan: 'full', phone: '+919876543210', ...(profileHasVerified ? { phone_verified: true } : {}) }]); }
+    if (url.includes('/identities/authorize')) return Response.json({ url: 'https://p.supabase.co/auth/v1/authorize?provider=google&x=1' });
+    return Response.json({});
+  }) as unknown as typeof fetch;
+  const be = createSupabaseBackend('https://p.supabase.co/', 'anon', store, f);
+  assert.deepEqual(await be.startPhoneLink!('+919876543210'), { ok: true }); assert.equal(calls[0].method, 'PUT'); assert.ok(calls[0].url.endsWith('/auth/v1/user')); assert.deepEqual(calls[0].body, { phone: '+919876543210' }); assert.equal(calls[0].auth, 'Bearer AT');
+  const r = await be.confirmPhoneLink!('+919876543210', '123456'); assert.ok(r.ok); if (r.ok) { assert.equal(r.user.phone, '+919876543210'); assert.equal(r.user.phoneVerified, true); assert.deepEqual(r.user.providers, ['email']); }
+  assert.deepEqual(calls.find((c) => c.url.includes('/verify'))!.body, { type: 'phone_change', phone: '+919876543210', token: '123456' }); assert.equal(JSON.parse(kv.get('upcircuit:auth:sb')!).access, 'AT2', 'new session stored');
+  verifyStatus = 403; assert.deepEqual(await be.confirmPhoneLink!('+919876543210', '000000'), { ok: false, error: 'That code is wrong or has expired.' });
+  profileHasVerified = false; verifyStatus = 200; const r2 = await be.confirmPhoneLink!('+919876543210', '123456'); assert.ok(r2.ok && r2.user.phoneVerified === true, 'falls back to phone_confirmed_at');
+  const g = await be.startGoogleLink!('https://app/auth/callback'); assert.ok(g.ok); const gl = calls.filter((c) => c.url.includes('/identities/authorize')).pop()!; assert.match(gl.url, /provider=google/); assert.match(gl.url, /skip_http_redirect=true/); assert.match(gl.url, /code_challenge_method=s256/); assert.equal(gl.auth, 'Bearer AT2');
+  kv.delete('upcircuit:auth:sb'); assert.equal((await be.startPhoneLink!('+919876543210')).ok, false); assert.equal((await be.startGoogleLink!('x')).ok, false);
+});
+t('Round 30 · backup JSON + force sync: contents, filename, never wipes the cloud with "nothing stored"', async () => {
+  const keys: Record<string, string> = { 'upcircuit:holdings:v1': JSON.stringify([{ symbol: 'TCS', qty: 10, avg: 3500 }]), 'upcircuit:watchlists:v2': JSON.stringify({ active: 'main', lists: [{ id: 'main', name: 'Main', symbols: ['ITC', 'SBIN'] }] }), 'upcircuit:focus:v1': JSON.stringify(['TCS']) };
+  const snap = readSnapshot((b) => keys[b] ?? null); assert.deepEqual(snap.holdings, [{ symbol: 'TCS', qty: 10, avg: 3500 }]); assert.deepEqual(snap.focus, ['TCS']);
+  const b = buildBackup({ user: { id: 'u1', email: 'a@b.co', phone: '+919876543210' }, snap, prefs: DEFAULT_NOTIFY, now: new Date('2026-10-23T05:00:00Z') });
+  assert.equal(b.app, 'UpCircuit'); assert.equal(b.version, 1); assert.equal(b.exportedAt, '2026-10-23T05:00:00.000Z'); assert.deepEqual(b.watchlists.lists[0].symbols, ['ITC', 'SBIN']); assert.equal(b.holdings.length, 1); assert.equal(backupFilename(new Date('2026-10-23T05:00:00Z')), 'upcircuit-backup-2026-10-23.json'); assert.ok(!JSON.stringify(b).includes('token'));
+  const empty = readSnapshot(() => null); assert.deepEqual(empty, { holdings: null, watchlists: null, focus: null }); assert.deepEqual(buildBackup({ user: { id: 'u' }, snap: empty, prefs: DEFAULT_NOTIFY }).holdings, []); assert.deepEqual(buildBackup({ user: { id: 'u' }, snap: empty, prefs: DEFAULT_NOTIFY }).watchlists.lists[0].symbols, ['RELIANCE', 'TCS', 'HDFCBANK', 'INFY', 'SBIN'], 'never-edited watchlist = app defaults');
+  const r = rec(); const c = mkCloud(r.f);
+  const res = await forceSync(c, 'u1', snap, DEFAULT_NOTIFY); assert.equal(res.ok, true); assert.equal(res.holdings, 1); assert.equal(res.watchlistSymbols, 2); assert.ok(r.calls.some((k) => /portfolios\?on_conflict/.test(k.url)) && r.calls.some((k) => /watchlists\?on_conflict/.test(k.url)) && r.calls.some((k) => /preferences\?on_conflict/.test(k.url)));
+  r.calls.length = 0; const res2 = await forceSync(c, 'u1', empty, DEFAULT_NOTIFY); assert.equal(res2.holdings, null); assert.ok(!r.calls.some((k) => /portfolios|watchlists/.test(k.url)), 'nothing stored locally → portfolio/watchlists untouched'); assert.ok(r.calls.some((k) => /preferences/.test(k.url)));
+  const bad = (async () => { throw new Error('offline'); }) as unknown as typeof fetch; const rf = await forceSync(mkCloud(bad), 'u1', snap, DEFAULT_NOTIFY); assert.equal(rf.ok, false); assert.deepEqual(rf.errors, ['portfolio', 'watchlists', 'preferences']);
+});
+t('Round 30 · clean sign-out: pushes first, purges only this user’s cache (not the migration flag / other users), keeps everything when the push fails; local-only accounts keep their data', async () => {
+  const mk = () => { const m = new Map<string, string>([['upcircuit:holdings:v1:u1', '[]'], ['upcircuit:watchlists:v2:u1', '{}'], ['upcircuit:notify:v1:u1', '{}'], ['upcircuit:cloud-migrated:u1', '1'], ['upcircuit:holdings:v1:u2', '[]'], ['upcircuit:theme', 'dark']]); return { m, store: { get length() { return m.size; }, key: (i: number) => [...m.keys()][i] ?? null, removeItem: (k: string) => void m.delete(k) } }; };
+  let x = mk(); assert.deepEqual(purgeUserCache(x.store, 'u1').sort(), ['upcircuit:holdings:v1:u1', 'upcircuit:notify:v1:u1', 'upcircuit:watchlists:v2:u1']); assert.deepEqual([...x.m.keys()].sort(), ['upcircuit:cloud-migrated:u1', 'upcircuit:holdings:v1:u2', 'upcircuit:theme']);
+  x = mk(); const r = rec(); let pushRemoved = 0;
+  let res = await cleanBeforeSignOut({ cloud: mkCloud(r.f), userId: 'u1', read: (b) => x.m.get(`${b}:u1`) ?? null, prefs: DEFAULT_NOTIFY, store: x.store, removePush: async () => void pushRemoved++ });
+  assert.equal(res.synced, true); assert.equal(res.purged.length, 3); assert.equal(pushRemoved, 1); assert.ok(r.calls.length > 0);
+  x = mk(); const bad = (async () => { throw new Error('offline'); }) as unknown as typeof fetch; res = await cleanBeforeSignOut({ cloud: mkCloud(bad), userId: 'u1', read: (b) => x.m.get(`${b}:u1`) ?? null, prefs: DEFAULT_NOTIFY, store: x.store });
+  assert.equal(res.synced, false); assert.equal(res.kept, true); assert.equal(x.m.size, 6, 'failed sync → nothing deleted');
+  x = mk(); res = await cleanBeforeSignOut({ cloud: null, userId: 'u1', read: () => null, prefs: DEFAULT_NOTIFY, store: x.store }); assert.deepEqual(res, { synced: null, purged: [], kept: true }); assert.equal(x.m.size, 6);
+});
+t('Round 30 · sync badge: local → synced → offline (retrying) → synced, driven by REST results; resetAccountData hits the four tables', async () => {
+  setSyncAvailable(false); assert.equal(getSync().state, 'local'); assert.equal(syncLabel(getSync().state), '🟡 Local Cache Only'); reportSync(true); assert.equal(getSync().state, 'local', 'no cloud account → stays local');
+  setSyncAvailable(true); assert.equal(getSync().state, 'synced'); assert.equal(syncLabel('synced'), '🟢 Supabase Synced'); reportSync(false, 5); assert.equal(getSync().state, 'offline'); assert.match(syncLabel('offline'), /Local Cache Only/); reportSync(true, 9); assert.equal(getSync().state, 'synced'); assert.equal(getSync().lastOkAt, 9);
+  const results: boolean[] = []; const r = rec(); const c = createCloud({ url: 'https://x.supabase.co', anonKey: 'anon', getToken: async () => 'tok', fetch: r.f, onResult: (ok) => results.push(ok) }); await c.resetAccountData('u1');
+  assert.deepEqual(r.calls.map((k) => `${k.method} ${k.url.replace('https://x.supabase.co/rest/v1/', '')}`), ['DELETE portfolios?user_id=eq.u1', 'DELETE watchlists?user_id=eq.u1', 'DELETE alert_history?user_id=eq.u1', 'DELETE preferences?user_id=eq.u1']); assert.deepEqual(results, [true, true, true, true]);
+  const boom = createCloud({ url: 'https://x.supabase.co', anonKey: 'anon', getToken: async () => 'tok', fetch: (async () => { throw new Error('net'); }) as unknown as typeof fetch, onResult: (ok) => results.push(ok) }); await assert.rejects(() => boom.loadPortfolio('u1')); assert.equal(results[results.length - 1], false);
+  setSyncAvailable(false);
+});
+t('Round 30 · UI wiring: popover has every required control; SettingsModal has the four tabs; schema keeps phone trigger-owned', () => {
+  const pop = readFileSync('components/ProfilePopover.tsx', 'utf8');
+  for (const id of ['account-email', 'account-phone', 'account-link-mobile', 'account-plan', 'account-sync', 'account-settings', 'quick-push', 'quick-email', 'quick-sound', 'quick-landing', 'account-feed', 'account-force-sync', 'account-export-ticks', 'account-export-backup', 'account-plans', 'account-logout']) assert.ok(pop.includes(id) || readFileSync('components/SettingsModal.tsx', 'utf8').includes(id), id);
+  assert.match(pop, /⚠️ Link Mobile/); assert.match(pop, /Tier \{plan\.tier\} - \{plan\.name\}/); assert.match(pop, /Force Sync Cloud State/); assert.match(pop, /Export Portfolio &amp; Watchlist Backup \(JSON\)/); assert.match(pop, /Export session ticks \(CSV\)/);
+  const sm = readFileSync('components/SettingsModal.tsx', 'utf8'); for (const l of ['Profile & Auth', 'Alert Channels', 'Market & Layout', 'Cloud & Data']) assert.ok(sm.includes(l), l); for (const id of ['phone-link', 'link-phone', 'link-send', 'link-otp', 'link-verify', 'link-resend', 'google-link', 'alert-volume', 'cloud-force-sync', 'reset-cloud']) assert.ok(sm.includes(id), id);
+  assert.ok(readFileSync('components/CircuitAlertOverlay.tsx', 'utf8').includes('soundFor(head.dir'), 'overlay honours the chosen sound + volume');
+  assert.ok(readFileSync('components/Navbar.tsx', 'utf8').includes('<ProfilePopover'));
+});
+
+t('Round 31 · universal search: ticker, company name and BSE scrip code over an 8k master; exact ticker ranks first (Enter target); fast', async () => {
+  await sleep(400); // CPU-heavy: let the timer-based stream tests above finish first
+  const real = SEED_INSTRUMENTS.map((i) => ({ ...i }));
+  const codes: Record<string, string> = { RELIANCE: '500325', DIXON: '532790', BHARTIARTL: '532454', KALYANKJIL: '543278' };
+  const master: Instrument[] = real.map((i) => (codes[i.symbol] ? { ...i, code: codes[i.symbol] } : i));
+  for (let k = 0; k < 7000; k++) master.push({ symbol: `ZZ${k.toString(36).toUpperCase()}${k}`, name: `Synthetic Holdings Number ${k} Ltd`, sector: 'Others', exch: 'BSE', code: String(600000 + k) });
+  const idx = buildIndex(master);
+  for (const s of ['BHARTIARTL', 'DIXON', 'KALYANKJIL']) assert.equal(searchInstruments(idx, s, 8)[0].symbol, s, `${s} is the Enter target`);
+  assert.equal(searchInstruments(idx, 'bharti airtel', 8)[0].symbol, 'BHARTIARTL'); assert.equal(searchInstruments(idx, 'dixon tech', 8)[0].symbol, 'DIXON'); assert.equal(searchInstruments(idx, 'kalyan jew', 8)[0].symbol, 'KALYANKJIL');
+  assert.equal(searchInstruments(idx, '500325', 8)[0].symbol, 'RELIANCE', 'exact BSE code'); assert.equal(searchInstruments(idx, '53279', 8)[0].symbol, 'DIXON', 'code prefix'); assert.equal(searchInstruments(idx, '543278', 3)[0].symbol, 'KALYANKJIL');
+  assert.deepEqual(searchInstruments(idx, '12', 8).filter((r) => r.code?.startsWith('12')), [], 'short numbers do not match codes');
+  const t0 = Date.now(); for (const qy of ['dixon', 'bharti', 'kalyan jew', '5003']) searchInstruments(idx, qy, 8); assert.ok((Date.now() - t0) / 4 < 60, `avg ${(Date.now() - t0) / 4} ms per query over ${master.length} names`);
+  const { codes: cm } = pickEquities([{ symbol: 'RELIANCE', name: 'RELIANCE', exch_seg: 'BSE', instrumenttype: '', token: '500325' }, { symbol: 'BAD', name: 'BAD', exch_seg: 'BSE', instrumenttype: '', token: 'abc' }]); assert.equal(cm.get('RELIANCE'), '500325'); assert.ok(!cm.has('BAD'));
+});
+t('Round 31 · add holding: new symbol appended, same symbol merged at the weighted-average price, invalid input ignored', () => {
+  const base = [{ symbol: 'TCS', qty: 10, avg: 3500 }];
+  assert.deepEqual(mergeHolding(base, { symbol: 'DIXON', qty: 5, avg: 15000 }), [...base, { symbol: 'DIXON', qty: 5, avg: 15000 }]);
+  assert.deepEqual(mergeHolding(base, { symbol: 'TCS', qty: 10, avg: 3700 }), [{ symbol: 'TCS', qty: 20, avg: 3600 }]);
+  assert.deepEqual(mergeHolding([{ symbol: 'ITC', qty: 100, avg: 0 }], { symbol: 'ITC', qty: 10, avg: 410 }), [{ symbol: 'ITC', qty: 110, avg: 410 }], 'demo row without a price takes the new price');
+  assert.equal(mergeHolding(base, { symbol: 'X', qty: 0, avg: 5 }), base); assert.equal(mergeHolding(base, { symbol: 'X', qty: 5, avg: -1 }), base);
+});
+t('Round 31 · live fundamentals: Mcap = LTP×shares, P/E = LTP÷EPS, P/B = LTP÷BVPS on SmartAPI prices; Yahoo values otherwise; never invented', () => {
+  const i = { ltp: 3000, sharesCr: 361.8, eps: 120, bookValue: 400, yahooMcapCr: 1_000_000, yahooPe: 24 };
+  const live = liveFundamentals({ ...i, mode: 'live' });
+  assert.ok(Math.abs(live.marketCapCr.value! - 3000 * 361.8) < 1e-6 && live.marketCapCr.source === 'smartapi'); assert.equal(live.pe.value, 25); assert.equal(live.pe.source, 'smartapi'); assert.equal(live.pb.value, 7.5); assert.equal(live.pb.source, 'smartapi');
+  assert.equal(liveFundamentals({ ...i, ltp: 3030, mode: 'live' }).pe.value, 25.25, 'moves with the tick');
+  const snap = liveFundamentals({ ...i, mode: 'snapshot' }); assert.equal(snap.pe.source, 'smartapi'); assert.equal(smartApiLabel('live'), 'SmartAPI Live'); assert.equal(smartApiLabel('snapshot'), 'SmartAPI Last Price');
+  const del = liveFundamentals({ ...i, mode: 'delayed' }); assert.deepEqual([del.marketCapCr.source, del.pe.source, del.pb.source], ['yahoo', 'yahoo', 'computed']); assert.equal(del.pe.value, 24); assert.equal(del.marketCapCr.value, 1_000_000);
+  const noShares = liveFundamentals({ ...i, mode: 'live', sharesCr: null }); assert.equal(noShares.marketCapCr.source, 'yahoo');
+  const loss = liveFundamentals({ ...i, mode: 'live', eps: -4, yahooPe: null }); assert.deepEqual([loss.pe.value, loss.pe.source], [null, 'na'], 'negative EPS → N/A, not a fake ratio');
+  assert.equal(liveFundamentals({ ltp: 100, mode: 'live' }).marketCapCr.value, null);
+  const rs = relativeStrength([100, 101], [200, 201], 1.5, 0.4); assert.ok(Math.abs(rs[0].rs! - 1.1) < 1e-9, '1D relative = stock live % − NIFTY live %');
+});
+t('Round 31 · tick pipeline: engine.onTick fires synchronously for every tick (stocks + indices), listener faults are isolated, unsubscribe works; DOM cadence is 250 ms', () => {
+  const e = ingestFixture(new MarketEngine(SEED_INSTRUMENTS)); const got: string[] = []; const off = e.onTick((x) => got.push(`${x.symbol}:${x.ltp}:${x.volume}`));
+  e.onTick(() => { throw new Error('bad listener'); });
+  const t0 = Date.parse('2026-10-23T05:00:00Z'); e.applyTick({ symbol: 'TCS', ltp: 4000, volume: 1000, close: 3950, ts: t0 }, t0); e.applyTick({ symbol: 'TCS', ltp: 4001, volume: 1100, ts: t0 + 5 }, t0 + 5); e.applyTick({ symbol: 'TCS', ltp: 4002, volume: 1150, ts: t0 + 9 }, t0 + 9);
+  assert.deepEqual(got, ['TCS:4000:1000', 'TCS:4001:1100', 'TCS:4002:1150'], 'one event per tick, even 4 ms apart');
+  const nifty = e.indices.find((i) => i.id === 'NIFTY')!; e.applyIndexTick('NIFTY', 24500, 24400); assert.equal(got[3], 'NIFTY:24500:0'); assert.ok(nifty.loaded);
+  off(); e.applyTick({ symbol: 'TCS', ltp: 4003, volume: 1200, ts: t0 + 20 }, t0 + 20); assert.equal(got.length, 4, 'unsubscribed');
+  assert.equal(DOM_BATCH_MS, 250); const pc = readFileSync('components/PriceChart.tsx', 'utf8'); assert.ok(/subscribeTicks/.test(pc) && /candles\.update\(toBar\(next\)\)/.test(pc) && /if \(direct\) return;/.test(pc), 'chart updates straight from the tick listener');
+  const css = readFileSync('app/globals.css', 'utf8'); assert.match(css, /\.tick-flash\s*\{[^}]*transition:\s*background-color 250ms ease,\s*color 250ms ease/);
+  const pumpRender: number[] = []; let clock = 0; const timers: { cb: () => void; at: number }[] = []; const pump = createFramePump(() => pumpRender.push(clock), DOM_BATCH_MS, { raf: (cb) => cb(), setTimer: (cb, ms) => timers.push({ cb, at: clock + ms }), clearTimer: () => undefined, now: () => clock });
+  for (let k = 0; k < 40; k++) { clock = k * 5; pump.request(); } timers.sort((a, b) => a.at - b.at).forEach((x) => { clock = x.at; x.cb(); }); assert.ok(pumpRender.length <= 2, `200 ms of 5 ms ticks → ${pumpRender.length} DOM renders`);
+});
+t('Round 31 · UI wiring: focus basket + add-holding use the autocomplete over the full master; fundamentals badges are SmartAPI-aware', () => {
+  const fb = readFileSync('components/MyFocusBasket.tsx', 'utf8'); assert.ok(/<StockAutocomplete/.test(fb) && /instruments=\{instruments\}/.test(fb) && !/avail\.map/.test(fb), 'focus add searches the whole master');
+  const pm = readFileSync('components/PortfolioUploadModal.tsx', 'utf8'); assert.ok(/data-testid="add-holding"/.test(pm) && /<StockAutocomplete/.test(pm));
+  const st = readFileSync('components/StockPostMortem.tsx', 'utf8'); assert.ok(/liveFundamentals\(/.test(st) && /smartApiLabel\(mode\)/.test(st)); assert.ok(/liveFundamentals\(/.test(readFileSync('components/StockOverview.tsx', 'utf8')));
+  const ac = readFileSync('components/StockAutocomplete.tsx', 'utf8'); assert.ok(/e\.key === 'Enter'/.test(ac) && /onMouseDown=\{\(e\) => \{ e\.preventDefault\(\); void commit\(r\)/.test(ac));
 });
 
 void Promise.all(pending).then(() => {

@@ -1,4 +1,5 @@
 import { appUrl } from './appUrl';
+import { challengeOf, newVerifier } from './pkce';
 import { PLANS, coerceRole, canUse, validateCredentials, type AuthBackend, type AuthResult, type PlanId, type Role, type User, ALL_ROLES } from './auth';
 
 type Store = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
@@ -116,12 +117,29 @@ export function createSupabaseBackend(url: string, anonKey: string, store: Store
     const j = await r.json().catch(() => ({}));
     return (j as { error_description?: string; msg?: string; message?: string }).error_description ?? (j as { msg?: string }).msg ?? (j as { message?: string }).message ?? d;
   };
-  async function profile(t: string, id: string, email: string): Promise<User | null> {
-    const r = await f(`${base}/rest/v1/profiles?id=eq.${encodeURIComponent(id)}&select=role,plan`, { headers: hdr(t) });
+  type GoUser = { id: string; email?: string; phone?: string; phone_confirmed_at?: string | null; user_metadata?: Record<string, unknown>; app_metadata?: { provider?: string; providers?: unknown }; identities?: { provider?: string }[] };
+  const str = (x: unknown) => (typeof x === 'string' && x.trim() ? x.trim() : undefined);
+  async function profile(t: string, u: GoUser): Promise<User | null> {
+    const q = (cols: string) => f(`${base}/rest/v1/profiles?id=eq.${encodeURIComponent(u.id)}&select=${cols}`, { headers: hdr(t) });
+    let r = await q('primary_role,plan,full_name,avatar_url,phone,phone_verified');
+    if (!r.ok) r = await q('primary_role,plan,full_name,avatar_url,phone'); // schema from before Round 30 (no phone_verified yet)
     if (!r.ok) return null;
-    const row = ((await r.json().catch(() => [])) as { role?: unknown; plan?: unknown }[])[0];
+    const row = ((await r.json().catch(() => [])) as { primary_role?: unknown; plan?: unknown; full_name?: unknown; avatar_url?: unknown; phone?: unknown; phone_verified?: unknown }[])[0];
     if (!row || !isPlan(row.plan)) return null;
-    return { id, email, plan: row.plan, role: coerceRole(row.plan, isRole(row.role) ? row.role : undefined) };
+    const meta = u.user_metadata ?? {};
+    const rawPhone = str(row.phone) ?? str(u.phone);
+    const user: User = { id: u.id, email: u.email ?? '', plan: row.plan, role: coerceRole(row.plan, isRole(row.primary_role) ? row.primary_role : undefined) };
+    const name = str(row.full_name) ?? str(meta.full_name) ?? str(meta.name);
+    const avatar = str(row.avatar_url) ?? str(meta.avatar_url) ?? str(meta.picture);
+    if (rawPhone) {
+      user.phone = rawPhone.startsWith('+') ? rawPhone : `+${rawPhone}`;
+      user.phoneVerified = typeof row.phone_verified === 'boolean' ? row.phone_verified : !!u.phone_confirmed_at;
+    }
+    const providers = new Set<string>([...(Array.isArray(u.app_metadata?.providers) ? (u.app_metadata!.providers as unknown[]).filter((x): x is string => typeof x === 'string') : []), ...(u.identities ?? []).map((i) => i.provider ?? '').filter(Boolean)]);
+    if (providers.size) user.providers = [...providers].sort();
+    if (name) user.name = name;
+    if (avatar) user.avatar = avatar;
+    return user;
   }
   async function refresh(t: Tokens): Promise<Tokens | null> {
     const r = await f(`${base}/auth/v1/token?grant_type=refresh_token`, { method: 'POST', headers: hdr(), body: JSON.stringify({ refresh_token: t.refresh }) });
@@ -129,9 +147,9 @@ export function createSupabaseBackend(url: string, anonKey: string, store: Store
     const j = await r.json();
     return j.access_token ? { access: j.access_token, refresh: j.refresh_token ?? t.refresh } : null;
   }
-  const finish = async (j: { access_token?: string; refresh_token?: string; user?: { id: string; email?: string } }): Promise<AuthResult> => {
+  const finish = async (j: { access_token?: string; refresh_token?: string; user?: GoUser }): Promise<AuthResult> => {
     if (!j.access_token || !j.user) return fail('Account created — confirm your email, then log in.');
-    const u = await profile(j.access_token, j.user.id, j.user.email ?? '');
+    const u = await profile(j.access_token, j.user);
     if (!u) return fail('Signed in, but your profile could not be loaded.');
     save({ access: j.access_token, refresh: j.refresh_token ?? '' });
     return { ok: true, user: u };
@@ -150,8 +168,7 @@ export function createSupabaseBackend(url: string, anonKey: string, store: Store
           r = await f(`${base}/auth/v1/user`, { headers: hdr(t.access) });
         }
         if (!r.ok) return null;
-        const u = await r.json();
-        return await profile(t.access, u.id, u.email ?? '');
+        return await profile(t.access, (await r.json()) as GoUser);
       } catch {
         return null;
       }
@@ -197,6 +214,87 @@ export function createSupabaseBackend(url: string, anonKey: string, store: Store
         return null;
       }
     },
+    async startOAuth(provider, redirectTo) {
+      try {
+        const verifier = newVerifier();
+        const q = new URLSearchParams({ provider, redirect_to: redirectTo, code_challenge: await challengeOf(verifier), code_challenge_method: 's256' });
+        return { ok: true, url: `${base}/auth/v1/authorize?${q}`, verifier };
+      } catch {
+        return { ok: false, error: 'This browser cannot start Google sign-in (Web Crypto unavailable).' };
+      }
+    },
+    async adoptSession(t) {
+      try {
+        const r = await f(`${base}/auth/v1/user`, { headers: hdr(t.access) });
+        if (!r.ok) return fail('Google sign-in could not be completed — try again.');
+        const gu = (await r.json()) as GoUser;
+        const u = await profile(t.access, gu);
+        if (!u) return fail('Signed in, but your profile could not be loaded.');
+        save({ access: t.access, refresh: t.refresh });
+        return { ok: true, user: u };
+      } catch {
+        return fail('Network error — please try again.');
+      }
+    },
+    async sendOtp(phone, data) {
+      try {
+        const r = await f(`${base}/auth/v1/otp`, { method: 'POST', headers: hdr(), body: JSON.stringify({ phone, create_user: true, ...(data ? { data } : {}) }) });
+        return r.ok ? { ok: true } : { ok: false, error: await msg(r, 'Could not send the code.') };
+      } catch {
+        return { ok: false, error: 'Network error — please try again.' };
+      }
+    },
+    async verifyOtp(phone, token) {
+      try {
+        const r = await f(`${base}/auth/v1/verify`, { method: 'POST', headers: hdr(), body: JSON.stringify({ type: 'sms', phone, token }) });
+        if (!r.ok) return fail(r.status === 400 || r.status === 403 || r.status === 422 ? 'That code is wrong or has expired.' : await msg(r, 'Verification failed.'));
+        return finish(await r.json());
+      } catch {
+        return fail('Network error — please try again.');
+      }
+    },
+    async startPhoneLink(phone) {
+      const t = load();
+      if (!t) return { ok: false, error: 'Your session expired — log in again.' };
+      try {
+        const r = await f(`${base}/auth/v1/user`, { method: 'PUT', headers: hdr(t.access), body: JSON.stringify({ phone }) });
+        return r.ok ? { ok: true } : { ok: false, error: await msg(r, 'Could not send the code.') };
+      } catch {
+        return { ok: false, error: 'Network error — please try again.' };
+      }
+    },
+    async confirmPhoneLink(phone, token) {
+      const t = load();
+      if (!t) return fail('Your session expired — log in again.');
+      try {
+        const r = await f(`${base}/auth/v1/verify`, { method: 'POST', headers: hdr(t.access), body: JSON.stringify({ type: 'phone_change', phone, token }) });
+        if (!r.ok) return fail(r.status === 400 || r.status === 403 || r.status === 422 ? 'That code is wrong or has expired.' : await msg(r, 'Verification failed.'));
+        const j = (await r.json().catch(() => ({}))) as { access_token?: string; refresh_token?: string; user?: GoUser };
+        const access = j.access_token ?? t.access;
+        const ur = j.user ?? ((await (await f(`${base}/auth/v1/user`, { headers: hdr(access) })).json().catch(() => null)) as GoUser | null);
+        if (!ur) return fail('Number verified, but your profile could not be reloaded — refresh the page.');
+        const u = await profile(access, ur);
+        if (!u) return fail('Number verified, but your profile could not be reloaded — refresh the page.');
+        save({ access, refresh: j.refresh_token ?? t.refresh });
+        return { ok: true, user: u };
+      } catch {
+        return fail('Network error — please try again.');
+      }
+    },
+    async startGoogleLink(redirectTo) {
+      const t = load();
+      if (!t) return { ok: false, error: 'Your session expired — log in again.' };
+      try {
+        const verifier = newVerifier();
+        const q = new URLSearchParams({ provider: 'google', redirect_to: redirectTo, code_challenge: await challengeOf(verifier), code_challenge_method: 's256', skip_http_redirect: 'true' });
+        const r = await f(`${base}/auth/v1/user/identities/authorize?${q}`, { headers: hdr(t.access) });
+        if (!r.ok) return { ok: false, error: await msg(r, 'Could not start Google linking — enable "Manual linking" in Supabase Auth settings.') };
+        const j = (await r.json().catch(() => ({}))) as { url?: string };
+        return j.url ? { ok: true, url: j.url, verifier } : { ok: false, error: 'Supabase did not return a Google link URL.' };
+      } catch {
+        return { ok: false, error: 'Network error — please try again.' };
+      }
+    },
     async update(user, patch) {
       if (patch.plan && patch.plan !== user.plan) return fail('Plan changes are handled by billing — contact support or complete checkout.');
       const t = load();
@@ -204,7 +302,7 @@ export function createSupabaseBackend(url: string, anonKey: string, store: Store
       if (!patch.role) return { ok: true, user };
       if (!canUse(user.plan, patch.role)) return fail('That role is not included in your plan.');
       try {
-        const r = await f(`${base}/rest/v1/profiles?id=eq.${encodeURIComponent(user.id)}`, { method: 'PATCH', headers: { ...hdr(t.access), Prefer: 'return=minimal' }, body: JSON.stringify({ role: patch.role }) });
+        const r = await f(`${base}/rest/v1/profiles?id=eq.${encodeURIComponent(user.id)}`, { method: 'PATCH', headers: { ...hdr(t.access), Prefer: 'return=minimal' }, body: JSON.stringify({ primary_role: patch.role }) });
         return r.ok ? { ok: true, user: { ...user, role: patch.role } } : fail(await msg(r, 'Could not save your role.'));
       } catch {
         return fail('Network error — please try again.');

@@ -39,9 +39,18 @@ export const coerceRole = (plan: PlanId | undefined, role: Role | undefined): Ro
 
 export interface User {
   id: string;
+  /** empty for phone-only accounts */
   email: string;
   role: Role;
   plan: PlanId;
+  /** E.164, e.g. +919876543210 (phone / OTP accounts) */
+  phone?: string;
+  /** the phone number was confirmed by an SMS code (auth.users.phone_confirmed_at, mirrored to profiles.phone_verified) */
+  phoneVerified?: boolean;
+  /** sign-in providers linked to the account: 'email' | 'google' | 'phone' */
+  providers?: string[];
+  name?: string;
+  avatar?: string;
 }
 
 export type AuthResult = { ok: true; user: User } | { ok: false; error: string };
@@ -57,6 +66,19 @@ export interface AuthBackend {
   accessToken(): Promise<string | null>;
   /** persist a new primary role and/or plan (a backend may refuse a plan change — billing owns it) */
   update(user: User, patch: { role?: Role; plan?: PlanId }): Promise<AuthResult>;
+  /** Supabase only: PKCE URL for "Continue with Google" (the caller stores `verifier` in a cookie, then navigates to `url`) */
+  startOAuth?(provider: 'google', redirectTo: string): Promise<{ ok: true; url: string; verifier: string } | { ok: false; error: string }>;
+  /** Supabase only: adopt tokens handed over by app/auth/callback after the code exchange */
+  adoptSession?(t: { access: string; refresh: string }): Promise<AuthResult>;
+  /** Supabase only: text a 6-digit code to an E.164 number (`data` = role/plan for a brand-new account) */
+  sendOtp?(phone: string, data?: { role: Role; plan: PlanId }): Promise<{ ok: true } | { ok: false; error: string }>;
+  verifyOtp?(phone: string, token: string): Promise<AuthResult>;
+  /** Supabase only, signed in: text a code to bind a mobile number to this account (GoTrue phone_change) */
+  startPhoneLink?(phone: string): Promise<{ ok: true } | { ok: false; error: string }>;
+  /** Supabase only: confirm the code; resolves with the refreshed user (phone + phoneVerified) */
+  confirmPhoneLink?(phone: string, token: string): Promise<AuthResult>;
+  /** Supabase only, signed in: PKCE URL that links a Google identity to THIS account (the callback exchanges the code as usual) */
+  startGoogleLink?(redirectTo: string): Promise<{ ok: true; url: string; verifier: string } | { ok: false; error: string }>;
 }
 
 export const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
@@ -69,3 +91,19 @@ export function validateCredentials(email: string, password: string): string | n
 
 /** Namespace a localStorage key per user so accounts sharing a browser never see each other's watchlists, portfolio or chats. */
 export const userKey = (base: string, userId?: string | null) => (userId ? `${base}:${userId}` : base);
+
+/** 10-digit Indian mobile (starts 6–9) → E.164 `+91XXXXXXXXXX`; accepts spaces / dashes and an optional +91 / 91 / 0 prefix. null when invalid. */
+export function normalizeIndianMobile(input: string): string | null {
+  let d = input.replace(/[\s\-().]/g, '');
+  if (d.startsWith('+91')) d = d.slice(3);
+  else if (d.startsWith('91') && d.length === 12) d = d.slice(2);
+  else if (d.startsWith('0') && d.length === 11) d = d.slice(1);
+  return /^[6-9]\d{9}$/.test(d) ? `+91${d}` : null;
+}
+export const OTP_RE = /^\d{6}$/;
+
+/** `+919876543210` → `+91 XXXXX X3210` (last four digits only) */
+export function maskPhone(e164: string): string {
+  const m = /^\+91(\d{6})(\d{4})$/.exec(e164);
+  return m ? `+91 XXXXX X${m[2]}` : e164.replace(/\d(?=\d{4})/g, 'X');
+}

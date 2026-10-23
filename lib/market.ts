@@ -141,6 +141,9 @@ export function smartApiStatus(i: { mode: FeedMode; conn: FeedConn; reason?: Liv
 }
 
 /** A decoded market tick (₹ prices). Produced by lib/smartapiDirect.ts from SmartWebSocketV2 packets. */
+/** one applied tick as seen by `engine.onTick` listeners (index ticks use the engine index id, e.g. NIFTY) */
+export interface TickEvent { symbol: string; ltp: number; volume: number; ts: number }
+
 export interface Tick {
   symbol: string;
   ltp: number;
@@ -245,6 +248,21 @@ export class MarketEngine {
   }
 
   /** The quote for a symbol, or undefined while Yahoo has not delivered it (the symbol is queued for the next batch). */
+  /** zero-delay tick listeners (the chart canvas): called synchronously for every applied exchange tick, before any React batching */
+  private tickListeners = new Set<(e: TickEvent) => void>();
+  onTick = (fn: (e: TickEvent) => void): (() => void) => {
+    this.tickListeners.add(fn);
+    return () => void this.tickListeners.delete(fn);
+  };
+  private emitTick(symbol: string, ltp: number, volume: number, ts: number) {
+    for (const fn of this.tickListeners) {
+      try { fn({ symbol, ltp, volume, ts }); } catch { /* a faulty listener must never break the feed */ }
+    }
+  }
+  /** total shares (crore) known from the quote provider; undefined until it delivered them */
+  sharesOf(symbol: string): number | undefined {
+    return this.shares.get(symbol);
+  }
   touch(symbol: string): Quote | undefined {
     const q = this.quotes.get(symbol);
     if (!q && this.master.has(symbol)) this.wantQuotes.add(symbol);
@@ -473,6 +491,7 @@ export class MarketEngine {
     if (sh) q.mcapCr = q.ltp * sh;
     this.secVol.set(q.symbol, (this.secVol.get(q.symbol) ?? 0) + dv);
     this.pushBar(q.symbol, t.ltp, dv, t.ts ?? now);
+    this.emitTick(q.symbol, q.ltp, q.volume, now);
 
     if (q.symbol === this.selected) {
       const v = dv > 0 ? dv : t.lastQty ?? 0;
@@ -538,6 +557,7 @@ export class MarketEngine {
     ix.change = value - ix.prev;
     ix.pct = (ix.change / ix.prev) * 100;
     ix.loaded = true;
+    this.emitTick(id, value, 0, Date.now());
   }
 
   /** 1-minute OHLCV candles built from live ticks (IST-shifted seconds). Volume = Σ tick volume deltas. */

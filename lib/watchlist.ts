@@ -34,7 +34,7 @@ export const MAX_LISTS = 20;
 export const MAX_NAME = 24;
 export const PRESET_NAMES = ['Main', 'Today pick', 'future', 'monday hot'];
 
-const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'list';
+export const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'list';
 
 /** Default tabs. `main` carries over the legacy single list (key upcircuit:favorites) when given. */
 export function defaultState(mainSymbols: string[] = DEFAULT_WATCHLIST): WatchlistState {

@@ -12,6 +12,7 @@ import type { CopilotAnswer } from '@/lib/copilot';
 import { fmt, fmtInt } from '@/lib/format';
 import { C } from '@/lib/theme';
 import { Badge } from './ui';
+import { StockAutocomplete } from './StockAutocomplete';
 
 const MAX_CSV = 1_000_000;
 const MAX_BINARY = 12_000_000;
@@ -40,6 +41,8 @@ interface Props {
   onImport: (h: Holding[]) => void;
   onReset: () => void;
   onClose: () => void;
+  /** add ONE holding (merged into the current portfolio at the weighted-average price); returns an error message or null */
+  onAddHolding?: (h: Holding) => string | null;
 }
 
 /**
@@ -49,7 +52,9 @@ interface Props {
  * Privacy: CSV, PDF text and OCR all run in the browser. An image only leaves the device if the user clicks
  * "Re-read with Gemini vision".
  */
-export function PortfolioUploadModal({ instruments, engine, mode, onImport, onReset, onClose }: Props) {
+export function PortfolioUploadModal({ instruments, engine, mode, onImport, onReset, onClose, onAddHolding }: Props) {
+  const [addQty, setAddQty] = useState('');
+  const [addAvg, setAddAvg] = useState('');
   const known = useMemo(() => new Set(instruments.map((i) => i.symbol)), [instruments]);
   const names = useMemo(() => buildNameIndex(instruments), [instruments]);
   const dialog = useRef<HTMLDivElement>(null);
@@ -251,6 +256,32 @@ export function PortfolioUploadModal({ instruments, engine, mode, onImport, onRe
         </div>
 
         <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-3 text-[13px]">
+          {onAddHolding && (
+            <div className="rounded-lg border border-line bg-bg/40 p-3" data-testid="add-holding">
+              <div className="mb-2 text-[12px] font-semibold text-ink">Add a holding <span className="font-normal text-muted">— search any listed stock, then press Enter or + Add</span></div>
+              <StockAutocomplete
+                testid="holding-search"
+                instruments={instruments}
+                priceOf={(sym) => engine.touch(sym)?.ltp}
+                placeholder="Ticker, company name or BSE code"
+                addLabel="+ Add holding"
+                onAdd={(inst) => {
+                  const qty = Number(addQty);
+                  if (!Number.isFinite(qty) || qty <= 0 || !Number.isInteger(qty)) return 'Enter a whole-number quantity first.';
+                  const ltp = engine.touch(inst.symbol)?.ltp;
+                  const avg = addAvg.trim() === '' ? ltp : Number(addAvg);
+                  if (!avg || !Number.isFinite(avg) || avg <= 0) return 'Enter your buy price (no live price for this stock yet to default to).';
+                  const err = onAddHolding({ symbol: inst.symbol, qty, avg });
+                  if (!err) { setAddQty(''); setAddAvg(''); }
+                  return err;
+                }}
+              >
+                <input value={addQty} onChange={(e) => setAddQty(e.target.value.replace(/[^\d]/g, ''))} inputMode="numeric" placeholder="Qty" aria-label="Quantity" data-testid="holding-qty" className="num w-20 rounded-md border border-line bg-bg px-2 py-1.5 text-[13px] text-ink outline-none focus:border-accent" />
+                <input value={addAvg} onChange={(e) => setAddAvg(e.target.value.replace(/[^\d.]/g, ''))} inputMode="decimal" placeholder="Buy ₹ (opt.)" aria-label="Buy price" data-testid="holding-avg" className="num w-28 rounded-md border border-line bg-bg px-2 py-1.5 text-[13px] text-ink outline-none focus:border-accent" />
+              </StockAutocomplete>
+              <p className="mt-1 text-[10px] text-muted">Leave the buy price empty to use the current market price. A stock you already hold is merged at the weighted-average price.</p>
+            </div>
+          )}
           {/* drop zone */}
           <div
             onDragOver={(e) => (e.preventDefault(), setDrag(true))}

@@ -207,7 +207,7 @@ export function StockResearchModal({ symbol, engine, favorite, onToggleFavorite,
           <div className="grid gap-4 p-4 lg:h-full lg:grid-cols-[minmax(0,1fr)_380px] [.fs_&]:xl:grid-cols-[minmax(0,1fr)_460px]">
             <div className="min-w-0 space-y-4 lg:h-full lg:overflow-y-auto lg:pr-1">
               <div className="overflow-hidden rounded-md border border-line">
-                <PriceChart symbol={symbol} ltp={quote.ltp} volume={quote.volume} tf={tf} onTf={setTf} live={engine.mode === 'live'} className={full.fs ? 'h-[min(62vh,720px)] min-h-[400px]' : 'h-[400px]'} />
+                <PriceChart symbol={symbol} ltp={quote.ltp} volume={quote.volume} tf={tf} onTf={setTf} live={engine.mode === 'live'} subscribeTicks={engine.onTick} className={full.fs ? 'h-[min(62vh,720px)] min-h-[400px]' : 'h-[400px]'} />
               </div>
 
               <Card title="Key ratios" right={<span className="text-[10px] text-muted">Verified provider data · N/A when unavailable</span>}>
