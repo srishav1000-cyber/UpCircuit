@@ -9,7 +9,7 @@ import { fundamentalsOf, orNA, ratioTone, type Tone } from '@/lib/fundamentals';
 import { getScreener } from '@/lib/screener';
 import { mergeLive } from '@/lib/yahooFundamentals';
 import { useFundamentals } from '@/hooks/useFundamentals';
-import type { CopilotContext } from '@/lib/copilot';
+import { buildCopilotContext, type CopilotContext } from '@/lib/copilot';
 import { fmt, fmtCr, fmtInt, fmtPct, fmtSigned, tone } from '@/lib/format';
 import { AnalysisActions } from './AnalysisActions';
 import { PriceChart } from './PriceChart';
@@ -136,15 +136,13 @@ export function StockResearchModal({ symbol, engine, favorite, onToggleFavorite,
 
   // always hand the copilot the freshest numbers
   const latest = useRef<() => CopilotContext>(() => null as never);
-  latest.current = () => ({
-    symbol,
-    name: quote?.name ?? symbol,
-    sector: quote?.sector ?? 'Others',
-    price: { ltp: quote?.ltp ?? 0, changePct: quote ? (quote.ltp / quote.prevClose - 1) * 100 : 0, dayHigh: quote?.high ?? 0, dayLow: quote?.low ?? 0, volume: quote?.volume ?? 0, circuitBandPct: quote?.circuitBand ?? 0 },
-    ratios: f!,
-    technicals: { rsi, sma50, sma200, pivots, short: short && { label: short.label, score: short.score }, long: long && { label: long.label, score: long.score } },
-    simulated: true, // delayed prices; null ratios mean N/A
-  });
+  latest.current = () =>
+    buildCopilotContext({
+      symbol, name: quote?.name, sector: quote?.sector, ltp: quote?.ltp, prevClose: quote?.prevClose, high: quote?.high, low: quote?.low, volume: quote?.volume, circuitBand: quote?.circuitBand,
+      ratios: f, // null ratios stay null → N/A (never blocks the request)
+      technicals: { rsi, sma50, sma200, pivots, short: short && { label: short.label, score: short.score }, long: long && { label: long.label, score: long.score } },
+      simulated: true,
+    });
   const getContext = useCallback(() => latest.current(), []);
 
   if (!quote || !f) return null;

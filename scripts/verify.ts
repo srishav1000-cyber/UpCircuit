@@ -12,7 +12,7 @@ import { parseRss, decodeEntities } from '../lib/news';
 import { scoreText } from '../lib/sentiment';
 import { buildIndex, searchInstruments } from '../lib/fuzzy';
 import { fundamentalsOf, ratioTone } from '../lib/fundamentals';
-import { answerLocally, detectIntent, isContext, type CopilotContext } from '../lib/copilot';
+import { answerLocally, detectIntent, isContext, buildCopilotContext, normalizeContext, type CopilotContext } from '../lib/copilot';
 import { TtlCache, allow } from '../lib/ttlCache';
 import {
   cumulativeReturnPct, dividendForecast, intradaySigma, liquidityRatio, portfolioDiagnostics, portfolioValueSeries, sectorIndexSeries, sharpeParts, tickVolumeBuckets, vwapBands, weightedRiskScore,
@@ -61,7 +61,7 @@ import { mergeHolding } from '../lib/holdingsStore';
 import { liveFundamentals, smartApiLabel } from '../lib/liveFundamentals';
 import type { Instrument } from '../lib/types';
 import { defaultState as wlDefault, type WatchlistState as WLState } from '../lib/watchlist';
-import { createFramePump, DOM_BATCH_MS } from '../lib/frameScheduler';
+import { createFramePump, DOM_BATCH_MS, isFrozen } from '../lib/frameScheduler';
 import { detectPatterns, aggregateBars, vwapSeries } from '../lib/analytics/patterns';
 import { periodReturnPct, relativeStrength } from '../lib/analytics/relative';
 import { healthLights } from '../lib/analytics/health';
@@ -1287,6 +1287,27 @@ t('Round 31 · UI wiring: focus basket + add-holding use the autocomplete over t
   const pm = readFileSync('components/PortfolioUploadModal.tsx', 'utf8'); assert.ok(/data-testid="add-holding"/.test(pm) && /<StockAutocomplete/.test(pm));
   const st = readFileSync('components/StockPostMortem.tsx', 'utf8'); assert.ok(/liveFundamentals\(/.test(st) && /smartApiLabel\(mode\)/.test(st)); assert.ok(/liveFundamentals\(/.test(readFileSync('components/StockOverview.tsx', 'utf8')));
   const ac = readFileSync('components/StockAutocomplete.tsx', 'utf8'); assert.ok(/e\.key === 'Enter'/.test(ac) && /onMouseDown=\{\(e\) => \{ e\.preventDefault\(\); void commit\(r\)/.test(ac));
+});
+
+t('Round 32 · Copilot context: null P/E (loss-making SWIGGY), NaN prices and the flat spec payload are all accepted; garbage is still rejected', () => {
+  const swiggy = buildCopilotContext({ symbol: 'SWIGGY', name: 'Swiggy Ltd', sector: 'Consumer', ltp: 181.45, prevClose: 211.4, ratios: { marketCapCr: 46162, pe: null, bookValue: 63.4, roce: -19.4, roe: -26.7, debtToEquity: 0.15 }, technicals: { rsi: 16.5, short: { label: 'Bearish', score: -3 }, long: { label: 'Bearish', score: -2 } } });
+  assert.equal(swiggy.ratios.pe, null); assert.ok(isContext(swiggy), 'null pe is a valid context'); assert.equal(swiggy.outlook, 'BEARISH'); assert.equal(swiggy.pb, 2.86); assert.ok(Math.abs(swiggy.price.changePct - -14.17) < 0.01);
+  const nan = buildCopilotContext({ symbol: 'X', ltp: NaN, prevClose: 0, ratios: { pe: Infinity } }); assert.ok(isContext(JSON.parse(JSON.stringify(nan))), 'NaN/Infinity survive JSON as valid nulls / zeros'); assert.equal(nan.ratios.pe, null);
+  const flat = normalizeContext({ symbol: 'SWIGGY', companyName: 'Swiggy Ltd', lastPrice: 181.45, changePercent: -14.17, pe: null, pb: 2.86, marketCapCr: 46162, roce: -19.4, roe: -26.7, debtToEquity: 0.15, rsi: 16.5, outlook: 'BEARISH' });
+  assert.ok(flat && isContext(flat) && flat.name === 'Swiggy Ltd' && flat.ratios.pe === null && flat.ratios.marketCapCr === 46162 && flat.technicals.rsi === 16.5 && flat.pb === 2.86 && flat.outlook === 'BEARISH');
+  assert.equal(normalizeContext(null), null); assert.equal(normalizeContext({ symbol: 'A'.repeat(40), lastPrice: 1 }), null); assert.equal(normalizeContext({ symbol: 'X' }), null, 'no price → malformed');
+  assert.ok(answerLocally('Is it risky?', swiggy, []).length > 40, 'local engine copes with a null P/E');
+});
+t('Round 32 · search aliases: VBL → Varun Beverages, M&M, nicknames, symbol still wins', () => {
+  const idx = buildIndex([{ symbol: 'VBL', name: 'Varun Beverages Ltd', sector: 'FMCG' }, { symbol: 'M&M', name: 'Mahindra & Mahindra Ltd', sector: 'Auto' }, { symbol: 'HINDUNILVR', name: 'Hindustan Unilever Ltd', sector: 'FMCG' }, { symbol: 'VARROC', name: 'Varroc Engineering Ltd', sector: 'Auto' }, { symbol: 'RELIANCE', name: 'Reliance Industries Ltd', sector: 'Energy' }, { symbol: 'SWIGGY', name: 'Swiggy Ltd', sector: 'Consumer' }, { symbol: 'XYZ', name: 'Vast Bharat Logistics Ltd', sector: 'Others' }]);
+  const top = (q: string) => searchInstruments(idx, q, 3)[0]?.symbol;
+  assert.equal(top('VBL'), 'VBL'); assert.equal(top('varun beverages limited'), 'VBL'); assert.equal(top('M&M'), 'M&M'); assert.equal(top('mahindra & mahindra'), 'M&M'); assert.equal(top('hul'), 'HINDUNILVR'); assert.equal(top('ril'), 'RELIANCE', 'acronym of Reliance Industries Ltd');
+  assert.equal(top('swiggy'), 'SWIGGY'); assert.equal(top('vb'), 'VBL', 'core acronym');
+});
+t('Round 32 · off-market freeze: frozen only when closed and not in demo; closed ⇒ no pump repaint path', () => {
+  assert.equal(isFrozen(false, false), true); assert.equal(isFrozen(true, false), false); assert.equal(isFrozen(false, true), false);
+  const um = readFileSync('hooks/useMarket.ts', 'utf8'); assert.ok(um.includes('isFrozen(isMarketOpen(Date.now()), engine.demoActive)) {') && um.includes('if (isFrozen(isMarketOpen(now), engine.demoActive)) return;') && um.includes('!isFrozen(isMarketOpen(Date.now()), engine.demoActive)) pump.current?.request()'));
+  const sy = readFileSync('scripts/sync-instruments.mjs', 'utf8'); assert.ok(/have >= EXPECTED_MIN/.test(sy), 'seed-sized file does not block the full sync');
 });
 
 void Promise.all(pending).then(() => {

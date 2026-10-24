@@ -51,7 +51,7 @@ export function StockPostMortem({ engine, quote, mode }: { engine: MarketEngine;
   const yf = (v: number | null, f: (n: number) => string): { value: string; kind: SourceKind } => (v === null || !Number.isFinite(v) ? { value: 'N/A', kind: 'na' } : { value: f(v), kind: 'yahoo' });
   const lf = liveFundamentals({ ltp: quote.ltp, mode, sharesCr: engine.sharesOf(symbol), eps: s.eps, bookValue: s.bookValue, yahooMcapCr: s.marketCapCr, yahooPe: s.pe });
   const lc = (c: LiveCell, f: (n: number) => string): { value: string; kind: SourceKind; label2?: string; title?: string } =>
-    c.value === null ? { value: 'N/A', kind: 'na' } : c.source === 'smartapi' ? { value: f(c.value), kind: 'smartapi', label2: smartApiLabel(mode), title: c.formula } : c.source === 'computed' ? { value: f(c.value), kind: 'computed', title: c.formula } : { value: f(c.value), kind: 'yahoo', label2: 'Yahoo Fundamentals' };
+    c.value === null ? { value: 'N/A', kind: 'na' } : c.source === 'smartapi' ? { value: f(c.value), kind: 'smartapi', label2: smartApiLabel(mode), title: c.formula } : c.source === 'computed' ? { value: f(c.value), kind: 'computed', title: c.formula } : { value: f(c.value), kind: 'yahoo', label2: mode === 'delayed' ? 'Session Data' : 'Yahoo Fundamentals' };
   const cells: { label: string; value: string; kind: SourceKind; label2?: string; title?: string }[] = [
     { label: 'Market cap (₹ Cr)', ...lc(lf.marketCapCr, (n) => fmtInt(Math.round(n))) },
     { label: 'P/E ratio', ...lc(lf.pe, (n) => n.toFixed(1)) },

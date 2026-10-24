@@ -442,7 +442,7 @@ function Terminal() {
 
       <footer className="flex shrink-0 items-center gap-3 border-t border-line bg-panel px-3 py-1 text-[10px] text-muted">
         <span>
-          {instruments.length.toLocaleString('en-IN')} instruments indexed
+          <span data-testid="indexed-count" title={instruments.length < 1000 ? 'Only the bundled seed is loaded — run npm run sync:instruments to index the full NSE + BSE master' : undefined}>{instruments.length.toLocaleString('en-IN')} Instruments Indexed</span>
           {bseOnly > 0 && <> · NSE {(instruments.length - bseOnly).toLocaleString('en-IN')} + BSE-only {bseOnly.toLocaleString('en-IN')}</>}
         </span>
         <button type="button" onClick={() => setMethodOpen(true)} data-testid="methodology-open" className="cursor-pointer rounded border border-line px-1.5 py-px font-semibold text-accent hover:bg-accent/10">ƒ Methodology</button>

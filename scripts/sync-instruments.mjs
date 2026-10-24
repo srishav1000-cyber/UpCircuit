@@ -91,8 +91,14 @@ async function fetchNseNames() {
 
 async function main() {
   if (!force && (await exists(out))) {
-    console.log('[instruments] ' + out + ' exists — skipping (use --force to refresh)');
-    return;
+    // a committed seed-sized file (≈230 names) must NOT block the real sync on Vercel / CI — only a full master counts as fresh
+    let have = 0;
+    try { have = JSON.parse(await readFile(out, 'utf8')).length; } catch { /* unreadable → refetch */ }
+    if (have >= EXPECTED_MIN) {
+      console.log(`[instruments] ${out} has ${have} names — skipping (use --force to refresh)`);
+      return;
+    }
+    console.log(`[instruments] ${out} has only ${have} names (seed) — fetching the full NSE + BSE master`);
   }
   const seed = JSON.parse(await readFile(resolve(root, 'data/seed-instruments.json'), 'utf8'));
   const sectors = new Map(seed.map(([s, , sec]) => [s, sec]));

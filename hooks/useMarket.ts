@@ -1,6 +1,6 @@
 'use client';
 
-import { createFramePump, DOM_BATCH_MS } from '@/lib/frameScheduler';
+import { createFramePump, DOM_BATCH_MS, FREEZE_SETTLE_MS, isFrozen } from '@/lib/frameScheduler';
 import { loadSnapshot, saveSnapshot } from '@/lib/snapshotCache';
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { MarketEngine, isMarketOpen, isStreamWindow, type FeedConn, type FeedMode, type LiveReason } from '@/lib/market';
@@ -183,7 +183,8 @@ export function useMarket(universe: Instrument[], selected: string, watch: strin
   // (tickers, tables, cards) repaints on an animation frame at most every DOM_BATCH_MS (≈4×/s) so prices stay crisp without millisecond jitter
   const pump = useRef<ReturnType<typeof createFramePump> | null>(null);
   if (pump.current === null) pump.current = createFramePump(() => bump(), DOM_BATCH_MS);
-  useEffect(() => () => pump.current?.cancel(), []);
+  const settle = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => { pump.current?.cancel(); if (settle.current) clearTimeout(settle.current); }, []);
   const applyTick = useCallback(
     (m: MarketTick) => {
       if (m.isIndex) engine.applyIndexTick(m.symbol, m.lastPrice, m.prevClose);
@@ -193,7 +194,11 @@ export function useMarket(universe: Instrument[], selected: string, watch: strin
         const row = sampler.current.offer({ symbol: m.symbol, lastPrice: m.lastPrice, volume: m.volume, high: m.high, low: m.low, timestamp: m.timestamp });
         if (row && outbox.current.length < 3000) outbox.current.push(row);
       }
-      pump.current?.request();
+      if (isFrozen(isMarketOpen(Date.now()), engine.demoActive)) {
+        // market closed: no 4×/s repaints — one settle paint after the closing-price tick burst ends
+        if (settle.current) clearTimeout(settle.current);
+        settle.current = setTimeout(() => { settle.current = null; bump(); }, FREEZE_SETTLE_MS);
+      } else pump.current?.request();
     },
     [engine],
   );
@@ -252,6 +257,8 @@ export function useMarket(universe: Instrument[], selected: string, watch: strin
       const now = Date.now();
       const f = feedRef.current;
       // replay only when there is no real stream: market closed AND the socket is not delivering ticks
+      // Off-market freeze: the closing prices stay strictly static — the bounded-wobble replay is disabled (it only ever ran while closed)
+      if (isFrozen(isMarketOpen(now), engine.demoActive)) return;
       if (isMarketOpen(now) || engine.demoActive || (f?.status === 'open' && (f.ticks ?? 0) > 0) || !engine.ready) return;
       const today = tradingDateOf(now);
       if (day !== today) {
@@ -408,8 +415,9 @@ export function useMarket(universe: Instrument[], selected: string, watch: strin
     evalMode();
     const id = setInterval(() => {
       if (i % 4 === 0) evalMode();
-      engine.step(selRef.current, Date.now());
-      if (++i % 2 === 0) bump();
+      engine.step(selRef.current, Date.now()); // housekeeping only (selection changes); prices never move here
+      // market closed → nothing animates: skip the 2×/s repaint so the DOM stays completely still
+      if (++i % 2 === 0 && !isFrozen(isMarketOpen(Date.now()), engine.demoActive)) pump.current?.request(); // same gate as ticks → ≤ 4 repaints/s in total
     }, 250);
     bump();
     return () => clearInterval(id);

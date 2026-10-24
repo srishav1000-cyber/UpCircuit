@@ -18,6 +18,69 @@ export interface CopilotContext {
   };
   /** true while prices come from the built-in simulator */
   simulated: boolean;
+  /** price ÷ book value per share (null = N/A) */
+  pb?: number | null;
+  /** overall technical read: BULLISH | BEARISH | NEUTRAL */
+  outlook?: string | null;
+}
+
+const num = (x: unknown): number | null => (typeof x === 'number' && Number.isFinite(x) ? x : null);
+const FUND_KEYS = ['marketCapCr', 'pe', 'bookValue', 'dividendYield', 'roce', 'roe', 'debtToEquity', 'promoterHolding', 'eps'] as const;
+
+/** Coerce anything the UI knows into a fully-populated context: NaN/Infinity/undefined → null (N/A) or 0, never a malformed shape. */
+export function buildCopilotContext(i: {
+  symbol: string; name?: string | null; sector?: string | null;
+  ltp?: number | null; prevClose?: number | null; high?: number | null; low?: number | null; volume?: number | null; circuitBand?: number | null;
+  ratios?: Partial<Record<(typeof FUND_KEYS)[number], number | null>> | null;
+  technicals?: Partial<CopilotContext['technicals']> | null;
+  simulated?: boolean;
+}): CopilotContext {
+  const ltp = num(i.ltp) ?? 0;
+  const prev = num(i.prevClose);
+  const ratios = Object.fromEntries(FUND_KEYS.map((k) => [k, num(i.ratios?.[k])])) as unknown as Fundamentals;
+  const t = i.technicals ?? {};
+  const rsi = num(t.rsi);
+  const short = t.short ?? null;
+  const pb = ratios.bookValue && ratios.bookValue > 0 && ltp > 0 ? +(ltp / ratios.bookValue).toFixed(2) : null;
+  const score = (short?.score ?? 0) + (t.long?.score ?? 0);
+  const outlook = short || t.long ? (score > 0 ? 'BULLISH' : score < 0 ? 'BEARISH' : 'NEUTRAL') : rsi == null ? null : rsi >= 55 ? 'BULLISH' : rsi <= 45 ? 'BEARISH' : 'NEUTRAL';
+  return {
+    symbol: i.symbol,
+    name: i.name || i.symbol,
+    sector: i.sector || 'Others',
+    price: { ltp, changePct: prev && ltp ? (ltp / prev - 1) * 100 : 0, dayHigh: num(i.high) ?? 0, dayLow: num(i.low) ?? 0, volume: num(i.volume) ?? 0, circuitBandPct: num(i.circuitBand) ?? 0 },
+    ratios,
+    technicals: { rsi, sma50: num(t.sma50), sma200: num(t.sma200), pivots: t.pivots ?? null, short, long: t.long ?? null },
+    simulated: i.simulated ?? true,
+    pb,
+    outlook,
+  };
+}
+
+/**
+ * Accepts the nested CopilotContext OR the flat shape
+ * { symbol, companyName, lastPrice, changePercent, pe, pb, marketCapCr, roce, roe, debtToEquity, rsi, outlook }
+ * and returns a validated nested context (null only when there is no usable symbol / price).
+ */
+export function normalizeContext(x: unknown): CopilotContext | null {
+  const c = x as Record<string, unknown> | null;
+  if (!c || typeof c !== 'object' || typeof c.symbol !== 'string' || !c.symbol || c.symbol.length > 24) return null;
+  if (isContext(c)) return sanitize(c);
+  const ltp = num(c.lastPrice) ?? num((c.price as { ltp?: unknown } | undefined)?.ltp);
+  if (ltp == null) return null;
+  const chg = num(c.changePercent) ?? 0;
+  const base = buildCopilotContext({
+    symbol: c.symbol, name: (c.companyName ?? c.name) as string | undefined, sector: c.sector as string | undefined, ltp, prevClose: chg > -100 ? ltp / (1 + chg / 100) : null,
+    ratios: { marketCapCr: num(c.marketCapCr), pe: num(c.pe), roce: num(c.roce), roe: num(c.roe), debtToEquity: num(c.debtToEquity) },
+    technicals: { rsi: num(c.rsi) },
+  });
+  const pb = num(c.pb);
+  return { ...base, pb: pb ?? base.pb, outlook: typeof c.outlook === 'string' ? c.outlook.slice(0, 12) : base.outlook };
+}
+
+function sanitize(c: CopilotContext): CopilotContext {
+  const r = Object.fromEntries(FUND_KEYS.map((k) => [k, num((c.ratios as unknown as Record<string, unknown>)[k])])) as unknown as Fundamentals;
+  return { ...c, ratios: r, pb: num(c.pb), outlook: typeof c.outlook === 'string' ? c.outlook.slice(0, 12) : null };
 }
 
 export type CopilotSource = 'gemini' | 'local' | 'cache';
@@ -45,7 +108,10 @@ export function isContext(x: unknown): x is CopilotContext {
     typeof c.sector === 'string' &&
     typeof c.price?.ltp === 'number' &&
     typeof c.price?.changePct === 'number' &&
-    typeof c.ratios?.pe === 'number' &&
+    // ratios are N/A (null) for loss-making / unlisted-data names — a null P/E is valid, a missing ratios object is not
+    typeof c.ratios === 'object' &&
+    c.ratios !== null &&
+    (c.ratios.pe === null || typeof c.ratios.pe === 'number') &&
     typeof c.technicals === 'object' &&
     c.technicals !== null
   );
@@ -141,7 +207,7 @@ export function answerLocally(question: string, ctx: CopilotContext, news: NewsI
     items.slice(0, 2).forEach((i) => out.push(`  – ${i.title} [${i.label}]`));
   };
   const risk = () => {
-    out.push(`• Price band is ±${p.circuitBandPct}% — moves beyond that halt trading in the stock.`);
+    if (p.circuitBandPct > 0) out.push(`• Price band is ±${p.circuitBandPct}% — moves beyond that halt trading in the stock.`);
     if (t.rsi !== null && (t.rsi >= 70 || t.rsi <= 30)) out.push(`• Stretched momentum (RSI ${f1(t.rsi)}) raises the odds of a sharp reversal.`);
     if (r.debtToEquity !== null && r.debtToEquity > 1) out.push(`• Leverage is high (D/E ${f2(r.debtToEquity)}).`);
     if (r.promoterHolding !== null && r.promoterHolding < 25) out.push(`• Promoter holding is only ${f1(r.promoterHolding)}% — ownership is widely dispersed.`);

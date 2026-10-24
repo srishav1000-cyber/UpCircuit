@@ -67,3 +67,11 @@ export function createFramePump(flush: () => void, minGapMs = 100, deps?: Partia
 
 /** React DOM cadence for high-frequency ticks (header ticker, watchlists, cards, screener). The chart canvas bypasses it via engine.onTick. */
 export const DOM_BATCH_MS = 250;
+
+/**
+ * Off-market freeze: with the session closed (and no demo simulator running) prices are the verified closing prices and must stay strictly
+ * static — no sub-second React re-renders, no replay wobble. A late closing-price tick may still arrive (SmartAPI snapshot on subscribe);
+ * it is applied to the engine and painted ONCE after `FREEZE_SETTLE_MS` of quiet instead of through the 250 ms pump.
+ */
+export const FREEZE_SETTLE_MS = 1000;
+export const isFrozen = (marketOpen: boolean, demoActive: boolean): boolean => !marketOpen && !demoActive;

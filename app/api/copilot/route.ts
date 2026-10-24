@@ -1,7 +1,7 @@
 import { callGemini, geminiConfigured } from '@/lib/gemini';
 import { finishAnswer } from '@/lib/followups';
 import { getNews } from '@/lib/news';
-import { MAX_QUESTION, SYSTEM_PROMPT, answerLocally, buildPrompt, isContext, relevantHeadlines, type CopilotAnswer } from '@/lib/copilot';
+import { MAX_QUESTION, SYSTEM_PROMPT, answerLocally, buildPrompt, normalizeContext, relevantHeadlines, type CopilotAnswer } from '@/lib/copilot';
 import { TtlCache, allow } from '@/lib/ttlCache';
 
 // Edge-compatible: fetch only.
@@ -38,8 +38,8 @@ export async function POST(req: Request) {
   const question = typeof body.question === 'string' ? body.question.trim() : '';
   if (!question) return json({ error: 'Ask a question about the stock.' }, 400);
   if (question.length > MAX_QUESTION) return json({ error: `Questions are limited to ${MAX_QUESTION} characters.` }, 400);
-  if (!isContext(body.context)) return json({ error: 'Missing or malformed stock context.' }, 400);
-  const ctx = body.context;
+  const ctx = normalizeContext(body.context);
+  if (!ctx) return json({ error: 'Missing or malformed stock context.' }, 400);
 
   // price bucketed to ~1 % so a ticking price doesn't defeat the cache
   const bucket = Math.round(Math.log(Math.max(ctx.price.ltp, 0.01)) / 0.01);
