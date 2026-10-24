@@ -14,6 +14,7 @@ import { useDemoSimulator } from '@/hooks/useDemoSimulator';
 import { useAudioAlerts } from '@/hooks/useAudioAlerts';
 import { appUrl } from '@/lib/appUrl';
 import { CircuitLogDrawer } from '@/components/CircuitLogDrawer';
+import { nearLimit } from '@/lib/circuitTracker';
 import { sendCircuitEmail } from '@/lib/alertEmail';
 import { sendCircuitPush } from '@/lib/alertPush';
 import { currentPushEndpoint } from '@/lib/pushNotifications';
@@ -157,7 +158,10 @@ function Terminal() {
       if (n.email) void sendCircuitEmail(hit, t);
       if (n.push) void sendCircuitPush(hit, t, await currentPushEndpoint());
     });
-  }, demo.active);
+  }, demo.active, cloud && cloudUser ? () => cloud.recentAlerts(cloudUser, 200) : undefined);
+
+  useEffect(() => { if (logOpen) void circuit.refreshHistory(); // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [logOpen]);
 
   const quote = engine.touch(symbol) ?? engine.quotes.get('RELIANCE') ?? engine.quotes.values().next().value ?? EMPTY_QUOTE(symbol);
   /** portfolio with real cost bases: a demo holding (avg 0) is costed at the stock's real previous close; unpriced ones wait for Yahoo */
@@ -350,7 +354,7 @@ function Terminal() {
         />
         <CircuitAlerts log={circuit.log} glow={circuit.glow} audio={audio} onOpen={openChart} onOpenLog={() => setLogOpen(true)} />
         <CircuitAlertOverlay log={circuit.log} audioOn={audio.on} />
-        <CircuitLogDrawer open={logOpen} onClose={() => setLogOpen(false)} log={circuit.log} onOpen={openChart} onClear={circuit.clearLog} />
+        <CircuitLogDrawer open={logOpen} onClose={() => setLogOpen(false)} history={circuit.history} near={logOpen ? nearLimit(engine.quotes.values()) : []} nameOf={(s) => engine.master.get(s)?.name ?? engine.quotes.get(s)?.name ?? ''} onAnalyze={openStock} onClear={circuit.clearLog} synced={!!(cloud && cloudUser)} />
         {welcome && <WelcomeBanner onDismiss={dismissWelcome} />}
       </div>
 

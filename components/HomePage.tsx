@@ -10,6 +10,8 @@ import { Badge, Card, Sparkline } from './ui';
 import { NewsFeed } from './NewsFeed';
 import { BudgetDiscovery } from './BudgetDiscovery';
 import type { Instrument } from '@/lib/types';
+import { SectorHeatmap } from './SectorHeatmap';
+import { sectorOf, type SectorId } from '@/lib/sectors';
 
 type CapFilter = 'All' | CapClass;
 
@@ -82,6 +84,7 @@ function MoverTable({ title, rows, kind, onOpen }: { title: string; rows: Quote[
 /** Angel One–style discovery home: market summary, movers by market-cap bucket, news with sentiment. */
 export function HomePage({ engine, news, newsError, onOpenStock, instruments, onOpenChart }: Props) {
   const [cap, setCap] = useState<CapFilter>('All');
+  const [sector, setSector] = useState<SectorId | null>(null);
   const all = Array.from(engine.quotes.values());
   const counts = useMemo(() => {
     const c: Record<CapFilter, number> = { All: all.length, Large: 0, Mid: 0, Small: 0 };
@@ -90,7 +93,11 @@ export function HomePage({ engine, news, newsError, onOpenStock, instruments, on
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [all.length, Math.round(engine.totalMcapCr() / 1e5)]);
 
-  const pool = cap === 'All' ? all : all.filter((q) => capClass(q.mcapCr) === cap);
+  const sectorStats = engine.sectorStats();
+  const activeSector = sector ? sectorStats.find((x) => x.id === sector) ?? null : null;
+  const byCap = cap === 'All' ? all : all.filter((q) => capClass(q.mcapCr) === cap);
+  const pool = sector ? byCap.filter((q) => sectorOf(q.symbol, q.sector) === sector) : byCap;
+  const constituents = sector ? [...pool].sort((a, b) => dayPct(b) - dayPct(a)).slice(0, 60) : [];
   const gainers = topMovers(pool, 'gainers');
   const losers = topMovers(pool, 'losers');
   const volume = topMovers(pool, 'volume');
@@ -129,8 +136,10 @@ export function HomePage({ engine, news, newsError, onOpenStock, instruments, on
           </SummaryCard>
         </section>
 
+        <SectorHeatmap stats={sectorStats} active={sector} onSelect={setSector} />
+
         <div className="flex flex-wrap items-center gap-2">
-          <h2 className="text-[13px] font-semibold text-ink">Stocks by market cap</h2>
+          <h2 className="text-[13px] font-semibold text-ink">Stocks by market cap{activeSector && <span data-testid="sector-filter-label" className="ml-2 rounded-full bg-accent/15 px-2 py-0.5 text-[11px] font-semibold text-accent">{activeSector.label} · {pool.length} stocks</span>}</h2>
           <div className="flex gap-1" role="group" aria-label="Market-cap filter">
             {(['All', 'Large', 'Mid', 'Small'] as CapFilter[]).map((c) => (
               <button
@@ -151,6 +160,12 @@ export function HomePage({ engine, news, newsError, onOpenStock, instruments, on
           <MoverTable title="Top losers" rows={losers} kind="losers" onOpen={onOpenStock} />
           <MoverTable title="Volume leaders" rows={volume} kind="volume" onOpen={onOpenStock} />
         </div>
+
+        {sector && (
+          <div data-testid="sector-constituents">
+            <MoverTable title={`${activeSector?.label ?? 'Sector'} constituents (${cap === 'All' ? 'all caps' : cap + ' cap'})`} rows={constituents} kind="gainers" onOpen={onOpenStock} />
+          </div>
+        )}
 
         <BudgetDiscovery engine={engine} instruments={instruments} onOpenChart={onOpenChart} />
       </div>

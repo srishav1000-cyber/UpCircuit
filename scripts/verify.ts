@@ -62,6 +62,9 @@ import { liveFundamentals, smartApiLabel } from '../lib/liveFundamentals';
 import type { Instrument } from '../lib/types';
 import { defaultState as wlDefault, type WatchlistState as WLState } from '../lib/watchlist';
 import { createFramePump, DOM_BATCH_MS, isFrozen } from '../lib/frameScheduler';
+import { aggregateSectors, heatBand, sectorOf } from '../lib/sectors';
+import { INDICATOR_COLORS, LiveIndicators, emaFull, rsiFull, vwapAvailable, vwapFull } from '../lib/technicalIndicators';
+import { HISTORY_TABS, filterHistory, fromEvent, fromRows, mergeHistory, nearLimit } from '../lib/circuitTracker';
 import { detectPatterns, aggregateBars, vwapSeries } from '../lib/analytics/patterns';
 import { periodReturnPct, relativeStrength } from '../lib/analytics/relative';
 import { healthLights } from '../lib/analytics/health';
@@ -1308,6 +1311,45 @@ t('Round 32 · off-market freeze: frozen only when closed and not in demo; close
   assert.equal(isFrozen(false, false), true); assert.equal(isFrozen(true, false), false); assert.equal(isFrozen(false, true), false);
   const um = readFileSync('hooks/useMarket.ts', 'utf8'); assert.ok(um.includes('isFrozen(isMarketOpen(Date.now()), engine.demoActive)) {') && um.includes('if (isFrozen(isMarketOpen(now), engine.demoActive)) return;') && um.includes('!isFrozen(isMarketOpen(Date.now()), engine.demoActive)) pump.current?.request()'));
   const sy = readFileSync('scripts/sync-instruments.mjs', 'utf8'); assert.ok(/have >= EXPECTED_MIN/.test(sy), 'seed-sized file does not block the full sync');
+});
+
+t('Round 33 · sector heatmap: nine desks, PSU banks split from Banking, four colour bands, gainers/losers, equal-weighted average', () => {
+  assert.equal(heatBand(-2.01), 'deep-red'); assert.equal(heatBand(-2), 'light-red'); assert.equal(heatBand(-0.01), 'light-red'); assert.equal(heatBand(0), 'light-green'); assert.equal(heatBand(2), 'light-green'); assert.equal(heatBand(2.01), 'deep-green'); assert.equal(heatBand(null), 'none');
+  assert.equal(sectorOf('SBIN', 'Banking'), 'psubank'); assert.equal(sectorOf('HDFCBANK', 'Banking'), 'bank'); assert.equal(sectorOf('TATASTEEL', 'Metals'), 'metal'); assert.equal(sectorOf('X', 'Cement'), null);
+  const s = aggregateSectors([{ symbol: 'TCS', sector: 'IT', pct: 3 }, { symbol: 'INFY', sector: 'IT', pct: -1 }, { symbol: 'WIPRO', sector: 'IT', pct: 2.5 }, { symbol: 'SBIN', sector: 'Banking', pct: -3 }, { symbol: 'PNB', sector: 'Banking', pct: -2.5 }, { symbol: 'HDFCBANK', sector: 'Banking', pct: 0.4 }, { symbol: 'ZZZ', sector: 'Cement', pct: 9 }, { symbol: 'BAD', sector: 'IT', pct: NaN }]);
+  assert.equal(s.length, 9); const it = s.find((x) => x.id === 'it')!; assert.equal(it.avgPct, 1.5); assert.deepEqual([it.gainers, it.losers, it.count, it.band], [2, 1, 3, 'light-green']);
+  const psu = s.find((x) => x.id === 'psubank')!; assert.deepEqual([psu.avgPct, psu.band, psu.losers], [-2.75, 'deep-red', 2]); assert.equal(s.find((x) => x.id === 'bank')!.count, 1); assert.equal(s.find((x) => x.id === 'realty')!.band, 'none');
+  const e = ingestFixture(new MarketEngine(SEED_INSTRUMENTS)); const st = e.sectorStats(); assert.equal(st.length, 9); assert.ok(st.some((x) => x.count > 0), 'engine aggregates its real quotes');
+});
+t('Round 33 · indicators: incremental engine equals the full EMA / RSI / VWAP series on every tick and bar roll; VWAP restarts each session', () => {
+  let seed = 7; const rnd = () => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 2 ** 32);
+  const day = (d: number, m: number) => d * 86400 + 9 * 3600 + 15 * 60 + m * 60;
+  const bars: import('../lib/types').Candle[] = []; let px = 100;
+  for (let d = 0; d < 3; d++) for (let m = 0; m < 80; m++) { const o = px; px = Math.max(5, px + (rnd() - 0.5) * 2); bars.push({ time: day(20000 + d, m), open: o, high: Math.max(o, px) + rnd(), low: Math.min(o, px) - rnd(), close: px, volume: Math.round(1000 + rnd() * 5000) }); }
+  const seedN = 60; const live = new LiveIndicators(bars.slice(0, seedN)); const hist = bars.slice(0, seedN); let worst = 0;
+  for (let i = seedN; i < bars.length; i++) {
+    const b = bars[i]; // 3 intrabar ticks that move the forming bar, then it is final
+    hist.push({ ...b, close: b.open }); live.push(hist[hist.length - 1], true);
+    for (const f of [0.3, 0.7, 1]) { const cur = { ...b, close: b.open + (b.close - b.open) * f, high: Math.max(b.high, b.open + (b.close - b.open) * f) }; hist[hist.length - 1] = cur; const v = live.push(cur, false); const cl = hist.map((x) => x.close); const [e20, e50, rs, vw] = [emaFull(cl, 20), emaFull(cl, 50), rsiFull(cl, 14), vwapFull(hist)].map((a) => a[a.length - 1]);
+      for (const [x, y] of [[v.ema20, e20], [v.ema50, e50], [v.rsi, rs], [v.vwap, vw]] as [number | null, number | null][]) { if (x === null || y === null) assert.equal(x, y); else worst = Math.max(worst, Math.abs(x - y)); } }
+  }
+  assert.ok(worst < 1e-8, `incremental ≡ full (max drift ${worst})`);
+  const vw = vwapFull(bars); const first2 = bars[80]; assert.ok(Math.abs(vw[80]! - (first2.high + first2.low + first2.close) / 3) < 1e-9, 'VWAP restarts at the new session\'s first bar'); assert.ok(vw[79]! !== vw[80]);
+  const e20 = emaFull(bars.map((b) => b.close), 20); assert.equal(e20[18], null); assert.ok(Math.abs(e20[19]! - bars.slice(0, 20).reduce((a, b) => a + b.close, 0) / 20) < 1e-9, 'EMA seeded with the SMA');
+  assert.equal(vwapAvailable(false, true), false); assert.equal(vwapAvailable(true, false), false); assert.equal(vwapAvailable(true, true), true);
+  assert.deepEqual([INDICATOR_COLORS.ema20, INDICATOR_COLORS.ema50], ['#f59e0b', '#8b5cf6']);
+  const pc = readFileSync('components/PriceChart.tsx', 'utf8'); assert.ok(/liveInd\.current/.test(pc) && /li\.push\(next, bucket > cur\.time\)/.test(pc) && /data-testid=\{`ind-\$\{id\}`\}/.test(pc));
+});
+t('Round 33 · circuit desk history: cloud rows + session hits merge by symbol·dir·band·IST day; tabs filter; demo hits stay session-only', () => {
+  const at = Date.parse('2026-10-22T05:00:00Z');
+  const sess = [fromEvent({ symbol: 'TCS', dir: 'upper', band: 5, ltp: 3700, pct: 5, at }), fromEvent({ symbol: 'ZEEL', dir: 'lower', band: 10, ltp: 90, pct: -10, at: at + 5000, demo: true })];
+  const cloudRows = fromRows([{ symbol: 'TCS', direction: 'UPPER', band: 5, price: 3700, triggered_at: new Date(at + 800).toISOString() }, { symbol: 'SBIN', direction: 'LOWER', band: 5, price: 700, triggered_at: new Date(at - 3600_000).toISOString() }, { symbol: 'BAD', direction: 'SIDEWAYS' as never, band: 5, price: 1, triggered_at: 'x' }]);
+  assert.equal(cloudRows.length, 2); const m = mergeHistory(sess, cloudRows); assert.equal(m.length, 3, 'TCS seen on both sides counts once');
+  assert.deepEqual(m.map((x) => x.symbol), ['ZEEL', 'TCS', 'SBIN']); assert.equal(m.find((x) => x.symbol === 'TCS')!.origin, 'both'); assert.equal(m.find((x) => x.symbol === 'SBIN')!.origin, 'cloud');
+  assert.deepEqual(filterHistory(m, 'upper').map((x) => x.symbol), ['TCS']); assert.deepEqual(filterHistory(m, 'lower').map((x) => x.symbol), ['ZEEL', 'SBIN']); assert.equal(filterHistory(m, 'near').length, 0); assert.equal(filterHistory(m, 'all').length, 3);
+  assert.deepEqual(HISTORY_TABS.map((t2) => t2.label), ['All Anomalies', 'Upper Circuit (UC)', 'Lower Circuit (LC)', 'Near Limit (±1.5%)']);
+  const nl = nearLimit([{ symbol: 'A', ltp: 103.9, prevClose: 100 }, { symbol: 'B', ltp: 101, prevClose: 100 }, { symbol: 'C', ltp: 105, prevClose: 100 }]); assert.deepEqual(nl.map((x) => x.symbol), ['A'], 'within 1.5% of the 5% band, not yet at a limit');
+  const dr = readFileSync('components/CircuitLogDrawer.tsx', 'utf8'); assert.ok(/Test Chime/.test(dr) && /Analyze/.test(dr) && /playChime\(soundFor\(dir, n\.sound\), n\.volume\)/.test(dr));
 });
 
 void Promise.all(pending).then(() => {

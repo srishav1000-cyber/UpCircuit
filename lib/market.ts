@@ -1,4 +1,5 @@
 import type { AlertKind, Candle, DepthLevel, IndexQuote, Instrument, MarketAlert, OrderBook, Quote, Timeframe } from './types';
+import { aggregateSectors, type SectorStat } from './sectors';
 import { SEED_SECTORS } from './instruments';
 import { CircuitTracker, circuitHit, limitPrice } from './circuit';
 import type { YahooRow } from './yahooData';
@@ -284,6 +285,11 @@ export class MarketEngine {
       if (now - (this.histAt.get(k) ?? 0) > maxAgeMs) out.push({ symbol, tf: tf as Timeframe });
     });
     return out;
+  }
+
+  /** live sector heatmap data: equal-weighted average 1D % over every priced stock of each desk (lib/sectors.ts) */
+  sectorStats(): SectorStat[] {
+    return aggregateSectors(Array.from(this.quotes.values(), (q) => ({ symbol: q.symbol, sector: q.sector, pct: q.prevClose > 0 ? (q.ltp / q.prevClose - 1) * 100 : NaN })));
   }
 
   totalMcapCr(): number {

@@ -1,9 +1,11 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { isMarketOpen, type MarketEngine } from '@/lib/market';
 import { CircuitTracker, circuitHit, type CircuitDir, type CircuitHit } from '@/lib/circuit';
 import { CircuitDedupe } from '@/lib/circuitDedupe';
+import type { AlertRow } from '@/lib/cloud';
+import { fromEvent, fromRows, mergeHistory, type HistoryEntry } from '@/lib/circuitTracker';
 
 function safeStore() {
   try { return typeof window !== 'undefined' ? window.localStorage : undefined; } catch { return undefined; }
@@ -25,7 +27,7 @@ export interface CircuitEvent extends CircuitHit {
  * A confirmed hit (once per symbol·direction per IST day, re-armed only by a higher band — see lib/circuitDedupe) → log entry + overlay event (CircuitAlertOverlay plays the alarm if audio is on), and `onFire` (e-mail dispatch).
  * `glow` maps each symbol currently sitting at a circuit to its direction (drives the pulsing card border).
  */
-export function useCircuitAlerts(engine: MarketEngine, version: number, symbols: string[], onFire?: (hit: CircuitHit) => void, demo = false) {
+export function useCircuitAlerts(engine: MarketEngine, version: number, symbols: string[], onFire?: (hit: CircuitHit) => void, demo = false, loadHistory?: () => Promise<AlertRow[]>) {
   const tracker = useRef(new CircuitTracker(8000));
   const dedupe = useRef<CircuitDedupe | null>(null);
   const demoRef = useRef(false);
@@ -38,6 +40,17 @@ export function useCircuitAlerts(engine: MarketEngine, version: number, symbols:
   const [log, setLog] = useState<CircuitEvent[]>([]);
   const [glow, setGlow] = useState<Record<string, CircuitDir>>({});
   const key = symbols.join(',');
+  /** Supabase `alert_history` rows for this account (every real hit is written there by the page's onFire) */
+  const [cloudRows, setCloudRows] = useState<AlertRow[]>([]);
+  const loadRef = useRef(loadHistory);
+  loadRef.current = loadHistory;
+  const hasCloud = !!loadHistory;
+  const refreshHistory = useCallback(async () => {
+    const f = loadRef.current;
+    if (!f) { setCloudRows([]); return; }
+    try { setCloudRows(await f()); } catch { /* offline / table missing: the session log still works */ }
+  }, []);
+  useEffect(() => { void refreshHistory(); }, [hasCloud, refreshHistory]);
 
   useEffect(() => {
     const now = Date.now();
@@ -75,6 +88,7 @@ export function useCircuitAlerts(engine: MarketEngine, version: number, symbols:
       setLog((l) => [...fresh, ...l].slice(0, 500));
       // the alarm itself plays from CircuitAlertOverlay, once per card, so a queue of alerts sounds one after another
       if (!demo) fresh.forEach((h) => fireRef.current?.(h)); // demo hits are never e-mailed
+      if (!demo) setTimeout(() => void refreshHistory(), 1500); // pick up the row the page just wrote (and other devices' hits)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [version, key, engine, demo]);
@@ -84,5 +98,7 @@ export function useCircuitAlerts(engine: MarketEngine, version: number, symbols:
     setLog([]);
     setEvents([]);
   };
-  return { events, log, glow, dismiss, clearLog };
+  /** session hits + cloud history, de-duplicated, newest first */
+  const history: HistoryEntry[] = useMemo(() => mergeHistory(log.map(fromEvent), fromRows(cloudRows)), [log, cloudRows]);
+  return { events, log, glow, dismiss, clearLog, history, refreshHistory, cloudRows };
 }
