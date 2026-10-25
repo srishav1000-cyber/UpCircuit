@@ -202,6 +202,10 @@ export class MarketEngine {
   depthReal = false;
   /** epoch ms of the last live tick applied */
   lastLiveTickAt = 0;
+  /** feed telemetry (live mode): arrival times of the last 10 s of ticks, a running delay average (exchange timestamp → browser), total ticks */
+  private tickWindow: number[] = [];
+  private delayEma: number | null = null;
+  tickTotal = 0;
   /** epoch ms of the last Yahoo quote batch applied (0 = nothing loaded yet) */
   lastQuotesAt = 0;
   /** epoch ms of the saved snapshot currently on screen; 0 once a fresh fetch has replaced it (lib/snapshotCache.ts) */
@@ -444,6 +448,23 @@ export class MarketEngine {
 
   /* ── SmartAPI ticks (live) ── */
 
+  private noteTick(now: number, exchangeTs?: number) {
+    this.tickTotal++;
+    this.tickWindow.push(now);
+    while (this.tickWindow.length && this.tickWindow[0] < now - 10_000) this.tickWindow.shift();
+    if (finite(exchangeTs) && exchangeTs > 0) {
+      const d = now - exchangeTs;
+      if (d >= 0 && d < 60_000) this.delayEma = this.delayEma === null ? d : this.delayEma * 0.9 + d * 0.1;
+    }
+  }
+
+  /** measured feed health for the telemetry popover — null where nothing has been measured (never a made-up number) */
+  telemetry(now = Date.now()): { ticksPerSec: number | null; delayMs: number | null; ticks: number; lastTickAgoMs: number | null } {
+    const recent = this.tickWindow.filter((x) => x >= now - 5_000).length;
+    const streaming = this.mode === 'live' && this.lastLiveTickAt > 0;
+    return { ticksPerSec: streaming ? recent / 5 : null, delayMs: streaming && this.delayEma !== null ? Math.round(this.delayEma) : null, ticks: this.tickTotal, lastTickAgoMs: this.lastLiveTickAt ? now - this.lastLiveTickAt : null };
+  }
+
   /** Apply one exchange tick (live mode). Symbols Yahoo has not delivered yet need a previous close on the tick to be created. */
   applyTick(t: Tick, now = Date.now()) {
     if (!finite(t.ltp) || t.ltp <= 0) return;
@@ -456,6 +477,7 @@ export class MarketEngine {
       if (!q) return;
     }
     this.lastLiveTickAt = now;
+    this.noteTick(now, t.ts);
     this.liveAt.set(q.symbol, now);
 
     if (finite(t.close) && t.close > 0 && t.close !== q.prevClose) {

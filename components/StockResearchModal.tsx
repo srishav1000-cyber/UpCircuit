@@ -34,6 +34,7 @@ interface Props {
   onClose: () => void;
 }
 
+const INS_TONE = { up: 'border-up/40 bg-up/10 text-up', down: 'border-down/40 bg-down/10 text-down', warn: 'border-warn/40 bg-warn/10 text-warn', muted: 'border-line bg-panel text-muted' };
 const DOT: Record<Tone, string> = { good: 'bg-up', ok: 'bg-warn', bad: 'bg-down', na: 'bg-muted/50' };
 
 function Ratio({ label, value, sub, tone: t, hint }: { label: string; value: string; sub?: string; tone: Tone; hint: string }) {
@@ -79,11 +80,38 @@ function OutlookCard({ title, horizon, o }: { title: string; horizon: string; o:
   );
 }
 
+/** ✨ Ask UpCircuit — gradient toggle for the stock Copilot drawer (top bar + floating corner in full-screen mode) */
+function AskButton({ open, onClick, className = '', floating, testid }: { open: boolean; onClick: () => void; className?: string; floating?: boolean; testid: string }) {
+  return (
+    <button onClick={onClick} data-testid={testid} aria-expanded={open} aria-label="Ask UpCircuit" title="Ask UpCircuit about this stock" className={`flex items-center gap-1.5 whitespace-nowrap rounded-md bg-gradient-to-r from-accent to-[#7B61FF] px-3 text-[12px] font-bold text-white shadow-lg shadow-accent/30 ring-1 ring-white/10 transition hover:brightness-110 active:scale-95 ${floating ? 'fixed bottom-5 right-5 z-[60] h-10 rounded-full px-4' : 'h-8'} ${className}`}>
+      <span aria-hidden>✨</span>Ask UpCircuit
+    </button>
+  );
+}
+
+/** AI insights strip: a one-line valuation / momentum / trend read computed from the same real numbers shown below (no model call, N/A-safe). */
+function insightsOf(f: Fundamentals, rsi: number | null, short: Outlook | null, long: Outlook | null, pb: number | null): { text: string; tone: 'up' | 'down' | 'warn' | 'muted' } {
+  const parts: string[] = [];
+  if (f.pe !== null) parts.push(`P/E ${f.pe.toFixed(1)}× (${f.pe < 15 ? 'low' : f.pe <= 30 ? 'fair' : 'rich'})`);
+  if (pb !== null) parts.push(`P/B ${pb.toFixed(2)}×`);
+  if (f.roce !== null) parts.push(`ROCE ${f.roce.toFixed(1)}% (${f.roce >= 15 ? 'strong' : 'moderate'})`);
+  if (f.debtToEquity !== null) parts.push(`D/E ${f.debtToEquity.toFixed(2)}`);
+  if (rsi !== null) parts.push(`RSI ${rsi.toFixed(0)} (${rsi >= 70 ? 'overbought' : rsi <= 30 ? 'oversold' : 'neutral'})`);
+  if (short) parts.push(`short-term ${short.label.toLowerCase()}`);
+  if (long) parts.push(`long-term ${long.label.toLowerCase()}`);
+  const score = (short?.score ?? 0) + (long?.score ?? 0);
+  return { text: parts.join(' · ') || 'Not enough data yet', tone: !short && !long ? 'muted' : score > 20 ? 'up' : score < -20 ? 'down' : 'warn' };
+}
+
 /** Stock research page: TradingView chart (10 timeframes), Screener-style ratios, technicals + outlook, AI copilot. */
 export function StockResearchModal({ symbol, engine, favorite, onToggleFavorite, holdings, mode, onDeepResearch, onSetAlert, activeAlerts, onOpenTerminal, onClose }: Props) {
   const full = useFullscreen();
   const [tf, setTf] = useState<Timeframe>('1D');
   const dialog = useRef<HTMLDivElement>(null);
+  const [askOpen, setAskOpen] = useState(false);
+  // the Copilot column is collapsed in full-screen mode: it lives in the slide-out drawer instead (and entering / leaving full screen resets it)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => setAskOpen(false), [full.fs]);
 
   const quote = engine.touch(symbol);
 
@@ -121,6 +149,18 @@ export function StockResearchModal({ symbol, engine, favorite, onToggleFavorite,
     };
   }, []);
 
+  useEffect(() => {
+    if (!askOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        setAskOpen(false);
+      }
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [askOpen]);
+
   const closes = useMemo(() => (base.length ? [...base.slice(0, -1).map((c) => c.close), quote?.ltp ?? base[base.length - 1].close] : []), [base, quote?.ltp]);
   const prevBar = base[base.length - 2];
   // pivots need the previous real session's H/L/C — until Yahoo delivers it they are zeros shown as '—'
@@ -146,6 +186,7 @@ export function StockResearchModal({ symbol, engine, favorite, onToggleFavorite,
   const getContext = useCallback(() => latest.current(), []);
 
   if (!quote || !f) return null;
+  const ins = insightsOf(f, rsi, short, long, f.bookValue ? quote.ltp / f.bookValue : null);
   const chg = quote.ltp - quote.prevClose;
   const pct = (chg / quote.prevClose) * 100;
 
@@ -190,6 +231,7 @@ export function StockResearchModal({ symbol, engine, favorite, onToggleFavorite,
             <AnalysisActions symbol={symbol} watchlisted={favorite} activeAlerts={activeAlerts} onDeepResearch={onDeepResearch} onToggleWatchlist={onToggleFavorite} onSetAlert={onSetAlert} deepLabel="Deep Research" variant="full" className="hidden md:flex" />
             <ExportReport symbol={symbol} engine={engine} holdings={holdings} mode={mode} compact className="lg:hidden" />
             <ExportReport symbol={symbol} engine={engine} holdings={holdings} mode={mode} className="hidden lg:block" />
+            <AskButton open={askOpen} onClick={() => setAskOpen((o) => !o)} className={full.fs ? '' : 'hidden'} testid="fs-ask-top" />
             <button onClick={full.toggle} aria-pressed={full.fs} data-testid="research-fullscreen" title={full.fs ? 'Exit full screen (Esc)' : 'Expand to a borderless full-window view'} className="flex h-8 items-center gap-1.5 whitespace-nowrap rounded border border-line px-2.5 text-[12px] font-semibold text-ink hover:bg-line">
               <span aria-hidden>🖥️</span>
               <span className="hidden lg:inline">{full.fs ? 'Exit Full Screen' : 'Full Screen Dashboard'}</span>
@@ -200,10 +242,17 @@ export function StockResearchModal({ symbol, engine, favorite, onToggleFavorite,
           </div>
         </div>
 
+        {full.fs && !askOpen && <AskButton open={false} onClick={() => setAskOpen(true)} floating testid="fs-ask-float" />}
+
         {/* body */}
         <div className="min-h-0 flex-1 overflow-y-auto lg:overflow-hidden">
-          <div className="grid gap-4 p-4 lg:h-full lg:grid-cols-[minmax(0,1fr)_380px] [.fs_&]:xl:grid-cols-[minmax(0,1fr)_460px]">
+          <div className={`grid gap-4 p-4 lg:h-full ${full.fs ? 'grid-cols-1' : 'lg:grid-cols-[minmax(0,1fr)_380px]'}`}>
             <div className="min-w-0 space-y-4 lg:h-full lg:overflow-y-auto lg:pr-1">
+              <div data-testid="ai-insights-strip" className={`flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md border px-3 py-2 text-[12px] ${INS_TONE[ins.tone]}`}>
+                <span className="font-bold">✨ AI insights</span>
+                <span className="num text-ink">{ins.text}</span>
+                <button onClick={() => (full.fs ? setAskOpen(true) : undefined)} className={`ml-auto text-[11px] font-semibold text-accent hover:underline ${full.fs ? '' : 'hidden'}`}>Ask more →</button>
+              </div>
               <div className="overflow-hidden rounded-md border border-line">
                 <PriceChart symbol={symbol} ltp={quote.ltp} volume={quote.volume} tf={tf} onTf={setTf} live={engine.mode === 'live'} subscribeTicks={engine.onTick} className={full.fs ? 'h-[min(62vh,720px)] min-h-[400px]' : 'h-[400px]'} />
               </div>
@@ -247,7 +296,14 @@ export function StockResearchModal({ symbol, engine, favorite, onToggleFavorite,
               <p className="pb-2 text-[10px] text-muted">Prices, ratios and indicators here use real NSE session prices; ratios not available show N/A. Educational only; not investment advice.</p>
             </div>
 
-            <div className="h-[560px] min-h-0 lg:h-full">
+            {full.fs && askOpen && <div className="fixed inset-0 z-[67] bg-black/30" onMouseDown={() => setAskOpen(false)} data-testid="fs-ask-backdrop" aria-hidden />}
+            <div
+              data-testid={full.fs ? 'fs-ask-drawer' : 'research-copilot'}
+              data-open={full.fs ? askOpen : true}
+              {...(full.fs && askOpen ? { 'data-overlay': '' } : {})}
+              aria-hidden={full.fs && !askOpen}
+              className={full.fs ? `fixed bottom-0 right-0 top-0 z-[68] w-full max-w-[440px] p-2 backdrop-blur-md [&>section]:bg-panel/90 transition-[transform,visibility] duration-200 ${askOpen ? 'visible translate-x-0' : 'invisible translate-x-full'}` : 'h-[560px] min-h-0 lg:h-full'}
+            >
               <AIStockCopilot key={symbol} symbol={symbol} name={quote.name} getContext={getContext} />
             </div>
           </div>

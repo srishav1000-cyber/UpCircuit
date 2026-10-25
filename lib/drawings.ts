@@ -1,7 +1,7 @@
 // Chart drawing model + pure geometry helpers (no DOM, no chart-library imports → unit-testable).
 // Anchors are stored in DATA space — (time, price) — so drawings survive zoom / pan / resize / live bars and timeframe switches.
 
-export type Tool = 'cursor' | 'trend' | 'hline' | 'fib' | 'text' | 'ruler';
+export type Tool = 'cursor' | 'trend' | 'hline' | 'fib' | 'text' | 'ruler' | 'brush' | 'range' | 'erase';
 
 export interface Pt {
   /** IST-shifted seconds (same axis as the candles) */
@@ -10,12 +10,30 @@ export interface Pt {
 }
 
 export type Drawing =
-  | { id: string; kind: 'trend' | 'fib' | 'ruler'; a: Pt; b: Pt }
+  | { id: string; kind: 'trend' | 'fib' | 'ruler' | 'range'; a: Pt; b: Pt }
+  | { id: string; kind: 'brush'; a: Pt; pts: Pt[] }
   | { id: string; kind: 'hline'; a: Pt }
   | { id: string; kind: 'text'; a: Pt; text: string };
 
 export const FIB_LEVELS = [0, 0.236, 0.382, 0.5, 0.618, 0.786, 1] as const;
 export const MAX_DRAWINGS = 60;
+export const MAX_BRUSH_POINTS = 400;
+
+/** price-range tool: the distance between two prices */
+export const rangeStats = (a: Pt, b: Pt) => ({ dPrice: b.p - a.p, dPct: a.p ? ((b.p - a.p) / a.p) * 100 : 0 });
+
+/** thin a freehand stroke: keep a point only when it is ≥ minPx from the last kept point (screen space) — pure so it is unit-testable */
+export function thinStroke(px: { x: number; y: number }[], minPx = 3): number[] {
+  const keep: number[] = [];
+  let last: { x: number; y: number } | null = null;
+  px.forEach((q, i) => {
+    if (!last || Math.hypot(q.x - last.x, q.y - last.y) >= minPx || i === px.length - 1) {
+      keep.push(i);
+      last = q;
+    }
+  });
+  return keep;
+}
 
 /** Fib retracement from `a` (start) to `b` (end): level 0 sits at the end, 1 at the start. */
 export const fibPrice = (a: Pt, b: Pt, level: number) => b.p - (b.p - a.p) * level;
@@ -113,7 +131,10 @@ export function parseDrawings(raw: string | null): Drawing[] {
       if (!id || !a) continue;
       if (d.kind === 'hline') out.push({ id, kind: 'hline', a });
       else if (d.kind === 'text' && typeof d.text === 'string' && d.text.trim()) out.push({ id, kind: 'text', a, text: d.text.slice(0, 80) });
-      else if (d.kind === 'trend' || d.kind === 'fib' || d.kind === 'ruler') {
+      else if (d.kind === 'brush' && Array.isArray(d.pts)) {
+        const pts = (d.pts as unknown[]).map(pt).filter((q): q is Pt => q !== null).slice(0, MAX_BRUSH_POINTS);
+        if (pts.length >= 2) out.push({ id, kind: 'brush', a: pts[0], pts });
+      } else if (d.kind === 'trend' || d.kind === 'fib' || d.kind === 'ruler' || d.kind === 'range') {
         const b = pt(d.b);
         if (b) out.push({ id, kind: d.kind, a, b });
       }
@@ -127,5 +148,6 @@ export function parseDrawings(raw: string | null): Drawing[] {
 /** Shift a drawing by (Δlogical bars, Δprice) — used when dragging. */
 export function moveDrawing(d: Drawing, dBars: number, dPrice: number, bars: Bar[], interval: number): Drawing {
   const mv = (q: Pt): Pt => ({ t: logicalToTime(bars, timeToLogical(bars, q.t, interval) + dBars, interval), p: q.p + dPrice });
+  if (d.kind === 'brush') return { ...d, a: mv(d.a), pts: d.pts.map(mv) };
   return 'b' in d ? { ...d, a: mv(d.a), b: mv(d.b) } : { ...d, a: mv(d.a) };
 }

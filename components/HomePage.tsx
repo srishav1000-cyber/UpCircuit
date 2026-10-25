@@ -7,7 +7,7 @@ import type { NewsResponse, Quote } from '@/lib/types';
 import { breadth, capClass, dayPct, topMovers, type CapClass } from '@/lib/analytics';
 import { fmt, fmtCompact, fmtCr, fmtPct, fmtSigned, tone } from '@/lib/format';
 import { Badge, Card, Sparkline } from './ui';
-import { NewsFeed } from './NewsFeed';
+import { MarketNews } from './MarketNews';
 import { BudgetDiscovery } from './BudgetDiscovery';
 import type { Instrument } from '@/lib/types';
 import { SectorHeatmap } from './SectorHeatmap';
@@ -170,7 +170,7 @@ export function HomePage({ engine, news, newsError, onOpenStock, instruments, on
         <BudgetDiscovery engine={engine} instruments={instruments} onOpenChart={onOpenChart} />
       </div>
 
-      <NewsFeed news={news} error={newsError} className="max-h-[calc(100vh-190px)] min-h-[420px] xl:sticky xl:top-[150px]" />
+      <MarketNews news={news} error={newsError} onSymbol={onOpenStock} className="max-h-[calc(100vh-190px)] min-h-[420px] xl:sticky xl:top-[150px]" />
     </div>
   );
 }

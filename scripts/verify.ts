@@ -857,6 +857,10 @@ import { planDemo, demoPrice, demoDone, DEMO_RAMP_MS, DEMO_HOLD_MS } from '../li
 import { circuitWatchlist, proximityOf, proximityUpper, proximityLower } from '../lib/analytics/proximity';
 import { ofi, ofiLabel } from '../lib/analytics/orderflow';
 import { buildAskContext, answerAskLocally } from '../lib/ask';
+import { parseCopilotCard, QUICK_ACTIONS } from '../lib/copilotCards';
+import { relativeTime, extractSymbols, splitGoogleTitle } from '../lib/newsEngine';
+import { thinStroke, moveDrawing as moveDrw, rangeStats } from '../lib/drawings';
+
 
 t('demo simulator: 3 targets, alternating sides, 5/10/20 bands, deterministic ease-in, exact limit, restorable', () => {
   const qs = new Map([['RELIANCE', { symbol: 'RELIANCE', ltp: 1400, prevClose: 1400 }], ['HFCL', { symbol: 'HFCL', ltp: 80, prevClose: 80 }], ['PNB', { symbol: 'PNB', ltp: 100, prevClose: 100 }], ['TCS', { symbol: 'TCS', ltp: 3000, prevClose: 3000 }]]);
@@ -1405,6 +1409,70 @@ t('Round 34 · research PDF: model carries every required section; jsPDF renders
   assert.ok(mdToBlocks('## H\n- a **b**\ntext').length === 3 && pdfText('₹100 ▲ — ok') === 'Rs. 100 + - ok');
   for (const theme of ['light', 'dark'] as const) { const { blob, pages, fileName } = await renderPdf(model, theme); const buf = Buffer.from(await blob.arrayBuffer()); assert.equal(buf.subarray(0, 5).toString(), '%PDF-'); assert.ok(pages >= 1 && buf.length > 3000 && fileName.endsWith(`_${theme}.pdf`)); const txt = buf.toString('latin1'); assert.ok(txt.includes('EXECUTIVE SUMMARY') && txt.includes('TECHNICAL SUMMARY') && txt.includes('Tata Consultancy'), theme); if (theme === 'dark') assert.ok(/0\.043 0\.071 0\.125 rg/.test(txt) || /rg/.test(txt)); }
   assert.ok(/downloadResearchPdf/.test(readFileSync('components/ExportReport.tsx', 'utf8')) && /Export Research Report/.test(readFileSync('components/ExportReport.tsx', 'utf8')));
+});
+
+t('Round 35 · copilot cards: local answers are verdict + chips + bold-lead bullets + collapsible sections (never a wall of text)', () => {
+  const ctx = mkCtx();
+  for (const q of ['Is it expensive?', 'debt?', 'support resistance?', 'key risks?', 'should I invest?']) {
+    const a = answerLocally(q, ctx, []);
+    const c = parseCopilotCard(a);
+    assert.ok(c.structured && c.verdict, q);
+    assert.ok(/^(BULLISH|BEARISH|NEUTRAL)$/.test(c.verdict!), q);
+    assert.match(a, /- \*\*[A-Za-z\- ]+:\*\*/, q + ' has bold lead-in bullets');
+    assert.ok(!/^•/m.test(a), 'no raw bullets');
+  }
+  const v = parseCopilotCard(answerLocally('Is it expensive?', ctx, []));
+  assert.ok(v.chips.some((x) => x.label === 'P/E') && v.chips.every((x) => x.value && !/NaN|undefined|null/.test(x.value)));
+  // a null P/E produces NO chip (never an invented number)
+  const nul = mkCtx(); nul.ratios.pe = null;
+  assert.ok(!parseCopilotCard(answerLocally('Is it expensive?', nul, [])).chips.some((x) => x.label === 'P/E'));
+  const g = parseCopilotCard('[VERDICT: BEARISH] Weak momentum.\n[P/E: 21.5 | Fair] [RSI: 71.2 | Overbought] [Next resistance: ₹1,320]\n- **Trend:** down\n### Risks\n- **Debt:** high\n### Catalysts\n- **Results:** soon');
+  assert.equal(g.verdict, 'BEARISH'); assert.equal(g.takeaway, 'Weak momentum.');
+  assert.deepEqual(g.chips.map((x) => [x.label, x.value, x.tag, x.tone]), [['P/E', '21.5', 'Fair', 'warn'], ['RSI', '71.2', 'Overbought', 'down'], ['Next resistance', '₹1,320', undefined, 'muted']]);
+  assert.deepEqual(g.sections.map((x) => x.title), ['Risks', 'Catalysts']); assert.match(g.body, /Trend/);
+  assert.equal(parseCopilotCard('Just a plain paragraph.').structured, false);
+  assert.ok(QUICK_ACTIONS.length >= 3 && QUICK_ACTIONS.some((q) => /Breakout/.test(q.label)) && QUICK_ACTIONS.every((q) => q.question.length > 10));
+  assert.match(SYSTEM_PROMPT, /VERDICT/); assert.match(SYSTEM_PROMPT, /NO PARAGRAPHS/);
+});
+t('Round 35 · news engine: relative times, ticker extraction, Google News title split', () => {
+  const now = 1_700_000_000_000;
+  assert.equal(relativeTime(now - 30_000, now), 'just now');
+  assert.equal(relativeTime(now - 12 * 60_000, now), '12 mins ago');
+  assert.equal(relativeTime(now - 60 * 60_000, now), '1 hour ago');
+  assert.equal(relativeTime(now - 3 * 3600_000, now), '3 hours ago');
+  assert.equal(relativeTime(now - 2 * 86400_000, now), '2 days ago');
+  assert.equal(relativeTime(0, now), '');
+  assert.ok(extractSymbols('Reliance Industries and TCS lead Nifty gains').includes('RELIANCE'));
+  assert.ok(extractSymbols('TCS wins a large deal').includes('TCS'));
+  assert.deepEqual(extractSymbols('Markets steady as investors await policy cues'), []);
+  assert.deepEqual(splitGoogleTitle('Sensex jumps 400 points on banking rally - Economic Times'), { title: 'Sensex jumps 400 points on banking rally', source: 'Economic Times' });
+  assert.deepEqual(splitGoogleTitle('Short - x'), { title: 'Short - x', source: '' });
+});
+t('Round 35 · drawings: brush + price range persist / move / thin; invalid shapes are dropped', () => {
+  const raw = JSON.stringify([
+    { id: 'b1', kind: 'brush', a: { t: 1, p: 1 }, pts: [{ t: 1, p: 1 }, { t: 2, p: 2 }, { t: 3, p: 1.5 }] },
+    { id: 'b2', kind: 'brush', pts: [{ t: 1, p: 1 }] },
+    { id: 'r1', kind: 'range', a: { t: 5, p: 100 }, b: { t: 9, p: 110 } },
+    { id: 'x', kind: 'range', a: { t: 5, p: 100 } },
+  ]);
+  const d = parseDrawings(raw);
+  assert.deepEqual(d.map((x) => x.id), ['b1', 'r1']);
+  const bars = Array.from({ length: 10 }, (_, i) => ({ time: i * 60, open: 1, high: 2, low: 0.5, close: 1.5 }));
+  const mv = moveDrw(d[0], 2, 1, bars, 60);
+  assert.ok(mv.kind === 'brush' && mv.pts.length === 3 && mv.pts[0].t === 121 && Math.abs(mv.pts[0].p - 2) < 1e-9);
+  const st = rangeStats({ t: 0, p: 100 }, { t: 1, p: 110 }); assert.equal(st.dPrice, 10); assert.equal(st.dPct, 10);
+  assert.deepEqual(thinStroke([{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 5, y: 0 }, { x: 6, y: 0 }, { x: 9, y: 0 }], 3), [0, 2, 4]);
+});
+t('Round 35 · telemetry is measured, never invented', () => {
+  const e = new MarketEngine(SEED_INSTRUMENTS);
+  const idle = e.telemetry();
+  assert.equal(idle.ticksPerSec, null); assert.equal(idle.delayMs, null); assert.equal(idle.ticks, 0);
+  e.mode = 'live';
+  const now = Date.now();
+  e.applyTick({ symbol: 'TCS', ltp: 4100, close: 4000, ts: now - 40 }, now);
+  e.applyTick({ symbol: 'TCS', ltp: 4101, close: 4000, ts: now - 60 }, now + 100);
+  const m = e.telemetry(now + 200);
+  assert.equal(m.ticks, 2); assert.ok(m.ticksPerSec! > 0 && m.ticksPerSec! <= 1); assert.ok(m.delayMs! >= 40 && m.delayMs! <= 120, 'delay ' + m.delayMs);
 });
 
 void Promise.all(pending).then(() => {

@@ -1,6 +1,7 @@
 import type { NewsItem, NewsResponse } from './types';
 import { scoreText } from './sentiment';
 import { TtlCache } from './ttlCache';
+import { GOOGLE_NEWS_BUSINESS, extractSymbols, splitGoogleTitle } from './newsEngine';
 
 /**
  * RSS aggregation. Edge-safe: fetch + regex parsing only (no DOM, no native modules).
@@ -8,6 +9,7 @@ import { TtlCache } from './ttlCache';
  * business-news feeds; publishers move or retire feed URLs, so failures are reported, not hidden.
  */
 export const DEFAULT_FEEDS = [
+  GOOGLE_NEWS_BUSINESS,
   'https://economictimes.indiatimes.com/markets/rssfeeds/1977021501.cms',
   'https://www.livemint.com/rss/markets',
   'https://www.business-standard.com/rss/markets-106.rss',
@@ -16,6 +18,7 @@ export const DEFAULT_FEEDS = [
 ];
 
 const SOURCE_NAMES: [RegExp, string][] = [
+  [/news\.google\.com/, 'Google News'],
   [/economictimes/, 'Economic Times'],
   [/livemint/, 'Mint'],
   [/business-standard/, 'Business Standard'],
@@ -47,6 +50,8 @@ function tag(block: string, name: string): string {
 
 export interface RawItem {
   title: string;
+  /** <source> tag (Google News) */
+  source?: string;
   link: string;
   published: number;
 }
@@ -61,7 +66,7 @@ export function parseRss(xml: string): RawItem[] {
     if (!link) link = b.match(/<link[^>]*href=["']([^"']+)["']/i)?.[1] ?? tag(b, 'guid');
     const date = tag(b, 'pubDate') || tag(b, 'published') || tag(b, 'updated') || tag(b, 'dc:date');
     const t = date ? Date.parse(date) : NaN;
-    if (title && /^https?:\/\//i.test(link)) out.push({ title, link, published: Number.isFinite(t) ? t : 0 });
+    if (title && /^https?:\/\//i.test(link)) out.push({ title, source: tag(b, 'source') || undefined, link, published: Number.isFinite(t) ? t : 0 });
   }
   return out;
 }
@@ -98,8 +103,9 @@ async function fetchFeed(url: string): Promise<NewsItem[]> {
   return parseRss(await res.text())
     .slice(0, 15)
     .map((r) => {
-      const s = scoreText(r.title);
-      return { id: r.link, title: r.title, link: r.link, source, published: r.published, score: s.score, label: s.label };
+      const g = /news\.google\./.test(url) ? splitGoogleTitle(r.title, r.source) : { title: r.title, source };
+      const s = scoreText(g.title);
+      return { id: r.link, title: g.title, link: r.link, source: g.source || source, published: r.published, score: s.score, label: s.label, symbols: extractSymbols(g.title) };
     });
 }
 
@@ -129,7 +135,7 @@ async function build(): Promise<NewsResponse> {
   const now = Date.now();
   const sample: NewsItem[] = SAMPLE.map((title, i) => {
     const s = scoreText(title);
-    return { id: 'sample-' + i, title, link: '#', source: 'Sample', published: now - i * 17 * 60_000, score: s.score, label: s.label };
+    return { id: 'sample-' + i, title, link: '#', source: 'Sample', published: now - i * 17 * 60_000, score: s.score, label: s.label, symbols: extractSymbols(title) };
   });
   return { items: sample, mode: 'sample', errors, fetchedAt: now };
 }

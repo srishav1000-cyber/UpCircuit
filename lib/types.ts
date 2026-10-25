@@ -100,6 +100,8 @@ export interface NewsItem {
   /** −1 … +1 from the local VADER + financial-rules scorer */
   score: number;
   label: SentimentLabel;
+  /** stock symbols mentioned in the headline (ticker or company name) */
+  symbols?: string[];
 }
 
 export interface NewsResponse {

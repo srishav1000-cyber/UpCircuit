@@ -3,7 +3,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { MAX_QUESTION, type CopilotAnswer, type CopilotContext, type CopilotSource } from '@/lib/copilot';
 import { Badge } from './ui';
-import { Markdown } from './Markdown';
+import { CopilotCards } from './CopilotCards';
+import { QUICK_ACTIONS } from '@/lib/copilotCards';
 
 interface Msg {
   id: number;
@@ -14,7 +15,6 @@ interface Msg {
   ageSec?: number;
 }
 
-const SUGGESTIONS = ['Is it expensive?', 'Summarize the technicals', 'What are the key risks?', 'How is the news sentiment?', 'Is the dividend attractive?', 'How healthy is the balance sheet?'];
 
 const REASONS: Record<string, string> = {
   no_key: 'Gemini isn’t configured — answered by the local rules engine.',
@@ -106,7 +106,7 @@ export function AIStockCopilot({ symbol, name, getContext }: Props) {
                 m.role === 'user' ? 'bg-accent text-white' : m.role === 'error' ? 'border border-down/40 bg-down/10 text-down' : 'border border-line bg-bg text-ink'
               }`}
             >
-              {m.role === 'assistant' ? <Markdown text={m.text} /> : m.text}
+              {m.role === 'assistant' ? <CopilotCards text={m.text} /> : m.text}
               {m.role === 'assistant' && (
                 <div className="mt-2 flex flex-wrap items-center gap-1.5 border-t border-line pt-1.5">
                   {m.source === 'gemini' && <Badge tone="accent">GEMINI AI</Badge>}
@@ -127,10 +127,10 @@ export function AIStockCopilot({ symbol, name, getContext }: Props) {
         )}
       </div>
 
-      <div className="flex flex-wrap gap-1.5 border-t border-line px-3 pt-2">
-        {SUGGESTIONS.map((s) => (
-          <button key={s} disabled={busy} onClick={() => ask(s)} className="rounded-full border border-line px-2.5 py-1 text-[11px] text-muted hover:border-accent hover:text-accent disabled:opacity-40">
-            {s}
+      <div className="flex flex-wrap gap-1.5 border-t border-line px-3 pt-2" role="group" aria-label="Quick actions" data-testid="copilot-quick-actions">
+        {QUICK_ACTIONS.map((q) => (
+          <button key={q.id} disabled={busy} onClick={() => ask(q.question)} data-testid={`quick-${q.id}`} className="rounded-full border border-accent/40 bg-accent/10 px-2.5 py-1 text-[11px] font-medium text-accent hover:bg-accent/20 disabled:opacity-40">
+            {q.label}
           </button>
         ))}
       </div>

@@ -25,6 +25,8 @@ import { mergeHolding } from '@/lib/holdingsStore';
 import { HomePage } from '@/components/HomePage';
 import { ChartWorkspace } from '@/components/ChartWorkspace';
 import { StockResearchModal } from '@/components/StockResearchModal';
+import { SystemTelemetryModal } from '@/components/SystemTelemetryModal';
+import { Week7MilestoneModal } from '@/components/Week7MilestoneModal';
 import { DayTraderDashboard } from '@/components/dashboards/DayTrader';
 import { RetailDashboard } from '@/components/dashboards/Retail';
 import { InstitutionalDashboard } from '@/components/dashboards/Institutional';
@@ -95,6 +97,8 @@ function Terminal() {
   const [pickFor, setPickFor] = useState<string | null>(null);
   const [rebalanceOpen, setRebalanceOpen] = useState(false);
   const [methodOpen, setMethodOpen] = useState(false);
+  const [teleOpen, setTeleOpen] = useState(false);
+  const [week7Open, setWeek7Open] = useState(false);
   const { holdings: rawHoldings, setHoldings, resetHoldings } = useHoldings(DEMO_HOLDINGS);
   const { focus, toggle: toggleFocus, welcome, dismissWelcome } = useFocus();
   const { user, update: updateAccount, getToken } = useAuth();
@@ -450,10 +454,14 @@ function Terminal() {
           {bseOnly > 0 && <> · NSE {(instruments.length - bseOnly).toLocaleString('en-IN')} + BSE-only {bseOnly.toLocaleString('en-IN')}</>}
         </span>
         <button type="button" onClick={() => setMethodOpen(true)} data-testid="methodology-open" className="cursor-pointer rounded border border-line px-1.5 py-px font-semibold text-accent hover:bg-accent/10">ƒ Methodology</button>
+        <button type="button" onClick={() => setTeleOpen(true)} data-testid="telemetry-open" title="Live feed diagnostics" className="cursor-pointer rounded border border-line px-1.5 py-px font-semibold text-accent hover:bg-accent/10">📡 Telemetry</button>
+        <button type="button" onClick={() => setWeek7Open(true)} data-testid="week7-open" title="Week 7 architecture summary" className="cursor-pointer rounded border border-line px-1.5 py-px font-semibold text-accent hover:bg-accent/10">Week 7 Specs</button>
         <span className="ml-auto hidden sm:inline">{mode === 'live' ? 'Prices streamed via Angel One SmartAPI; fundamentals not available from the feed show N/A.' : 'Prices are real NSE session data; fundamentals not available from the feed show N/A.'} Not investment advice.</span>
       </footer>
 
       <MethodologyDrawer open={methodOpen} onClose={() => setMethodOpen(false)} />
+      <SystemTelemetryModal open={teleOpen} onClose={() => setTeleOpen(false)} engine={engine} mode={mode} instruments={instruments.length} />
+      <Week7MilestoneModal open={week7Open} onClose={() => setWeek7Open(false)} />
 
       {research && (
         <StockResearchModal
