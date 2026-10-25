@@ -12,6 +12,8 @@ import { ANALYST_PROMPT, buildReport, reportCsv, reportFileName } from '@/lib/re
 import { useFundamentals } from '@/hooks/useFundamentals';
 import { useDismiss } from '@/hooks/useClickOutside';
 import { Markdown } from './Markdown';
+import { downloadResearchPdf } from './PDFReportExporter';
+import type { PdfTheme } from '@/lib/pdfGenerator';
 
 interface Props {
   symbol: string;
@@ -77,6 +79,22 @@ export function ExportReport({ symbol, engine, holdings = [], mode = 'delayed', 
     setNote('CSV downloaded');
   };
 
+  /** real downloadable PDF (jsPDF): Executive summary · valuation ratios · technicals · AI insights · news sentiment, light (print) or dark */
+  const exportFile = async (theme: PdfTheme) => {
+    if (!quote || !screener) return;
+    setOpen(false);
+    setBusy('pdf');
+    setNote('Building PDF…');
+    try {
+      const r = await downloadResearchPdf({ quote, screener, engine, holdings, mode, theme });
+      setNote(`PDF downloaded · ${r.fileName} · ${r.pages} page${r.pages > 1 ? 's' : ''}`);
+    } catch (e) {
+      setNote(`PDF failed: ${e instanceof Error ? e.message : 'unknown error'}`);
+    } finally {
+      setBusy(null);
+    }
+  };
+
   const exportPdf = async () => {
     if (!quote || !screener) return;
     setOpen(false);
@@ -138,9 +156,17 @@ export function ExportReport({ symbol, engine, holdings = [], mode = 'delayed', 
             <span className="block text-[13px] font-semibold text-ink">⬇ CSV</span>
             <span className="block text-[11px] text-muted">Fundamentals, key ratios, quarterly financials</span>
           </button>
-          <button role="menuitem" data-testid="export-pdf" onClick={exportPdf} className="block w-full px-3 py-2 text-left hover:bg-line">
-            <span className="block text-[13px] font-semibold text-ink">🖨 Print / PDF</span>
-            <span className="block text-[11px] text-muted">Formatted report with AI analyst summary</span>
+          <button role="menuitem" data-testid="export-pdf" onClick={() => void exportFile('light')} className="block w-full px-3 py-2 text-left hover:bg-line">
+            <span className="block text-[13px] font-semibold text-ink">⬇ PDF · light (print-ready)</span>
+            <span className="block text-[11px] text-muted">Summary, ratios, technicals, AI insights, news tone</span>
+          </button>
+          <button role="menuitem" data-testid="export-pdf-dark" onClick={() => void exportFile('dark')} className="block w-full px-3 py-2 text-left hover:bg-line">
+            <span className="block text-[13px] font-semibold text-ink">⬇ PDF · dark</span>
+            <span className="block text-[11px] text-muted">Same report on the terminal&apos;s dark palette</span>
+          </button>
+          <button role="menuitem" data-testid="export-print" onClick={exportPdf} className="block w-full px-3 py-2 text-left hover:bg-line">
+            <span className="block text-[13px] font-semibold text-ink">🖨 Print layout</span>
+            <span className="block text-[11px] text-muted">Browser print dialog</span>
           </button>
         </div>
       )}

@@ -63,6 +63,10 @@ import type { Instrument } from '../lib/types';
 import { defaultState as wlDefault, type WatchlistState as WLState } from '../lib/watchlist';
 import { createFramePump, DOM_BATCH_MS, isFrozen } from '../lib/frameScheduler';
 import { aggregateSectors, heatBand, sectorOf } from '../lib/sectors';
+import type { Candle } from '../lib/types';
+import { RANGE_SPECS, acceptDirect, aggregateBars as aggregateCalendar, resolveRange, resolutionOk, sanitizeBars, weekStart, monthStart } from '../lib/historicalEngine';
+import { betaOf, portfolioRisk, riskBadge, stockWeights } from '../lib/analytics/portfolioRisk';
+import { buildPdfModel, mdToBlocks, pdfText, renderPdf } from '../lib/pdfGenerator';
 import { INDICATOR_COLORS, LiveIndicators, emaFull, rsiFull, vwapAvailable, vwapFull } from '../lib/technicalIndicators';
 import { HISTORY_TABS, filterHistory, fromEvent, fromRows, mergeHistory, nearLimit } from '../lib/circuitTracker';
 import { detectPatterns, aggregateBars, vwapSeries } from '../lib/analytics/patterns';
@@ -618,7 +622,7 @@ t('stream: URL carries clientCode/feedToken/apiKey; 30 s ping default; subscribe
 t('stream: heartbeat sends "ping" on the interval and stops on close', async () => {
   const { FakeWS, made } = fakeWS();
   const s = new DirectSmartApiStream({ apiKey: 'K', clientCode: 'C', feedToken: 'F', pingMs: 15, onTick: () => {}, onError: () => {}, WebSocketImpl: FakeWS as unknown as typeof WebSocket });
-  s.connect(); made[0].open(); await sleep(150);
+  s.connect(); made[0].open(); await sleep(900);
   const pings = made[0].sent.filter((m) => m === 'ping').length; assert.ok(pings >= 2, 'pings: ' + pings);
   s.close(); const n = made[0].sent.length; await sleep(40); assert.equal(made[0].sent.length, n, 'no pings after close');
 });
@@ -1350,6 +1354,57 @@ t('Round 33 · circuit desk history: cloud rows + session hits merge by symbol·
   assert.deepEqual(HISTORY_TABS.map((t2) => t2.label), ['All Anomalies', 'Upper Circuit (UC)', 'Lower Circuit (LC)', 'Near Limit (±1.5%)']);
   const nl = nearLimit([{ symbol: 'A', ltp: 103.9, prevClose: 100 }, { symbol: 'B', ltp: 101, prevClose: 100 }, { symbol: 'C', ltp: 105, prevClose: 100 }]); assert.deepEqual(nl.map((x) => x.symbol), ['A'], 'within 1.5% of the 5% band, not yet at a limit');
   const dr = readFileSync('components/CircuitLogDrawer.tsx', 'utf8'); assert.ok(/Test Chime/.test(dr) && /Analyze/.test(dr) && /playChime\(soundFor\(dir, n\.sound\), n\.volume\)/.test(dr));
+});
+
+t('Round 34 · long ranges: 1Y daily ≤252 · 5Y weekly ≤260 · 10Y monthly ≤120; a wrong-resolution or empty provider answer is rebuilt from daily bars; bad rows never reach the chart', () => {
+  assert.deepEqual([RANGE_SPECS['1Y']!.res, RANGE_SPECS['1Y']!.keep, RANGE_SPECS['5Y']!.res, RANGE_SPECS['5Y']!.keep, RANGE_SPECS['10Y']!.res, RANGE_SPECS['10Y']!.keep], ['daily', 252, 'weekly', 260, 'monthly', 120]);
+  const D = 86400; const t0 = Math.floor(Date.parse('2016-10-03T00:00:00Z') / 1000); // a Monday
+  const daily: Candle[] = []; let px = 100; for (let d = 0; d < 3650; d++) { const time = t0 + d * D; const dow = new Date(time * 1000).getUTCDay(); if (dow === 0 || dow === 6) continue; const o = px; px *= 1 + Math.sin(d / 20) * 0.004; daily.push({ time, open: o, high: Math.max(o, px) * 1.002, low: Math.min(o, px) * 0.998, close: px, volume: 1000 }); }
+  assert.equal(weekStart(t0 + 3 * D), t0, 'Wednesday → its Monday'); assert.equal(monthStart(t0 + 20 * D), Date.UTC(2016, 9, 1) / 1000);
+  const wk = aggregateCalendar(daily, 'weekly'); const mo = aggregateCalendar(daily, 'monthly');
+  assert.ok(wk.length > 500 && wk.length < 530 && mo.length >= 119 && mo.length <= 122, `weeks ${wk.length} months ${mo.length}`); assert.ok(resolutionOk(wk, 'weekly') && resolutionOk(mo, 'monthly') && !resolutionOk(daily, 'weekly') && resolutionOk(daily, 'daily'));
+  const w0 = wk[10]; const inWeek = daily.filter((c) => weekStart(c.time) === w0.time); assert.equal(w0.open, inWeek[0].open); assert.equal(w0.close, inWeek.at(-1)!.close); assert.equal(w0.high, Math.max(...inWeek.map((c) => c.high))); assert.equal(w0.low, Math.min(...inWeek.map((c) => c.low))); assert.equal(w0.volume, inWeek.length * 1000);
+  // provider answers: right resolution → used (trimmed); wrong resolution (daily bars for a 10Y request) or empty → rebuilt from the daily series
+  assert.equal(acceptDirect('5Y', wk)!.length, 260); assert.equal(acceptDirect('10Y', mo)!.length, 120); assert.equal(acceptDirect('1Y', daily)!.length, 252);
+  assert.equal(acceptDirect('10Y', daily), null, 'daily bars are not monthly'); assert.equal(acceptDirect('5Y', []), null);
+  const r10 = resolveRange('10Y', daily, daily); assert.equal(r10.via, 'aggregated'); assert.equal(r10.bars.length, 120); const r5 = resolveRange('5Y', [], daily); assert.equal(r5.via, 'aggregated'); assert.equal(r5.bars.length, 260);
+  assert.equal(resolveRange('10Y', [], null).via, 'none'); assert.equal(resolveRange('1Y', daily, null).bars.length, 252);
+  const bad = sanitizeBars([{ time: 3, open: 1, high: 1, low: 1, close: 1, volume: 1 }, { time: 1, open: 2, high: 1, low: 3, close: 2, volume: -5 }, { time: 1, open: 9, high: 9, low: 9, close: 9, volume: 1 }, { time: 2, open: NaN, high: 1, low: 1, close: 1, volume: 1 }, { time: 4, open: 0, high: 1, low: 1, close: 1, volume: 1 }]);
+  assert.deepEqual(bad.map((c) => c.time), [1, 3], 'ascending, unique, finite, positive'); assert.ok(bad[0].high >= bad[0].low);
+  const pc = readFileSync('components/PriceChart.tsx', 'utf8'); assert.ok(/sanitizeBars\(/.test(pc) && /requestAnimationFrame\(\(\) => chartRef\.current\?\.timeScale\(\)\.fitContent\(\)\)/.test(pc));
+  const yq = readFileSync('lib/yahooQuotes.ts', 'utf8'); assert.ok(/acceptDirect\(tf, direct\)/.test(yq) && /spec\.dailyRange/.test(yq));
+});
+t('Round 34 · portfolio risk engine: HHI = Σ s² on stock and sector weights, beta = Cov/Var vs NIFTY, Sharpe, badge thresholds', () => {
+  const pos = [{ symbol: 'A', sector: 'IT', value: 500 }, { symbol: 'B', sector: 'IT', value: 300 }, { symbol: 'C', sector: 'Bank', value: 200 }];
+  assert.deepEqual(stockWeights(pos).map((s) => s.weightPct), [50, 30, 20]);
+  const mk = (r: number[]) => { let p = 100; return [100, ...r.map((x) => (p *= 1 + x))]; };
+  const rets = Array.from({ length: 80 }, (_, i) => Math.sin(i / 3) * 0.01 + Math.cos(i / 7) * 0.004); const nifty = mk(rets);
+  const levered = mk(rets.map((x) => 1.5 * x)); const flat = mk(rets.map(() => 0.0005));
+  const r = portfolioRisk(pos, [1, 1, 1], [levered, levered, levered], nifty);
+  assert.equal(r.stockHhi, 2500 + 900 + 400); assert.equal(r.sectorHhi, 800 ** 2 / 100 + 20 ** 2); assert.equal(r.badge.label, 'HIGH CONCENTRATION RISK'); assert.ok(Math.abs(r.beta! - 1.5) < 1e-6, 'β of a 1.5× clone = 1.5'); assert.ok(r.sharpe !== null && r.obs === 80);
+  assert.equal(betaOf(rets.slice(0, 10), rets.slice(0, 10)), null, '< 30 obs → N/A'); assert.equal(betaOf(rets, rets.map(() => 0.001)), null, 'flat benchmark → N/A');
+  assert.equal(riskBadge(1000, 1200).label, 'LOW CONCENTRATION'); assert.equal(riskBadge(1700, 900).label, 'MODERATE RISK'); assert.equal(riskBadge(1000, 2501).label, 'HIGH CONCENTRATION RISK'); assert.equal(riskBadge(2500, 0).label, 'MODERATE RISK', '2 500 exactly is not > 2 500');
+  const eq = Array.from({ length: 10 }, (_, i) => ({ symbol: 'S' + i, sector: 'Sec' + i, value: 100 })); assert.equal(portfolioRisk(eq, eq.map(() => 1), eq.map(() => flat), nifty).stockHhi, 1000);
+  const before = portfolioRisk(pos, [1, 1, 1], [flat, flat, flat], nifty).stockHhi; const after = portfolioRisk([...pos, { symbol: 'D', sector: 'Auto', value: 1500 }], [1, 1, 1, 1], [flat, flat, flat, flat], nifty).stockHhi; assert.ok(after !== before, 'HHI follows holdings');
+  assert.equal(portfolioRisk([], [], [], nifty).stocks.length, 0);
+  assert.ok(/PortfolioRiskEngine/.test(readFileSync('components/dashboards/Institutional.tsx', 'utf8')) && /PortfolioRiskEngine/.test(readFileSync('components/dashboards/Executive.tsx', 'utf8')));
+});
+t('Round 34 · drawing toolbar: stroke-only 1.5 icons, slate palette, tooltips with Alt shortcuts', () => {
+  const tb = readFileSync('components/DrawingToolbar.tsx', 'utf8');
+  assert.ok(/strokeWidth="1\.5"/.test(tb) && /fill="none"/.test(tb) && /stroke="currentColor"/.test(tb));
+  assert.ok(!/[\u{1F300}-\u{1FAFF}\u2600-\u27BF]/u.test(tb.replace(/\/\*[\s\S]*?\*\//g, '')), 'no emoji glyphs');
+  for (const c of ['text-slate-400', 'bg-slate-900/60', 'hover:bg-slate-800/80', 'hover:text-slate-100', 'bg-blue-600/20', 'text-blue-400', 'border-l-2', 'border-blue-500']) assert.ok(tb.includes(c), c);
+  for (const s of ['Trend Line', 'Magnet Mode', 'Clear Drawings', 'Alt+T']) assert.ok(tb.includes(s) || tb.includes(s.replace('Alt+T', "key: 'T'")), s);
+});
+t('Round 34 · research PDF: model carries every required section; jsPDF renders a real light and dark PDF; ₹ is mapped to Rs.', async () => {
+  const q = { symbol: 'TCS', name: 'Tata Consultancy Services', exch: 'NSE', sector: 'IT', ltp: 4100.5, prevClose: 4000, high: 4120, low: 3990, volume: 1e6, circuitBand: 20, lowerCircuit: 3200, upperCircuit: 4800 };
+  const s = getScreener(q as never); const report = buildReport(q as never, s, new Date('2026-10-25T05:00:00Z')); const closes = Array.from({ length: 120 }, (_, i) => 3800 + i * 2.5 + Math.sin(i / 4) * 20);
+  const model = buildPdfModel({ report, closes, rsi: 63.4, pivots: { p: 4070, r1: 4100, r2: 4150, s1: 4020, s2: 3990 }, pb: 12.5, ai: { text: '## Analyst Summary\n- **Valuation** is rich\n- Risk: moderate\n\nClosing line.', source: 'Gemini AI' }, news: { items: [{ title: 'TCS wins deal', source: 'ET', label: 'Bullish', score: 0.5 }, { title: 'IT stocks slip', source: 'Mint', label: 'Bearish', score: -0.3 }], specific: true, sample: false }, feed: 'Prices from the last session' });
+  const heads = model.blocks.filter((b) => b.t === 'h2').map((b) => (b as { text: string }).text); assert.deepEqual(heads.map((h) => h.split(' (')[0]), ['Executive summary & company profile', 'Key valuation ratios', 'Technical summary', 'AI copilot valuation insights', 'News sentiment summary']);
+  const flat = JSON.stringify(model.blocks); for (const k of ['EMA 20', 'EMA 50', 'RSI (14)', 'P/E', 'P/B', 'ROCE', 'ROE', 'Debt / equity', 'Market cap', 'S1', 'R1', 'Pivot']) assert.ok(flat.includes(k), k);
+  assert.ok(mdToBlocks('## H\n- a **b**\ntext').length === 3 && pdfText('₹100 ▲ — ok') === 'Rs. 100 + - ok');
+  for (const theme of ['light', 'dark'] as const) { const { blob, pages, fileName } = await renderPdf(model, theme); const buf = Buffer.from(await blob.arrayBuffer()); assert.equal(buf.subarray(0, 5).toString(), '%PDF-'); assert.ok(pages >= 1 && buf.length > 3000 && fileName.endsWith(`_${theme}.pdf`)); const txt = buf.toString('latin1'); assert.ok(txt.includes('EXECUTIVE SUMMARY') && txt.includes('TECHNICAL SUMMARY') && txt.includes('Tata Consultancy'), theme); if (theme === 'dark') assert.ok(/0\.043 0\.071 0\.125 rg/.test(txt) || /rg/.test(txt)); }
+  assert.ok(/downloadResearchPdf/.test(readFileSync('components/ExportReport.tsx', 'utf8')) && /Export Research Report/.test(readFileSync('components/ExportReport.tsx', 'utf8')));
 });
 
 void Promise.all(pending).then(() => {

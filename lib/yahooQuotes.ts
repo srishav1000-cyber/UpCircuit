@@ -4,6 +4,7 @@ import { parseBars, parseChartRow, parseQuoteRows, YAHOO_TF, type YahooRow } fro
 import { YAHOO_INDEX, toYahooSymbol } from './yahoo';
 import type { Candle, Timeframe } from './types';
 import { TF_CONFIG } from './market';
+import { RANGE_SPECS, acceptDirect, resolveRange } from './historicalEngine';
 
 const BASE = () => process.env.YAHOO_BASE || 'https://query1.finance.yahoo.com';
 const COOKIE_URL = () => process.env.YAHOO_COOKIE_URL || 'https://fc.yahoo.com';
@@ -63,18 +64,31 @@ export async function fetchQuoteRows(wants: Want[], timeoutMs = 7000): Promise<{
 export async function fetchBars(w: Want, tf: Timeframe, timeoutMs = 8000): Promise<Candle[]> {
   const { interval, range } = YAHOO_TF[tf];
   const intraday = TF_CONFIG[tf].kind === 'intraday';
-  const tryOne = async (x: Want) => {
+  const tryOne = async (x: Want, iv = interval, rg = range) => {
     try {
-      const res = await fetch(`${BASE()}/v8/finance/chart/${ysOf(x)}?interval=${interval}&range=${range}`, { headers: HEADERS, signal: AbortSignal.timeout(timeoutMs) });
+      const res = await fetch(`${BASE()}/v8/finance/chart/${ysOf(x)}?interval=${iv}&range=${rg}`, { headers: HEADERS, signal: AbortSignal.timeout(timeoutMs) });
       return res.ok ? parseBars(await res.json(), intraday) : [];
     } catch {
       return [];
     }
   };
-  if (YAHOO_INDEX[w.symbol]) return tryOne(w);
-  for (const e of (w.exch ?? 'NSE') === 'NSE' ? (['NSE', 'BSE'] as const) : (['BSE', 'NSE'] as const)) {
-    const b = await tryOne({ symbol: w.symbol, exch: e });
-    if (b.length) return b;
+  const venues = YAHOO_INDEX[w.symbol] ? [w] : (w.exch ?? 'NSE') === 'NSE' ? [{ symbol: w.symbol, exch: 'NSE' as const }, { symbol: w.symbol, exch: 'BSE' as const }] : [{ symbol: w.symbol, exch: 'BSE' as const }, { symbol: w.symbol, exch: 'NSE' as const }];
+  const spec = RANGE_SPECS[tf];
+  if (!spec) {
+    for (const v of venues) {
+      const b = await tryOne(v);
+      if (b.length) return b;
+    }
+    return [];
+  }
+  // 1D / 1W / 1M / 1Y / 5Y / 10Y: use Yahoo's own bars when they are at the right resolution, otherwise rebuild them from daily bars
+  for (const v of venues) {
+    const direct = await tryOne(v);
+    const ok = acceptDirect(tf, direct);
+    if (ok && ok.length) return ok;
+    const daily = tf === '1D' || tf === '1Y' ? [] : await tryOne(v, '1d', spec.dailyRange);
+    const r = resolveRange(tf, direct, daily);
+    if (r.bars.length) return r.bars;
   }
   return [];
 }

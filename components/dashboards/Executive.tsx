@@ -8,6 +8,7 @@ import { annualVolPct, breadth, hhi, riskScore, trendGrowthYoY, weightedRiskScor
 import type { SentimentLabel } from '@/lib/types';
 import { CircuitTracker } from '../CircuitTracker';
 import { RiskPanel } from './RiskPanel';
+import { PortfolioRiskEngine } from '../PortfolioRiskEngine';
 import { VarCard } from './VarCard';
 import { DrawdownCard } from './DrawdownCard';
 import { LimitMonitor } from './LimitMonitor';
@@ -137,6 +138,7 @@ export function ExecutiveDashboard({ engine, holdings, onSelect }: DashboardProp
         <Stat label="Diversification index" value={diversification.toFixed(2)} valueClass={diversification > 0.8 ? 'text-up' : diversification > 0.6 ? 'text-ink' : 'text-down'} sub="1 − HHI/10 000" />
       </div>
 
+      <PortfolioRiskEngine engine={engine} holdings={holdings} className={WIDE} />
       <RiskPanel engine={engine} holdings={holdings} />
       <VarCard engine={engine} holdings={holdings} className={WIDE} />
       <DrawdownCard engine={engine} holdings={holdings} className={WIDE} />

@@ -12,6 +12,7 @@ import { DrawingLayer } from './DrawingLayer';
 import { CHART_THEME, type ThemeName } from '@/lib/theme';
 import { fmt, fmtInt, tone } from '@/lib/format';
 import { scoped } from '@/lib/scope';
+import { sanitizeBars } from '@/lib/historicalEngine';
 import { INDICATOR_COLORS, LiveIndicators, emaFull, rsiFull, toPoints, vwapAvailable, vwapFull, type IndicatorId } from '@/lib/technicalIndicators';
 
 const toBar = (c: Candle) => ({ time: c.time as UTCTimestamp, open: c.open, high: c.high, low: c.low, close: c.close });
@@ -212,7 +213,7 @@ export function PriceChart({ symbol, ltp, volume, tf, onTf, className = '', live
       try {
         // REAL Yahoo Finance bars — nothing is generated locally
         const r = await fetch(`/api/bars/${encodeURIComponent(index ? index.id : symbol)}?tf=${tf}`, { cache: 'no-store', signal: AbortSignal.timeout(15000) });
-        if (r.ok) hist = ((await r.json()) as { bars?: Candle[] }).bars ?? [];
+        if (r.ok) hist = sanitizeBars(((await r.json()) as { bars?: Candle[] }).bars ?? []); // ordered + unique + finite, or Lightweight Charts throws
       } catch {
         /* leave empty */
       }
@@ -230,11 +231,16 @@ export function PriceChart({ symbol, ltp, volume, tf, onTf, className = '', live
       setLiveBar(last.current);
       prevVolume.current = volume;
       setDataState(hist.length ? 'ok' : 'empty');
+      if (host.current) { host.current.dataset.barCount = String(hist.length); host.current.dataset.barTf = tf; host.current.dataset.barFirst = hist[0] ? String(hist[0].time) : ''; host.current.dataset.barLast = hist.length ? String(hist[hist.length - 1].time) : ''; }
       loadedKey.current = key;
       if (first) {
         chart.applyOptions({ timeScale: { timeVisible: TF_CONFIG[tf].kind === 'intraday' } });
         if (tf === '1D') chart.timeScale().setVisibleLogicalRange({ from: hist.length - 130, to: hist.length + 6 });
-        else chart.timeScale().fitContent();
+        else {
+          // multi-year ranges (1Y / 5Y / 10Y, 1W, 1M): show the WHOLE history; a second pass after layout covers a canvas that was still 0 px wide
+          chart.timeScale().fitContent();
+          requestAnimationFrame(() => chartRef.current?.timeScale().fitContent());
+        }
         setHover(null);
       } else if (range) chart.timeScale().setVisibleLogicalRange(range);
     })();
@@ -444,7 +450,12 @@ export function PriceChart({ symbol, ltp, volume, tf, onTf, className = '', live
           <div ref={host} className="absolute inset-0" />
           {dataState !== 'ok' && (
             <div data-testid="chart-status" className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center text-[12px] text-muted">
-              {dataState === 'loading' ? <span className="animate-pulse">Loading session bars…</span> : <span>No bars available for this symbol / timeframe.</span>}
+              {dataState === 'loading' ? <span className="animate-pulse">Loading session bars…</span> : (
+                <span className="flex flex-col items-center gap-2">
+                  <span>No bars available for this symbol / timeframe.</span>
+                  <button type="button" onClick={() => setReload((n) => n + 1)} data-testid="chart-retry" className="pointer-events-auto rounded border border-line bg-panel px-3 py-1 font-semibold text-ink hover:bg-line">Retry</button>
+                </span>
+              )}
             </div>
           )}
           <button

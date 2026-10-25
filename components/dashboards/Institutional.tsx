@@ -8,6 +8,7 @@ import { fmt, fmtCr, fmtInt, fmtPct, tone } from '@/lib/format';
 import { C } from '@/lib/theme';
 import { breadth, correlationMatrix, liquidityRatio, portfolioValueSeries, sectorIndexSeries, sectorStats, sharpeParts } from '@/lib/analytics';
 import { RiskPanel } from './RiskPanel';
+import { PortfolioRiskEngine } from '../PortfolioRiskEngine';
 import { OrderFlowHeatmap } from '../OrderFlowHeatmap';
 import { CorrelationMatrix } from '../CorrelationMatrix';
 import { PeerMatrix } from './PeerMatrix';
@@ -101,6 +102,7 @@ export function InstitutionalDashboard({ engine, quote, closes1D, holdings, favo
         <Stat label="Liquidity ratio" value={`${t2m.toFixed(3)}%`} sub={`${quote.symbol} · ₹${fmt(turnoverCr, 1)} Cr / ${fmtCr(quote.mcapCr)}`} hint="Turnover ÷ Market cap (session traded value ÷ capitalisation)" />
       </div>
 
+      <PortfolioRiskEngine engine={engine} holdings={holdings} className={WIDE} />
       <RiskPanel engine={engine} holdings={holdings} />
       <OrderFlowHeatmap engine={engine} symbol={quote.symbol} className={WIDE} />
       <SlippageCard engine={engine} symbol={quote.symbol} className={WIDE} />
