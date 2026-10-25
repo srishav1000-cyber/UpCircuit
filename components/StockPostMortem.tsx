@@ -2,7 +2,7 @@
 
 import { TickPriceFlash } from './TickPriceFlash';
 import { useMemo } from 'react';
-import { Card } from './ui';
+import { Badge, Card, sentimentTone } from './ui';
 import { DataBadge, liveKind } from './DataBadge';
 import { SurgeMeter } from './dashboards/SurgeMeter';
 import { OrderFlowHeatmap } from './OrderFlowHeatmap';
@@ -15,7 +15,8 @@ import { rsi14 } from '@/lib/analytics/rsi';
 import { relativeStrength } from '@/lib/analytics/relative';
 import { healthLights, type Light } from '@/lib/analytics/health';
 import type { MarketEngine, FeedMode } from '@/lib/market';
-import type { Quote } from '@/lib/types';
+import type { NewsResponse, Quote } from '@/lib/types';
+import { relativeTime, sentimentChipText, stockNews, summarizeSentiment } from '@/lib/newsEngine';
 import type { SourceKind } from '@/lib/methodology';
 
 const DOT: Record<Light, string> = { green: 'bg-up shadow-[0_0_10px_rgb(var(--c-up)/0.7)]', yellow: 'bg-warn shadow-[0_0_10px_rgb(var(--c-warn)/0.7)]', red: 'bg-down shadow-[0_0_10px_rgb(var(--c-down)/0.7)]', na: 'bg-muted/50' };
@@ -33,8 +34,10 @@ function Cell({ label, value, kind, label2, title }: { label: string; value: str
 }
 
 /** "Stock Post-Mortem": screener fundamentals, relative strength vs NIFTY 50, surge / order-flow gauges and four health lights for one stock. */
-export function StockPostMortem({ engine, quote, mode }: { engine: MarketEngine; quote: Quote; mode: FeedMode | string }) {
+export function StockPostMortem({ engine, quote, mode, news }: { engine: MarketEngine; quote: Quote; mode: FeedMode | string; news?: NewsResponse | null }) {
   const symbol = quote.symbol;
+  const drivers = stockNews(news?.items ?? [], symbol, quote.name, 6);
+  const dSum = summarizeSentiment(drivers);
   const { data: live, status } = useFundamentals(symbol, quote.exch === 'BSE' ? 'BSE' : 'NSE');
   const s = useMemo(() => mergeLive(getScreener(quote), live, quote.ltp), [quote.symbol, quote.ltp, live]); // eslint-disable-line react-hooks/exhaustive-deps
   const closesRaw = engine.closes(symbol);
@@ -112,6 +115,25 @@ export function StockPostMortem({ engine, quote, mode }: { engine: MarketEngine;
         <SurgeMeter engine={engine} mode={mode} />
         <OrderFlowHeatmap engine={engine} symbol={symbol} />
       </div>
+
+      <Card title={`News & event drivers · ${symbol}`} right={<span data-testid="pm-news-summary" className="text-[10px] text-muted">{sentimentChipText(dSum)}</span>}>
+        {drivers.length === 0 ? (
+          <p className="text-[12px] text-muted" data-testid="pm-news-empty">{news ? `No headlines in the live market feeds mention ${symbol} right now.` : 'Loading headlines…'}</p>
+        ) : (
+          <ul className="divide-y divide-line" data-testid="pm-news">
+            {drivers.map((n) => (
+              <li key={n.id} className="flex items-start gap-2.5 py-2" data-testid="pm-news-item" data-label={n.label}>
+                <Badge tone={sentimentTone(n.label)} className="mt-0.5 w-[66px] shrink-0 justify-center">{n.label.toUpperCase()}</Badge>
+                <div className="min-w-0 flex-1">
+                  {/^https?:\/\//.test(n.link) ? <a href={n.link} target="_blank" rel="noopener noreferrer" className="text-[12.5px] leading-snug text-ink hover:text-accent">{n.title}</a> : <span className="text-[12.5px] leading-snug text-ink">{n.title}</span>}
+                  <div className="mt-0.5 text-[10px] text-muted">{n.source}{n.published ? ` · ${relativeTime(n.published)}` : ''}</div>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+        <p className="mt-2 text-[10px] text-muted">Live RSS headlines that name {symbol} or {quote.name}; polarity from the local VADER + financial-rules scorer.</p>
+      </Card>
     </div>
   );
 }

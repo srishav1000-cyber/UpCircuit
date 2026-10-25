@@ -1,7 +1,7 @@
 import type { NewsItem, NewsResponse } from './types';
 import { scoreText } from './sentiment';
 import { TtlCache } from './ttlCache';
-import { GOOGLE_NEWS_BUSINESS, extractSymbols, splitGoogleTitle } from './newsEngine';
+import { GOOGLE_NEWS_BUSINESS, extractSymbols, isMarketRelevant, splitGoogleTitle } from './newsEngine';
 
 /**
  * RSS aggregation. Edge-safe: fetch + regex parsing only (no DOM, no native modules).
@@ -119,8 +119,11 @@ async function build(): Promise<NewsResponse> {
     else errors.push(`${sourceOf(feeds[i])}: ${r.reason instanceof Error ? r.reason.message : 'failed'}`);
   });
 
+  // strict relevance: equities, corporate financials, IPOs and macro policy only
+  const relevant = all.filter((n) => isMarketRelevant(n.title, { source: n.source, link: n.link }));
+  const filtered = all.length - relevant.length;
   const seen = new Set<string>();
-  const items = all
+  const items = relevant
     .sort((a, b) => b.published - a.published)
     .filter((n) => {
       const k = n.title.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 80);
@@ -130,7 +133,8 @@ async function build(): Promise<NewsResponse> {
     })
     .slice(0, 40);
 
-  if (items.length > 0) return { items, mode: 'live', errors, fetchedAt: Date.now() };
+  // feeds answered (even if nothing on-topic is in them right now) → still LIVE; only a total feed failure falls back to the sample headlines
+  if (all.length > 0) return { items, mode: 'live', errors, fetchedAt: Date.now(), filtered };
 
   const now = Date.now();
   const sample: NewsItem[] = SAMPLE.map((title, i) => {

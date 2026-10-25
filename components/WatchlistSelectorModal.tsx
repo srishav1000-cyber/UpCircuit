@@ -12,26 +12,47 @@ interface Props {
   /** create a list and put the stock into it */
   onCreate: (name: string, symbol: string) => OpResult;
   onClose: () => void;
+  /** called once when the popover is closed by any route (Done, ×, Esc, backdrop) with the net result of this session */
+  onDone?: (r: { added: number; removed: number; total: number }) => void;
 }
 
 const WHY: Record<string, string> = { empty: 'Enter a name', duplicate: 'That name already exists', limit: `Max ${MAX_LISTS} watchlists`, last: '', missing: '' };
 
 /** "Add to Watchlist" — one checkbox per named list (checked = the stock is in it), plus an inline "+ Create New Watchlist". */
-export function WatchlistSelectorModal({ symbol, name, lists, onSet, onCreate, onClose }: Props) {
+export function WatchlistSelectorModal({ symbol, name, lists, onSet, onCreate, onClose, onDone }: Props) {
   const [draft, setDraft] = useState('');
   const [err, setErr] = useState('');
   const input = useRef<HTMLInputElement>(null);
   const count = lists.filter((l) => l.symbols.includes(symbol)).length;
+  // which lists held the stock when the popover opened → "Added to 2 watchlists" / "Removed from 1" on Done
+  const initial = useRef<Set<string> | null>(null);
+  if (initial.current === null) initial.current = new Set(lists.filter((l) => l.symbols.includes(symbol)).map((l) => l.id));
+  const listsRef = useRef(lists);
+  listsRef.current = lists;
+  const closed = useRef(false);
+  const finish = () => {
+    if (closed.current) return;
+    closed.current = true;
+    const now = new Set(listsRef.current.filter((l) => l.symbols.includes(symbol)).map((l) => l.id));
+    let added = 0;
+    let removed = 0;
+    now.forEach((id) => !initial.current!.has(id) && added++);
+    initial.current!.forEach((id) => !now.has(id) && removed++);
+    onDone?.({ added, removed, total: now.size });
+    onClose();
+  };
+  const finishRef = useRef(finish);
+  finishRef.current = finish;
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return;
       e.stopPropagation();
-      onClose();
+      finishRef.current();
     };
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
-  }, [onClose]);
+  }, []);
 
   const create = () => {
     const r = onCreate(draft, symbol);
@@ -42,7 +63,7 @@ export function WatchlistSelectorModal({ symbol, name, lists, onSet, onCreate, o
   };
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-end justify-center bg-black/50 p-3 sm:items-center" onMouseDown={onClose} data-testid="wl-selector-backdrop">
+    <div className="fixed inset-0 z-[100] flex items-end justify-center bg-black/50 p-3 sm:items-center" onMouseDown={finish} data-testid="wl-selector-backdrop">
       <div role="dialog" aria-modal="true" aria-label={`Add ${symbol} to watchlist`} data-testid="wl-selector" onMouseDown={(e) => e.stopPropagation()} className="w-full max-w-sm overflow-hidden rounded-xl border border-line bg-panel shadow-2xl">
         <header className="flex items-center gap-2 border-b border-line px-4 py-3">
           <span className={`text-lg leading-none ${count ? 'text-warn' : 'text-muted'}`} aria-hidden>{count ? '★' : '☆'}</span>
@@ -50,7 +71,7 @@ export function WatchlistSelectorModal({ symbol, name, lists, onSet, onCreate, o
             <h2 className="text-[14px] font-bold text-ink">Add to Watchlist</h2>
             <p className="truncate text-[11px] text-muted">{symbol}{name ? ` · ${name}` : ''}</p>
           </div>
-          <button onClick={onClose} aria-label="Close (Esc)" className="flex h-7 w-7 items-center justify-center rounded border border-line text-[16px] leading-none text-muted hover:bg-line hover:text-ink">×</button>
+          <button onClick={finish} aria-label="Close (Esc)" className="flex h-7 w-7 items-center justify-center rounded border border-line text-[16px] leading-none text-muted hover:bg-line hover:text-ink">×</button>
         </header>
 
         <ul className="max-h-[50vh] overflow-y-auto py-1" role="group" aria-label="Watchlists">
@@ -87,6 +108,10 @@ export function WatchlistSelectorModal({ symbol, name, lists, onSet, onCreate, o
           </div>
           {err ? <p role="alert" data-testid="wl-selector-error" className="mt-1 text-[11px] text-down">{err}</p> : <p className="mt-1 text-[10px] text-muted">Press Enter to create it and add {symbol}.</p>}
         </div>
+        <footer className="flex items-center justify-between gap-3 border-t border-line bg-bg/40 px-3 py-2.5">
+          <span className="text-[11px] text-muted" data-testid="wl-count">{count === 0 ? 'Not in any watchlist' : `In ${count} watchlist${count === 1 ? '' : 's'}`}</span>
+          <button type="button" onClick={finish} data-testid="wl-done" className="cursor-pointer rounded-md bg-accent px-5 py-1.5 text-[13px] font-bold text-white shadow-sm shadow-accent/30 transition hover:brightness-110 active:scale-95">Done</button>
+        </footer>
       </div>
     </div>
   );

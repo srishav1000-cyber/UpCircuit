@@ -433,7 +433,7 @@ function Terminal() {
                 <>
                   <MyFocusBasket persona={persona} engine={engine} version={version} focus={focus} selected={symbol} glow={circuit.glow} candidates={focusCandidates} instruments={instruments} priceOf={(s) => engine.touch(s)?.ltp} holdings={holdings} onSelect={setSymbol} onToggle={(sym) => { const r = toggleFocus(sym); return r.ok ? null : r.error; }} />
                   {focus.includes(symbol) && (
-                    <FocusDeepDive engine={engine} quote={quote} mode={mode} onExpand={expandChart} />
+                    <FocusDeepDive engine={engine} quote={quote} mode={mode} news={news} onExpand={expandChart} />
                   )}
                 </>
               )}
@@ -471,6 +471,7 @@ function Terminal() {
           favorite={inAnyList(research)}
           holdings={holdings}
           mode={mode}
+          news={news}
           onToggleFavorite={() => setPickFor(research)}
           onDeepResearch={deepResearch}
           onSetAlert={setAlert}
@@ -519,14 +520,15 @@ function Terminal() {
           name={engine.quotes.get(pickFor)?.name}
           lists={wlists}
           onSet={(id, sym, on) => {
-            setWatchIn(id, sym, on);
-            const n = wlists.find((l) => l.id === id)?.name ?? 'watchlist';
-            flash(on ? `⭐ Added ${sym} to ${n}` : `Removed ${sym} from ${n}`);
+            setWatchIn(id, sym, on); // saved immediately; the confirmation toast comes from "Done"
           }}
           onCreate={(n, sym) => {
-            const r = createWatchWith(n, sym);
-            if (r.ok) flash(`⭐ Created “${n.trim()}” and added ${sym}`);
-            return r;
+            return createWatchWith(n, sym);
+          }}
+          onDone={({ added, removed, total }) => {
+            const w = (n: number) => `${n} watchlist${n === 1 ? '' : 's'}`;
+            const sym = pickFor;
+            flash(added && removed ? `⭐ ${sym}: added to ${w(added)}, removed from ${w(removed)}` : added ? `⭐ Added ${sym} to ${w(added)}` : removed ? `Removed ${sym} from ${w(removed)}` : total ? `${sym} is in ${w(total)}` : `${sym} is not in any watchlist`);
           }}
           onClose={() => setPickFor(null)}
         />

@@ -67,6 +67,9 @@ export function MarketNews({ news, error, className = '', onSymbol }: Props) {
           Live RSS feeds were unreachable — showing sample headlines. Set <code>NEWS_RSS_URLS</code> to feeds your server can reach.
         </div>
       )}
+      {news?.mode === 'live' && (news.filtered ?? 0) > 0 && (
+        <div className="border-b border-line px-3 py-1 text-[10px] text-muted" data-testid="news-filtered">Showing equity, earnings, IPO and macro headlines only · {news.filtered} off-topic item{news.filtered === 1 ? '' : 's'} filtered</div>
+      )}
       {news?.mode === 'live' && news.errors.length > 0 && (
         <div className="border-b border-line px-3 py-1 text-[10px] text-muted" title={news.errors.join('\n')}>
           {news.errors.length} feed(s) failed — hover for details

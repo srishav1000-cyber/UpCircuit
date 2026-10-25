@@ -858,7 +858,7 @@ import { circuitWatchlist, proximityOf, proximityUpper, proximityLower } from '.
 import { ofi, ofiLabel } from '../lib/analytics/orderflow';
 import { buildAskContext, answerAskLocally } from '../lib/ask';
 import { parseCopilotCard, QUICK_ACTIONS } from '../lib/copilotCards';
-import { relativeTime, extractSymbols, splitGoogleTitle } from '../lib/newsEngine';
+import { relativeTime, extractSymbols, splitGoogleTitle, isMarketRelevant, mentionsStock, stockNews, summarizeSentiment, sentimentChipText } from '../lib/newsEngine';
 import { thinStroke, moveDrawing as moveDrw, rangeStats } from '../lib/drawings';
 
 
@@ -1473,6 +1473,32 @@ t('Round 35 · telemetry is measured, never invented', () => {
   e.applyTick({ symbol: 'TCS', ltp: 4101, close: 4000, ts: now - 60 }, now + 100);
   const m = e.telemetry(now + 200);
   assert.equal(m.ticks, 2); assert.ok(m.ticksPerSec! > 0 && m.ticksPerSec! <= 1); assert.ok(m.delayMs! >= 40 && m.delayMs! <= 120, 'delay ' + m.delayMs);
+});
+
+t('Round 36 · news relevance filter: equities / earnings / IPO / macro in, auto + tech + foreign noise out', () => {
+  const keep = ['Sensex jumps 400 points, Nifty ends above 25,000', 'SEBI tightens F&O rules for retail traders', 'FIIs sold Rs 3,200 crore of Indian equities on Friday', 'TCS Q2 results: net profit rises 8%, declares dividend', 'Reliance Industries to acquire stake in solar firm', 'Swiggy shares surge after quarterly results', 'IPO GMP today: grey market premium hints at 30% listing gains', 'IPO allotment status: how to check', 'RBI keeps repo rate unchanged at 5.5%, cuts inflation forecast', 'India GDP growth seen at 6.8% in FY27', 'Rupee slips to 88 as crude oil climbs', 'HDFC Bank, ICICI Bank among top Nifty gainers', 'Brokerages raise target price on Infosys after earnings'];
+  const drop = ['Car spyshots: next-gen Maruti Swift caught testing', 'Web bugs broke the internet again', 'Audi factory in Georgia to open next year', 'iPhone 17 review: the best smartphone yet', 'Virat Kohli smashes ton in IPL clash', 'Bollywood box office: weekend collections', 'Best earbuds under 2,000 rupees', 'Tata Nexon facelift first drive review', 'Trump meets Putin in Alaska'];
+  keep.forEach((x) => assert.ok(isMarketRelevant(x), 'keep: ' + x));
+  drop.forEach((x) => assert.ok(!isMarketRelevant(x), 'drop: ' + x));
+  assert.ok(!isMarketRelevant('Sensex-linked story', { source: 'Autocar India' }), 'blocked source');
+  assert.ok(!isMarketRelevant('Nifty-like title', { link: 'https://www.gsmarena.com/x' }), 'blocked host');
+  assert.ok(isMarketRelevant('Nifty hits record high', { source: 'Economic Times', link: 'https://economictimes.indiatimes.com/x' }));
+});
+t('Round 36 · stock-specific news + sentiment summary', () => {
+  assert.ok(mentionsStock('Swiggy shares surge 6% after Q2 update', 'SWIGGY', 'Swiggy Ltd'));
+  assert.ok(mentionsStock('Reliance Industries to acquire stake', 'RELIANCE', 'Reliance Industries Ltd'));
+  assert.ok(!mentionsStock('Zomato and Eternal widen losses', 'SWIGGY', 'Swiggy Ltd'));
+  assert.ok(!mentionsStock('Relianceless market', 'RELIANCE', 'Reliance Industries Ltd'));
+  const items = [
+    { id: '1', title: 'TCS wins record deal', label: 'Bullish' as const, score: 0.5, published: 0 },
+    { id: '2', title: 'TCS shares rally', label: 'Bullish' as const, score: 0.4, published: 0 },
+    { id: '3', title: 'TCS to announce results', label: 'Neutral' as const, score: 0, published: 0 },
+    { id: '4', title: 'TCS faces attrition worries', label: 'Bearish' as const, score: -0.3, published: 0 },
+    { id: '5', title: 'Infosys wins deal', label: 'Bullish' as const, score: 0.5, published: 0 },
+  ];
+  const mine = stockNews(items, 'TCS', 'Tata Consultancy Services Ltd');
+  assert.equal(mine.length, 4);
+  const sum = summarizeSentiment(mine); assert.deepEqual([sum.total, sum.bullish, sum.dominant, sum.pct], [4, 2, 'Bullish', 50]); assert.equal(sentimentChipText(sum), '50% Bullish (4 articles)'); assert.equal(sentimentChipText(summarizeSentiment([])), 'No recent headlines');
 });
 
 void Promise.all(pending).then(() => {

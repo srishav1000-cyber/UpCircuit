@@ -2,7 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { FeedMode, MarketEngine } from '@/lib/market';
-import type { Fundamentals, Holding, Timeframe } from '@/lib/types';
+import type { Fundamentals, Holding, NewsResponse, Timeframe } from '@/lib/types';
+import { sentimentChipText, stockNews, summarizeSentiment } from '@/lib/newsEngine';
 import { useFullscreen } from '@/hooks/useFullscreen';
 import { macd, pivotLevels, rsi14, shortTermOutlook, longTermOutlook, sma, type Outlook } from '@/lib/analytics';
 import { fundamentalsOf, orNA, ratioTone, type Tone } from '@/lib/fundamentals';
@@ -25,6 +26,8 @@ interface Props {
   /** for the AI analyst summary in the exported report */
   holdings?: Holding[];
   mode?: FeedMode;
+  /** live RSS headlines (for the stock-specific sentiment chip) */
+  news?: NewsResponse | null;
   /** 🔍 Deep Research: this page is already the research view, so it hands the stock to Ask UpCircuit for a written deep-dive */
   onDeepResearch: () => void;
   /** 🔔 Set Price Alert */
@@ -104,7 +107,7 @@ function insightsOf(f: Fundamentals, rsi: number | null, short: Outlook | null, 
 }
 
 /** Stock research page: TradingView chart (10 timeframes), Screener-style ratios, technicals + outlook, AI copilot. */
-export function StockResearchModal({ symbol, engine, favorite, onToggleFavorite, holdings, mode, onDeepResearch, onSetAlert, activeAlerts, onOpenTerminal, onClose }: Props) {
+export function StockResearchModal({ symbol, engine, favorite, onToggleFavorite, holdings, mode, news, onDeepResearch, onSetAlert, activeAlerts, onOpenTerminal, onClose }: Props) {
   const full = useFullscreen();
   const [tf, setTf] = useState<Timeframe>('1D');
   const dialog = useRef<HTMLDivElement>(null);
@@ -186,6 +189,8 @@ export function StockResearchModal({ symbol, engine, favorite, onToggleFavorite,
   const getContext = useCallback(() => latest.current(), []);
 
   if (!quote || !f) return null;
+  const sNews = stockNews(news?.items ?? [], symbol, quote.name, 8);
+  const sSum = summarizeSentiment(sNews);
   const ins = insightsOf(f, rsi, short, long, f.bookValue ? quote.ltp / f.bookValue : null);
   const chg = quote.ltp - quote.prevClose;
   const pct = (chg / quote.prevClose) * 100;
@@ -251,6 +256,7 @@ export function StockResearchModal({ symbol, engine, favorite, onToggleFavorite,
               <div data-testid="ai-insights-strip" className={`flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md border px-3 py-2 text-[12px] ${INS_TONE[ins.tone]}`}>
                 <span className="font-bold">✨ AI insights</span>
                 <span className="num text-ink">{ins.text}</span>
+                <span data-testid="news-sentiment-chip" data-dominant={sSum.dominant ?? 'none'} title={sNews.length ? sNews.map((n) => `${n.label}: ${n.title}`).join('\n') : 'No headlines in the live feeds mention this stock right now'} className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-semibold ${sSum.dominant === 'Bullish' ? 'border-up/40 bg-up/10 text-up' : sSum.dominant === 'Bearish' ? 'border-down/40 bg-down/10 text-down' : 'border-line bg-bg text-muted'}`}>📰 News Sentiment: {sentimentChipText(sSum)}</span>
                 <button onClick={() => (full.fs ? setAskOpen(true) : undefined)} className={`ml-auto text-[11px] font-semibold text-accent hover:underline ${full.fs ? '' : 'hidden'}`}>Ask more →</button>
               </div>
               <div className="overflow-hidden rounded-md border border-line">

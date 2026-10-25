@@ -110,6 +110,8 @@ export interface NewsResponse {
   mode: 'live' | 'sample';
   errors: string[];
   fetchedAt: number;
+  /** off-topic headlines dropped by the market-relevance filter */
+  filtered?: number;
 }
 
 export interface Fundamentals {
