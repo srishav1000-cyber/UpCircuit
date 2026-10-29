@@ -1,6 +1,6 @@
 import { NextRequest } from 'next/server';
 import { fetchLiveFundamentals, type LiveFundamentals } from '@/lib/yahooFundamentals';
-import { TtlCache, allow } from '@/lib/ttlCache';
+import { TtlCache, allowAsync } from '@/lib/ttlCache';
 
 // Node runtime: the Yahoo crumb flow needs the Set-Cookie header of the cookie request.
 export const runtime = 'nodejs';
@@ -20,7 +20,7 @@ export async function GET(req: NextRequest, { params }: { params: { symbol: stri
   if (hit) return Response.json({ ok: true, data: hit.value }, { headers: { 'Cache-Control': 'public, s-maxage=1800, stale-while-revalidate=3600' } });
   if (miss.get(key)) return Response.json({ ok: false, error: 'no data' }, { status: 404, headers: { 'Cache-Control': 'public, s-maxage=300' } });
   const ip = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'local';
-  if (!allow(`fund:${ip}`, 60, 60_000)) return Response.json({ ok: false, error: 'rate limited' }, { status: 429 });
+  if (!(await allowAsync(`fund:${ip}`, 60, 60_000))) return Response.json({ ok: false, error: 'rate limited' }, { status: 429 });
   const data = await fetchLiveFundamentals(symbol, exch);
   if (!data) {
     miss.set(key, true);

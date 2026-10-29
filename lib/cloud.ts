@@ -2,6 +2,8 @@
 // (docs/PERSISTENCE_SCHEMA.sql) confines it to that user's rows. Saves are UPSERT-then-delete: a failed save never loses the previous data.
 import type { Holding } from './types';
 import type { WatchlistState } from './watchlist';
+import { coerceAppRole, type AppRole } from './rbac';
+import type { RuleKind } from './alertRules';
 
 export interface CloudConfig {
   url: string;
@@ -87,6 +89,12 @@ export const inList = (vals: string[]) => `(${vals.map((v) => `"${v.replace(/"/g
 
 /* ───────────── REST client ───────────── */
 
+export interface CircuitEvent { id: string; symbol: string; direction: 'UPPER' | 'LOWER'; band: number; price: number; prev_close: number | null; trade_date: string; detected_at: string; source: string; status: 'open' | 'acknowledged' | 'escalated' | 'closed'; reviewed_by: string | null; reviewed_at: string | null; note: string | null }
+export interface AuditRow { seq: number; at: string; user_id: string | null; actor_role: string | null; action: string; entity: string | null; entity_id: string | null; meta: Record<string, unknown>; hash: string }
+export interface AdminUser { id: string; email: string | null; full_name: string | null; role: AppRole; created_at?: string }
+export interface AlertRuleRow { id: string; symbol: string; kind: RuleKind; threshold: number; cooldown_min: number; channels: { push?: boolean; email?: boolean }; enabled: boolean; last_triggered_at: string | null; created_at: string }
+export interface AlertDelivery { id: string; fired_at: string; symbol: string; kind: string; price: number | null; channel: string; status: string; detail: string | null }
+
 export type CloudClient = ReturnType<typeof createCloud>;
 export function createCloud(cfg: CloudConfig) {
   const base = cfg.url.replace(/\/+$/, '');
@@ -99,7 +107,11 @@ export function createCloud(cfg: CloudConfig) {
       headers: { apikey: cfg.anonKey, Authorization: `Bearer ${t}`, 'Content-Type': 'application/json', ...(init.prefer ? { Prefer: init.prefer } : {}) },
       ...(init.body !== undefined ? { body: JSON.stringify(init.body) } : {}),
     }).catch((e) => { cfg.onResult?.(false); throw e; });
-    if (!r.ok) { cfg.onResult?.(false); throw new Error(`cloud ${r.status}`); }
+    if (!r.ok) {
+      cfg.onResult?.(false);
+      const detail = await r.text().then((x) => (JSON.parse(x) as { message?: string }).message).catch(() => undefined);
+      throw new Error(`cloud ${r.status}${detail ? `: ${detail}` : ''}`);
+    }
     cfg.onResult?.(true);
     const txt = await r.text();
     return txt ? JSON.parse(txt) : null;
@@ -158,6 +170,57 @@ export function createCloud(cfg: CloudConfig) {
     async hasPushSubscription(userId: string, endpoint: string): Promise<boolean> {
       const r = (await call(`push_subscriptions?${uid(userId)}&endpoint=eq.${encodeURIComponent(endpoint)}&select=id`)) as unknown[] | null;
       return Array.isArray(r) && r.length > 0;
+    },
+    /* ── Week 8: roles, surveillance register, audit trail, alert rules (docs/ENTERPRISE_SCHEMA.sql) ── */
+    async loadRole(): Promise<AppRole> {
+      return coerceAppRole(await call('rpc/app_role', { method: 'POST', body: {} }));
+    },
+    async registerCircuit(e: { symbol: string; direction: 'UPPER' | 'LOWER'; band: number; price: number; prevClose: number; source: 'smartapi' | 'yahoo' | 'session' }): Promise<string | null> {
+      const r = await call('rpc/register_circuit_event', { method: 'POST', body: { p_symbol: e.symbol, p_direction: e.direction, p_band: e.band, p_price: e.price, p_prev_close: e.prevClose, p_source: e.source } });
+      return typeof r === 'string' ? r : null;
+    },
+    async listRegister(limit = 200): Promise<CircuitEvent[]> {
+      const r = await call(`circuit_events?select=*&order=detected_at.desc&limit=${limit}`);
+      return Array.isArray(r) ? (r as CircuitEvent[]) : [];
+    },
+    async reviewEvent(id: string, action: 'acknowledge' | 'escalate' | 'close', note?: string): Promise<CircuitEvent> {
+      return (await call('rpc/review_circuit_event', { method: 'POST', body: { p_id: id, p_action: action, p_note: note ?? null } })) as CircuitEvent;
+    },
+    async logAudit(e: { action: string; entity?: string; entity_id?: string; meta?: Record<string, unknown> }): Promise<void> {
+      await call('audit_log', { method: 'POST', body: [{ action: e.action, entity: e.entity ?? null, entity_id: e.entity_id ?? null, meta: e.meta ?? {} }], prefer: 'return=minimal' });
+    },
+    async listAudit(f: { action?: string; limit?: number; offset?: number } = {}): Promise<AuditRow[]> {
+      const q = [`select=seq,at,user_id,actor_role,action,entity,entity_id,meta,hash`, 'order=seq.desc', `limit=${f.limit ?? 200}`, `offset=${f.offset ?? 0}`, ...(f.action ? [`action=like.${enc(f.action.replace(/[^a-z_.*]/g, ''))}`] : [])];
+      const r = await call(`audit_log?${q.join('&')}`);
+      return Array.isArray(r) ? (r as AuditRow[]) : [];
+    },
+    async verifyAudit(): Promise<{ ok: boolean; checked: number; first_bad_seq: number | null }> {
+      const r = (await call('rpc/audit_verify', { method: 'POST', body: {} })) as { ok: boolean; checked: number; first_bad_seq: number | null }[] | null;
+      return r?.[0] ?? { ok: false, checked: 0, first_bad_seq: null };
+    },
+    async adminListUsers(): Promise<AdminUser[]> {
+      const r = await call('rpc/admin_list_users', { method: 'POST', body: {} });
+      return Array.isArray(r) ? (r as AdminUser[]) : [];
+    },
+    async setRole(target: string, role: AppRole): Promise<void> {
+      await call('rpc/set_user_role', { method: 'POST', body: { target, new_role: role } });
+    },
+    async listRules(): Promise<AlertRuleRow[]> {
+      const r = await call('alert_rules?select=id,symbol,kind,threshold,cooldown_min,channels,enabled,last_triggered_at,created_at&order=created_at.desc');
+      return Array.isArray(r) ? (r as AlertRuleRow[]) : [];
+    },
+    async addRule(userId: string, r: { symbol: string; kind: RuleKind; threshold: number; cooldown_min: number; channels: { push: boolean; email: boolean } }): Promise<void> {
+      await call('alert_rules', { method: 'POST', body: [{ user_id: userId, symbol: r.symbol.toUpperCase(), kind: r.kind, threshold: r.threshold, cooldown_min: r.cooldown_min, channels: r.channels }], prefer: 'return=minimal' });
+    },
+    async setRuleEnabled(id: string, enabled: boolean): Promise<void> {
+      await call(`alert_rules?id=eq.${encodeURIComponent(id)}`, { method: 'PATCH', body: { enabled }, prefer: 'return=minimal' });
+    },
+    async deleteRule(id: string): Promise<void> {
+      await call(`alert_rules?id=eq.${encodeURIComponent(id)}`, { method: 'DELETE', prefer: 'return=minimal' });
+    },
+    async listDeliveries(limit = 50): Promise<AlertDelivery[]> {
+      const r = await call(`alert_deliveries?select=id,fired_at,symbol,kind,price,channel,status,detail&order=fired_at.desc&limit=${limit}`);
+      return Array.isArray(r) ? (r as AlertDelivery[]) : [];
     },
   };
 }

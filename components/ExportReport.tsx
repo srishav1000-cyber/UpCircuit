@@ -1,5 +1,6 @@
 'use client';
 
+import { audit } from '@/lib/auditBus';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { MarketEngine, FeedMode } from '@/lib/market';
@@ -76,6 +77,7 @@ export function ExportReport({ symbol, engine, holdings = [], mode = 'delayed', 
     a.click();
     a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 2000);
+    audit({ action: 'export.csv', entity: 'research_report', entity_id: symbol });
     setNote('CSV downloaded');
   };
 

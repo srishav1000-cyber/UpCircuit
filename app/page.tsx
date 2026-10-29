@@ -20,6 +20,9 @@ import { sendCircuitPush } from '@/lib/alertPush';
 import { currentPushEndpoint } from '@/lib/pushNotifications';
 import { getNotify } from '@/lib/notifyStore';
 import { useCloud } from '@/hooks/useCloud';
+import { useAuditSession, useRole } from '@/hooks/useRole';
+import { LegalFooter } from '@/components/ConsentBanner';
+import { ComplianceWorkspace } from '@/components/ComplianceWorkspace';
 import { useNotifySync } from '@/hooks/useNotify';
 import { mergeHolding } from '@/lib/holdingsStore';
 import { HomePage } from '@/components/HomePage';
@@ -142,6 +145,8 @@ function Terminal() {
 
   useNotifySync();
   const { cloud, userId: cloudUser } = useCloud();
+  const { role: appRole } = useRole();
+  useAuditSession();
   const audio = useAudioAlerts();
   // startup screen (Settings → Market & Layout): once per page load, only when the URL did not already pick a view / symbol
   const landed = useRef(false);
@@ -156,6 +161,8 @@ function Terminal() {
   const watchedForCircuits = useMemo(() => [...new Set([...circuitSymbols, ...demo.symbols])], [circuitSymbols, demo.symbols]);
   const circuit = useCircuitAlerts(engine, version, watchedForCircuits, (hit) => {
     // every real hit is logged to the account's alert_history; e-mail / push follow the Settings toggles (Supabase accounts only)
+    // the shared circuit surveillance register (one row per stock · direction · IST day, de-duplicated by the database); real feed hits only
+    if (cloud && cloudUser) void cloud.registerCircuit({ symbol: hit.symbol, direction: hit.dir === 'upper' ? 'UPPER' : 'LOWER', band: hit.band, price: hit.ltp, prevClose: hit.limit / (1 + (hit.dir === 'upper' ? hit.band : -hit.band) / 100), source: mode === 'live' ? 'smartapi' : 'session' }).catch(() => undefined);
     if (cloud && cloudUser) void cloud.logAlert(cloudUser, { symbol: hit.symbol, direction: hit.dir === 'upper' ? 'UPPER' : 'LOWER', band: hit.band, price: hit.ltp }).catch(() => undefined);
     const n = getNotify();
     void getToken().then(async (t) => {
@@ -330,6 +337,7 @@ function Terminal() {
         <Navbar
           view={view}
           onView={setView}
+          showCompliance={!!cloud}
           persona={persona}
           onPlans={() => setPlansFor('any')}
           audioOn={audio.on}
@@ -362,7 +370,9 @@ function Terminal() {
         {welcome && <WelcomeBanner onDismiss={dismissWelcome} />}
       </div>
 
-      {view === 'home' ? (
+      {view === 'compliance' ? (
+        <ComplianceWorkspace cloud={cloud} userId={cloudUser} role={appRole} onOpenStock={openStock} />
+      ) : view === 'home' ? (
         <main className="flex-1">
           <HomePage engine={engine} news={news} newsError={newsError} onOpenStock={openStock} instruments={instruments} onOpenChart={openChart} />
         </main>
@@ -559,6 +569,7 @@ function Terminal() {
           {toast}
         </div>
       )}
+      {view !== 'terminal' && <LegalFooter />}
     </div>
   );
 }

@@ -1,6 +1,6 @@
 import { NextRequest } from 'next/server';
 import webpush from 'web-push';
-import { TtlCache, allow } from '@/lib/ttlCache';
+import { TtlCache, allowAsync } from '@/lib/ttlCache';
 import { bearer, supabaseConfigured, whoami } from '@/lib/serverAuth';
 import { circuitPushPayload, fanOut, isB64Url, isPushEndpoint } from '@/lib/pushSender';
 import type { PushSub } from '@/lib/cloud';
@@ -40,7 +40,7 @@ export async function POST(req: NextRequest) {
   const day = new Date(Date.now() + 19800_000).toISOString().slice(0, 10);
   const dedupe = `${user.id}:${symbol}:${b.dir}:${band}:${day}`;
   if (sentToday.get(dedupe)) return Response.json({ ok: true, deduped: true });
-  if (!allow(`push:${user.id}`, 30, 3600_000)) return Response.json({ ok: false, error: 'Too many push alerts — try later.' }, { status: 429 });
+  if (!(await allowAsync(`push:${user.id}`, 30, 3600_000))) return Response.json({ ok: false, error: 'Too many push alerts — try later.' }, { status: 429 });
 
   const base = (process.env.NEXT_PUBLIC_SUPABASE_URL as string).replace(/\/+$/, '');
   const headers = { apikey: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY as string, Authorization: `Bearer ${token}` };

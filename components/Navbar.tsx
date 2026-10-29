@@ -14,7 +14,7 @@ import { ProfilePopover } from './ProfilePopover';
 import { ROLES, canUse, planFor, planOf } from '@/lib/auth';
 import { useAuth } from '@/hooks/useAuth';
 
-export type View = 'home' | 'terminal';
+export type View = 'home' | 'terminal' | 'compliance';
 
 interface Props {
   view: View;
@@ -57,6 +57,8 @@ interface Props {
   onOpenImport: () => void;
   /** opens the Ask UpCircuit drawer */
   onAsk: () => void;
+  /** show the Compliance tab (Supabase accounts) */
+  showCompliance?: boolean;
 }
 
 export function FeedBadge({ mode, className = '' }: { mode: FeedMode; className?: string }) {
@@ -343,7 +345,7 @@ function AvatarMenu({ mode, conn, liveReason, onPlans }: { mode: FeedMode; conn:
 }
 
 
-export function Navbar({ view, onView, persona, onPersona, onPlans, audioOn = true, onToggleAudio, circuitCount = 0, onOpenCircuitLog, demo, indices, instruments, onSelect, onOpenIndex, symbol, watchlisted, activeAlerts, onDeepResearch, onToggleWatchlist, onSetAlert, searchRef, mode, liveReason, conn, onOpenWatchlist, priceOf, onOpenImport, onAsk }: Props) {
+export function Navbar({ view, onView, persona, onPersona, onPlans, audioOn = true, onToggleAudio, circuitCount = 0, onOpenCircuitLog, demo, indices, instruments, onSelect, onOpenIndex, symbol, watchlisted, activeAlerts, onDeepResearch, onToggleWatchlist, onSetAlert, searchRef, mode, liveReason, conn, onOpenWatchlist, priceOf, onOpenImport, onAsk, showCompliance = false }: Props) {
   const actionProps = { symbol, watchlisted, activeAlerts, onDeepResearch, onToggleWatchlist, onSetAlert, onOpenWatchlist };
   return (
     <header className="relative">
@@ -351,14 +353,15 @@ export function Navbar({ view, onView, persona, onPersona, onPlans, audioOn = tr
         <Logo />
 
         <nav className="flex shrink-0 items-center gap-0.5" aria-label="Primary">
-          {(['home', 'terminal'] as View[]).map((v) => (
+          {((showCompliance ? ['home', 'terminal', 'compliance'] : ['home', 'terminal']) as View[]).map((v) => (
             <button
               key={v}
+              data-testid={`nav-${v}`}
               onClick={() => onView(v)}
               aria-current={view === v ? 'page' : undefined}
               className={`rounded px-2 py-1.5 text-[12px] font-semibold sm:px-2.5 sm:text-[13px] ${view === v ? 'bg-accent/15 text-accent' : 'text-muted hover:text-ink'}`}
             >
-              {v === 'home' ? (<><span className="sm:hidden">Discover</span><span className="hidden sm:inline">Discovery Hub</span></>) : 'Terminal'}
+              {v === 'home' ? (<><span className="sm:hidden">Discover</span><span className="hidden sm:inline">Discovery Hub</span></>) : v === 'terminal' ? 'Terminal' : (<><span className="sm:hidden">🛡</span><span className="hidden sm:inline">🛡 Compliance</span></>)}
             </button>
           ))}
         </nav>

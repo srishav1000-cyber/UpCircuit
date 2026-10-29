@@ -1,5 +1,6 @@
 'use client';
 
+import { audit } from '@/lib/auditBus';
 import { useState } from 'react';
 import type { FeedMode, MarketEngine } from '@/lib/market';
 import type { Holding, NewsResponse, Quote } from '@/lib/types';
@@ -59,6 +60,7 @@ export async function buildResearchPdf({ quote, screener, engine, holdings = [],
 /** Generates the PDF and triggers the browser download. */
 export async function downloadResearchPdf(o: Opts): Promise<{ pages: number; fileName: string; bytes: number }> {
   const { blob, pages, fileName } = await buildResearchPdf(o);
+  audit({ action: 'export.pdf', entity: 'research_report', entity_id: o.quote.symbol, meta: { pages } });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;

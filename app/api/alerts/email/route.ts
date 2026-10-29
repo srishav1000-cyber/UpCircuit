@@ -1,6 +1,6 @@
 import { NextRequest } from 'next/server';
 import { buildCircuitEmail, sendEmail } from '@/lib/email';
-import { TtlCache, allow } from '@/lib/ttlCache';
+import { TtlCache, allowAsync } from '@/lib/ttlCache';
 import { bearer, supabaseConfigured, whoami } from '@/lib/serverAuth';
 
 export const runtime = 'nodejs';
@@ -33,7 +33,7 @@ export async function POST(req: NextRequest) {
   const day = new Date(Date.now() + 19800_000).toISOString().slice(0, 10);
   const dedupe = `${user.id}:${symbol}:${b.dir}:${band}:${day}`;
   if (sentToday.get(dedupe)) return Response.json({ ok: true, deduped: true });
-  if (!allow(`mail:${user.id}`, 20, 3600_000)) return Response.json({ ok: false, error: 'Too many alert e-mails — try later.' }, { status: 429 });
+  if (!(await allowAsync(`mail:${user.id}`, 20, 3600_000))) return Response.json({ ok: false, error: 'Too many alert e-mails — try later.' }, { status: 429 });
 
   const mail = buildCircuitEmail({ symbol, dir: b.dir, ltp, limit, band, pct, exact: b.exact === true });
   const res = await sendEmail({ to: user.email, subject: mail.subject, html: mail.html, text: mail.text });

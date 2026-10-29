@@ -3,7 +3,7 @@ import { finishAnswer, suggestFollowUps } from '@/lib/followups';
 import { getNews } from '@/lib/news';
 import { ASK_SYSTEM, MAX_ASK, answerAskLocally, buildAskPrompt, isAskContext, type AskTurn } from '@/lib/ask';
 import type { CopilotAnswer } from '@/lib/copilot';
-import { TtlCache, allow } from '@/lib/ttlCache';
+import { TtlCache, allowAsync } from '@/lib/ttlCache';
 
 export const runtime = 'edge';
 export const dynamic = 'force-dynamic';
@@ -17,7 +17,7 @@ const json = (body: unknown, status = 200) => Response.json(body, { status, head
  */
 export async function POST(req: Request) {
   const ip = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'anon';
-  if (!allow('ask:' + ip, 20, 60_000)) return json({ error: 'Too many questions — please wait a minute.' }, 429);
+  if (!(await allowAsync('ask:' + ip, 20, 60_000))) return json({ error: 'Too many questions — please wait a minute.' }, 429);
 
   let body: { question?: unknown; history?: unknown; context?: unknown };
   try {

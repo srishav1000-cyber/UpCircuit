@@ -1,7 +1,7 @@
 import { NextRequest } from 'next/server';
 import { fetchQuoteRows } from '@/lib/yahooQuotes';
 import type { YahooRow } from '@/lib/yahooData';
-import { TtlCache, allow } from '@/lib/ttlCache';
+import { TtlCache, allowAsync } from '@/lib/ttlCache';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -21,7 +21,7 @@ export async function GET(req: NextRequest) {
   const hit = cache.get(key);
   if (hit) return Response.json({ ok: true, ...hit.value });
   const ip = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'local';
-  if (!allow(`q:${ip}`, 90, 60_000)) return Response.json({ ok: false, error: 'rate limited' }, { status: 429 });
+  if (!(await allowAsync(`q:${ip}`, 90, 60_000))) return Response.json({ ok: false, error: 'rate limited' }, { status: 429 });
   const { rows, via } = await fetchQuoteRows(wants);
   const body = { rows, via, at: Date.now() };
   if (rows.length) cache.set(key, body);

@@ -22,6 +22,14 @@ import { isMarketOpen, isStreamWindow, FEED_BADGE } from '../lib/market';
 import { parseHoldingsText } from '../lib/portfolioText';
 import { addAlert, checkAlerts, parseAlerts } from '../lib/alerts';
 import { smartApiStatus } from '../lib/market';
+import { can, opsTabs, coerceAppRole, APP_ROLES } from '../lib/rbac';
+import { evaluateRule, evaluateAll, validateRule, proximity, type AlertRule } from '../lib/alertRules';
+import { runAlertWorker, type WorkerDeps } from '../lib/alertWorker';
+import { createAuditor, cleanMeta } from '../lib/audit';
+import { toCsv as toCsvTable } from '../lib/csvOut';
+import { allowAsync } from '../lib/ttlCache';
+import { LEGAL, legalDoc } from '../lib/legal';
+import { reviewActions } from '../components/SurveillanceRegister';
 // @ts-expect-error plain .mjs helper
 import { pickEquities } from './sync-instruments.mjs';
 
@@ -1499,6 +1507,87 @@ t('Round 36 · stock-specific news + sentiment summary', () => {
   const mine = stockNews(items, 'TCS', 'Tata Consultancy Services Ltd');
   assert.equal(mine.length, 4);
   const sum = summarizeSentiment(mine); assert.deepEqual([sum.total, sum.bullish, sum.dominant, sum.pct], [4, 2, 'Bullish', 50]); assert.equal(sentimentChipText(sum), '50% Bullish (4 articles)'); assert.equal(sentimentChipText(summarizeSentiment([])), 'No recent headlines');
+});
+
+/* ── Week 8 P0: roles, rules, worker, audit, CSV, rate limit, legal ── */
+t('rbac: permission map per role, tab visibility, unknown role → analyst', () => {
+  assert.equal(can('viewer', 'register.view'), false); assert.equal(can('analyst', 'register.view'), true); assert.equal(can('analyst', 'register.review'), false);
+  assert.equal(can('risk', 'register.review'), true); assert.equal(can('risk', 'register.close_escalated'), false); assert.equal(can('compliance', 'register.close_escalated'), true);
+  assert.equal(can('compliance', 'users.manage'), false); assert.equal(can('admin', 'users.manage'), true); assert.equal(can(null, 'rules.manage'), false);
+  assert.deepEqual(opsTabs('viewer'), ['rules']); assert.deepEqual(opsTabs('analyst'), ['register', 'rules']); assert.deepEqual(opsTabs('admin'), ['register', 'rules', 'audit', 'users']);
+  assert.equal(coerceAppRole('root'), 'analyst'); assert.equal(coerceAppRole('admin'), 'admin'); assert.equal(APP_ROLES.length, 5);
+  assert.deepEqual(reviewActions('risk', { status: 'open' }), ['acknowledge', 'escalate', 'close']); assert.deepEqual(reviewActions('risk', { status: 'escalated' }), []);
+  assert.deepEqual(reviewActions('compliance', { status: 'escalated' }), ['close']); assert.deepEqual(reviewActions('admin', { status: 'closed' }), []); assert.deepEqual(reviewActions('analyst', { status: 'open' }), []);
+});
+const rule = (o: Partial<AlertRule> = {}): AlertRule => ({ id: 'r1', user_id: 'u1', symbol: 'TCS', kind: 'price_above', threshold: 100, cooldown_min: 60, channels: { push: true }, enabled: true, last_triggered_at: null, ...o });
+t('alert rules: every kind fires only when due; cooldown + disabled + bad quote are respected', () => {
+  const q = { symbol: 'TCS', ltp: 105, prevClose: 100 };
+  assert.ok(evaluateRule(rule(), q)); assert.equal(evaluateRule(rule({ threshold: 106 }), q), null);
+  assert.ok(evaluateRule(rule({ kind: 'price_below', threshold: 110 }), q)); assert.equal(evaluateRule(rule({ kind: 'price_below', threshold: 100 }), q), null);
+  assert.ok(evaluateRule(rule({ kind: 'pct_up', threshold: 5 }), q)); assert.equal(evaluateRule(rule({ kind: 'pct_up', threshold: 6 }), q), null);
+  assert.ok(evaluateRule(rule({ kind: 'pct_down', threshold: 3 }), { ...q, ltp: 96 })); assert.equal(evaluateRule(rule({ kind: 'pct_down', threshold: 3 }), q), null);
+  assert.equal(proximity(4.2, 1), 5); assert.equal(proximity(3, 1), null); assert.equal(proximity(5.5, 1), null); assert.equal(proximity(-9.4, 1), 10); assert.equal(proximity(19.5, 1), 20);
+  assert.ok(evaluateRule(rule({ kind: 'circuit_proximity', threshold: 1 }), { ...q, ltp: 104.5 }));
+  const now = Date.parse('2026-10-27T10:00:00Z');
+  assert.equal(evaluateRule(rule({ last_triggered_at: '2026-10-27T09:30:00Z' }), q, now), null); assert.ok(evaluateRule(rule({ last_triggered_at: '2026-10-27T08:30:00Z' }), q, now));
+  assert.equal(evaluateRule(rule({ enabled: false }), q), null); assert.equal(evaluateRule(rule(), undefined), null); assert.equal(evaluateRule(rule(), { symbol: 'TCS', ltp: 0, prevClose: 100 }), null); assert.equal(evaluateRule(rule(), { symbol: 'TCS', ltp: 105, prevClose: 0 }), null);
+  assert.equal(evaluateAll([rule(), rule({ id: 'r2', symbol: 'INFY' })], new Map([['TCS', q]])).length, 1);
+  assert.equal(validateRule({ symbol: 'TCS', kind: 'price_above', threshold: 5, cooldown_min: 60 }), null);
+  for (const bad of [{ symbol: 'bad sym', kind: 'price_above', threshold: 5, cooldown_min: 60 }, { symbol: 'TCS', kind: 'x', threshold: 5, cooldown_min: 60 }, { symbol: 'TCS', kind: 'price_above', threshold: 0, cooldown_min: 60 }, { symbol: 'TCS', kind: 'pct_up', threshold: 150, cooldown_min: 60 }, { symbol: 'TCS', kind: 'price_above', threshold: 5, cooldown_min: 2 }]) assert.ok(validateRule(bad));
+});
+t('alert worker: claims once, delivers per channel, records every outcome, survives a failing rule', async () => {
+  const recs: { channel: string; status: string }[] = []; const audits: string[] = []; const claimed = new Set<string>();
+  const rules = [rule({ id: 'a', channels: { push: true, email: true } }), rule({ id: 'b', channels: {} }), rule({ id: 'c', threshold: 9999 }), rule({ id: 'boom' })];
+  const deps: WorkerDeps = {
+    loadRules: async () => rules, quotes: async () => new Map([['TCS', { symbol: 'TCS', ltp: 105, prevClose: 100 }]]),
+    claim: async (id) => { if (id === 'boom') throw new Error('db'); if (claimed.has(id)) return false; claimed.add(id); return true; },
+    push: async () => ({ sent: 1, devices: 2 }), email: async () => 'unconfigured',
+    record: async (d) => { recs.push({ channel: d.channel, status: d.status }); }, audit: async (a) => { audits.push(a); },
+  };
+  const s = await runAlertWorker(deps);
+  assert.deepEqual([s.rules, s.symbols, s.due, s.claimed, s.pushed, s.emailed, s.errors], [4, 1, 3, 2, 1, 0, 1]);
+  assert.deepEqual(recs.map((r) => `${r.channel}:${r.status}`).sort(), ['email:skipped', 'inapp:sent', 'inapp:sent', 'push:sent']); assert.equal(audits.length, 2);
+  const s2 = await runAlertWorker({ ...deps, loadRules: async () => [rules[0]] }); assert.equal(s2.skipped, 1); assert.equal(s2.claimed, 0);
+  assert.equal((await runAlertWorker({ ...deps, loadRules: async () => [] })).rules, 0);
+});
+t('audit client: validates names, scrubs secrets/long values, queues and retries, never throws', async () => {
+  assert.deepEqual(cleanMeta({ rows: 3, ok: true, token: 'x', apiKey: 'y', note: 'n'.repeat(500), obj: { a: 1 } }), { rows: 3, ok: true, note: 'n'.repeat(120) });
+  const sent: string[] = []; let fail = true;
+  const cloud = { logAudit: async (e: { action: string }) => { if (fail) throw new Error('down'); sent.push(e.action); } } as never;
+  const a = createAuditor(cloud); a.log({ action: 'export.csv' }); a.log({ action: 'Bad Name' }); a.log({ action: 'x'.repeat(60) });
+  await a.flush(); assert.equal(a.pending(), 1); fail = false; await a.flush(); assert.deepEqual(sent, ['export.csv']); assert.equal(a.pending(), 0);
+  createAuditor(null).log({ action: 'export.csv' });
+});
+t('csv export: quoting + spreadsheet-formula neutralised, numbers untouched', () => {
+  assert.equal(toCsvTable(['a', 'b'], [['x,y', '"q"'], ['=1+1', -5], ['@cmd', '-2.5'], [null, { k: 1 }]]), 'a,b\r\n"x,y","""q"""\r\n\'=1+1,-5\r\n\'@cmd,-2.5\r\n,"{""k"":1}"\r\n');
+});
+t('rate limit: Redis INCR window when configured, falls back to memory on outage / when unset', async () => {
+  delete process.env.UPSTASH_REDIS_REST_URL; delete process.env.UPSTASH_REDIS_REST_TOKEN;
+  assert.equal(await allowAsync('w8-a', 1, 60_000), true); assert.equal(await allowAsync('w8-a', 1, 60_000), false);
+  process.env.UPSTASH_REDIS_REST_URL = 'https://r.test/'; process.env.UPSTASH_REDIS_REST_TOKEN = 'tk';
+  let n = 0; const calls: string[] = []; const f = (async (u: string, init: RequestInit) => { calls.push(`${u}|${(init.headers as Record<string, string>).Authorization}|${init.body}`); return new Response(JSON.stringify([{ result: ++n }, { result: 1 }])); }) as unknown as typeof fetch;
+  assert.equal(await allowAsync('w8-b', 2, 60_000, f), true); assert.equal(await allowAsync('w8-b', 2, 60_000, f), true); assert.equal(await allowAsync('w8-b', 2, 60_000, f), false);
+  assert.ok(calls[0].startsWith('https://r.test/pipeline|Bearer tk|') && calls[0].includes('"INCR"') && calls[0].includes('"NX"'));
+  const down = (async () => { throw new Error('net'); }) as unknown as typeof fetch; assert.equal(await allowAsync('w8-c', 1, 60_000, down), true); assert.equal(await allowAsync('w8-c', 1, 60_000, down), false);
+  const bad = (async () => new Response('x', { status: 500 })) as unknown as typeof fetch; assert.equal(await allowAsync('w8-d', 1, 60_000, bad), true);
+  delete process.env.UPSTASH_REDIS_REST_URL; delete process.env.UPSTASH_REDIS_REST_TOKEN;
+});
+t('cloud client (Week 8): RPC bodies, filters, error detail, role coercion', async () => {
+  const r = rec(); const c = mkCloud(((u: string, i: RequestInit) => (/rpc\/app_role/.test(u) ? Promise.resolve(new Response('"risk"')) : r.f(u, i))) as typeof fetch);
+  assert.equal(await c.loadRole(), 'risk');
+  await c.registerCircuit({ symbol: 'TCS', direction: 'UPPER', band: 10, price: 4000, prevClose: 3636.36, source: 'smartapi' });
+  await c.reviewEvent('id1', 'escalate', 'why'); await c.setRole('u2', 'admin'); await c.listAudit({ action: 'export.*', limit: 5 }); await c.setRuleEnabled('r 1', false); await c.deleteRule('r1');
+  const by = (re: RegExp) => r.calls.find((k) => re.test(k.url))!;
+  assert.deepEqual(by(/register_circuit_event/).body, { p_symbol: 'TCS', p_direction: 'UPPER', p_band: 10, p_price: 4000, p_prev_close: 3636.36, p_source: 'smartapi' });
+  assert.deepEqual(by(/review_circuit_event/).body, { p_id: 'id1', p_action: 'escalate', p_note: 'why' }); assert.deepEqual(by(/set_user_role/).body, { target: 'u2', new_role: 'admin' });
+  assert.ok(by(/audit_log\?/).url.includes('action=like.export.*') && by(/audit_log\?/).url.includes('limit=5')); assert.ok(by(/alert_rules\?id=eq\.r%201/).method === 'PATCH');
+  const bad = (async () => new Response(JSON.stringify({ message: 'only an admin can change roles' }), { status: 403 })) as unknown as typeof fetch;
+  await assert.rejects(() => mkCloud(bad).setRole('u', 'admin'), /cloud 403: only an admin can change roles/);
+});
+t('legal pages: all four exist with disclaimer, data-licensing and DPDP content', () => {
+  assert.deepEqual(LEGAL.map((d) => d.slug).sort(), ['data-sources', 'disclaimer', 'privacy', 'terms']);
+  assert.match(JSON.stringify(legalDoc('disclaimer')), /Research Analyst or Investment Adviser/); assert.match(JSON.stringify(legalDoc('data-sources')), /market-data licence/); assert.match(JSON.stringify(legalDoc('privacy')), /DPDP Act 2023/);
+  assert.equal(legalDoc('nope'), undefined);
 });
 
 void Promise.all(pending).then(() => {

@@ -40,3 +40,28 @@ export function allow(key: string, limit: number, windowMs: number): boolean {
   if (buckets.size > 2000) buckets.clear();
   return true;
 }
+
+/**
+ * Distributed limiter. With UPSTASH_REDIS_REST_URL + UPSTASH_REDIS_REST_TOKEN set, counts live in Redis (fixed window: INCR + PEXPIRE, shared by every instance);
+ * otherwise — or if Redis is unreachable — it falls back to the per-instance sliding window above, so a Redis outage never takes the API down.
+ */
+export async function allowAsync(key: string, limit: number, windowMs: number, f: typeof fetch = fetch): Promise<boolean> {
+  const url = process.env.UPSTASH_REDIS_REST_URL, tok = process.env.UPSTASH_REDIS_REST_TOKEN;
+  if (!url || !tok) return allow(key, limit, windowMs);
+  try {
+    const win = Math.floor(Date.now() / windowMs);
+    const k = `rl:${key}:${win}`;
+    const r = await f(`${url.replace(/\/+$/, '')}/pipeline`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${tok}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify([['INCR', k], ['PEXPIRE', k, String(windowMs), 'NX']]),
+      signal: AbortSignal.timeout(1500),
+    });
+    if (!r.ok) return allow(key, limit, windowMs);
+    const out = (await r.json()) as { result?: unknown }[];
+    const n = Number(out?.[0]?.result);
+    return Number.isFinite(n) ? n <= limit : allow(key, limit, windowMs);
+  } catch {
+    return allow(key, limit, windowMs);
+  }
+}

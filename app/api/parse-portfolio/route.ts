@@ -1,5 +1,5 @@
 import { callGemini, geminiConfigured } from '@/lib/gemini';
-import { allow } from '@/lib/ttlCache';
+import { allowAsync } from '@/lib/ttlCache';
 
 export const runtime = 'edge';
 export const dynamic = 'force-dynamic';
@@ -20,7 +20,7 @@ const PROMPT =
  */
 export async function POST(req: Request) {
   const ip = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'anon';
-  if (!allow('parse:' + ip, 8, 60_000)) return json({ error: 'Too many requests — wait a minute.' }, 429);
+  if (!(await allowAsync('parse:' + ip, 8, 60_000))) return json({ error: 'Too many requests — wait a minute.' }, 429);
 
   let body: { images?: { mimeType?: string; data?: string }[] };
   try {
