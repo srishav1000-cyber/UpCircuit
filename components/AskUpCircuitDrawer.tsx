@@ -1,5 +1,6 @@
 'use client';
 
+import { apiFetch } from '@/lib/authBus';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { MAX_ASK, type AskContext, type AskTurn } from '@/lib/ask';
 import type { CopilotAnswer, CopilotSource } from '@/lib/copilot';
@@ -125,7 +126,7 @@ export function AskUpCircuitDrawer({ open, onClose, getContext, request, focusSy
       abort.current = ac;
       const timer = setTimeout(() => ac.abort(), 40_000); // a full analyst answer can take ~20 s
       try {
-        const res = await fetch('/api/ask', {
+        const res = await apiFetch('/api/ask', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ question, history, context: getContext() }),

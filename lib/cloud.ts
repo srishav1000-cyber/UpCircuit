@@ -95,6 +95,8 @@ export interface AdminUser { id: string; email: string | null; full_name: string
 export interface AlertRuleRow { id: string; symbol: string; kind: RuleKind; threshold: number; cooldown_min: number; channels: { push?: boolean; email?: boolean }; enabled: boolean; last_triggered_at: string | null; created_at: string }
 export interface AlertDelivery { id: string; fired_at: string; symbol: string; kind: string; price: number | null; channel: string; status: string; detail: string | null }
 
+export interface AiSignoff { id: string; kind: string; symbol: string | null; model: string; prompt_version: string; data_used: string[]; output_hash: string; decision: 'approved' | 'rejected'; note: string | null; signer_role: string; signed_at: string }
+
 export type CloudClient = ReturnType<typeof createCloud>;
 export function createCloud(cfg: CloudConfig) {
   const base = cfg.url.replace(/\/+$/, '');
@@ -221,6 +223,24 @@ export function createCloud(cfg: CloudConfig) {
     async listDeliveries(limit = 50): Promise<AlertDelivery[]> {
       const r = await call(`alert_deliveries?select=id,fired_at,symbol,kind,price,channel,status,detail&order=fired_at.desc&limit=${limit}`);
       return Array.isArray(r) ? (r as AlertDelivery[]) : [];
+    },
+    async signOffAi(x: { kind: 'postmortem' | 'copilot' | 'report'; symbol?: string; model: string; promptVersion: string; dataUsed: string[]; outputHash: string; decision: 'approved' | 'rejected'; note?: string }): Promise<string> {
+      return (await call('rpc/sign_off_ai_output', { method: 'POST', body: { p_kind: x.kind, p_symbol: x.symbol ?? '', p_model: x.model, p_prompt_version: x.promptVersion, p_data_used: x.dataUsed, p_output_hash: x.outputHash, p_decision: x.decision, p_note: x.note ?? null } })) as string;
+    },
+    async listSignoffs(limit = 100): Promise<AiSignoff[]> {
+      const r = await call(`ai_signoffs?select=id,kind,symbol,model,prompt_version,data_used,output_hash,decision,note,signer_role,signed_at&order=signed_at.desc&limit=${limit}`);
+      return Array.isArray(r) ? (r as AiSignoff[]) : [];
+    },
+    /** DPDP access / portability: everything stored about the caller, as JSON */
+    async exportMyData(): Promise<Record<string, unknown>> {
+      return (await call('rpc/export_my_data', { method: 'POST', body: {} })) as Record<string, unknown>;
+    },
+    async loadRiskSettings(userId: string): Promise<{ limits: unknown; report: boolean }> {
+      const r = ((await call(`preferences?${uid(userId)}&select=risk_limits,risk_report`)) as { risk_limits?: unknown; risk_report?: boolean }[] | null)?.[0];
+      return { limits: r?.risk_limits ?? null, report: !!r?.risk_report };
+    },
+    async saveRiskSettings(userId: string, s: { limits?: unknown; report?: boolean }): Promise<void> {
+      await call('preferences?on_conflict=user_id', { method: 'POST', body: [{ user_id: userId, ...(s.limits !== undefined ? { risk_limits: s.limits } : {}), ...(s.report !== undefined ? { risk_report: s.report } : {}), updated_at: new Date().toISOString() }], prefer: 'resolution=merge-duplicates,return=minimal' });
     },
   };
 }

@@ -1,5 +1,6 @@
 'use client';
 
+import { downloadText } from '@/lib/csvOut';
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { useAuth } from '@/hooks/useAuth';
 import { useCloud } from '@/hooks/useCloud';
@@ -345,12 +346,13 @@ export function downloadBackup(user: { id: string; email?: string; phone?: strin
 }
 
 function CloudTab() {
-  const { user } = useAuth();
+  const { user, signOut, getToken } = useAuth();
   const { cloud, userId } = useCloud();
   const { prefs } = useNotify();
   const sync = useSyncExternalStore(subscribeSync, getSync, serverSync);
   const fs = useForceSync();
-  const [confirm, setConfirm] = useState<'' | 'cache' | 'cloud'>('');
+  const [confirm, setConfirm] = useState<'' | 'cache' | 'cloud' | 'account'>('');
+  const [privacyMsg, setPrivacyMsg] = useState('');
   const [typed, setTyped] = useState('');
   const [msg, setMsg] = useState('');
   if (!user) return null;
@@ -360,6 +362,24 @@ function CloudTab() {
     purgeUserCache(localStorage, user.id);
     setMsg('Local cache cleared — reloading from your account…');
     setTimeout(() => window.location.reload(), 600);
+  };
+  const exportData = async () => {
+    if (!cloud) return;
+    try {
+      const data = await cloud.exportMyData();
+      downloadText(`upcircuit-my-data-${new Date().toISOString().slice(0, 10)}.json`, JSON.stringify(data, null, 2), 'application/json');
+      setPrivacyMsg('Your data was downloaded. The export is recorded in the audit trail.');
+    } catch { setPrivacyMsg('Could not export — nothing was changed. Run docs/ENTERPRISE_SCHEMA_P1.sql if this is a new deployment.'); }
+  };
+  const deleteAccount = async () => {
+    try {
+      const r = await fetch('/api/account/delete', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${(await getToken()) ?? ''}` }, body: JSON.stringify({ confirm: 'DELETE' }) });
+      const j = (await r.json().catch(() => ({}))) as { ok?: boolean; error?: string };
+      if (!r.ok || !j.ok) return setPrivacyMsg(j.error ?? 'Could not delete the account.');
+      purgeUserCache(localStorage, user.id);
+      setPrivacyMsg('Account deleted. Signing you out…');
+      setTimeout(() => { void signOut().finally(() => window.location.assign('/')); }, 800);
+    } catch { setPrivacyMsg('Could not delete the account — nothing was changed.'); }
   };
   const resetCloud = async () => {
     if (!cloud || !userId) return;
@@ -384,6 +404,25 @@ function CloudTab() {
           <button type="button" className={btn} data-testid="cloud-backup" onClick={() => downloadBackup({ id: user.id, email: user.email, phone: user.phone }, prefs)}>⬇ Export Portfolio &amp; Watchlist Backup (JSON)</button>
         </div>
         {fs.msg && <p role="status" data-testid="cloud-msg" className={`mt-3 rounded-md px-3 py-2 text-[12px] ${fs.msg.kind === 'ok' ? 'bg-up/10 text-up' : 'bg-down/10 text-down'}`}>{fs.msg.text}</p>}
+      </section>
+      <section className={card} data-testid="settings-privacy">
+        <h3 className={h2}>Your data (DPDP Act 2023)</h3>
+        <p className="mt-1 text-[12px] text-muted">Download everything stored about you, or erase it. Erasure removes your portfolio, watchlists, alert rules and history, AI sign-offs, role and account; audit-log entries are retained for security and compliance but are no longer linked to a person.</p>
+        <div className="mt-3 flex flex-wrap gap-2">
+          <button type="button" className={btn} disabled={!cloud} data-testid="dpdp-export" onClick={() => void exportData()}>⬇ Download all my data (JSON)</button>
+          <button type="button" className="rounded-md border border-down/40 px-3 py-1.5 text-[12px] font-semibold text-down hover:bg-down/10 disabled:opacity-40" disabled={!cloud} data-testid="dpdp-delete" onClick={() => { setConfirm(confirm === 'account' ? '' : 'account'); setTyped(''); }}>Delete my account…</button>
+        </div>
+        {!cloud && <p className="mt-2 text-[11px] text-muted">Demo / local accounts keep data only in this browser — use “Reset” below.</p>}
+        {confirm === 'account' && (
+          <div className="mt-3 text-[12px] text-ink" data-testid="dpdp-confirm">
+            This cannot be undone. Type <b>DELETE</b> to confirm.
+            <div className="mt-2 flex gap-2">
+              <input data-testid="dpdp-input" value={typed} onChange={(e) => setTyped(e.target.value)} className="w-28 rounded-md border border-line bg-bg px-2 py-1 text-sm text-ink" />
+              <button type="button" disabled={typed !== 'DELETE'} className="rounded-md bg-down px-3 py-1.5 text-[12px] font-bold text-white disabled:opacity-40" data-testid="dpdp-go" onClick={() => void deleteAccount()}>Delete everything</button>
+            </div>
+          </div>
+        )}
+        {privacyMsg && <p role="status" data-testid="dpdp-msg" className="mt-3 rounded-md bg-line px-3 py-2 text-[12px] text-ink">{privacyMsg}</p>}
       </section>
       <section className={card} data-testid="settings-reset">
         <h3 className={h2}>Reset</h3>

@@ -1,5 +1,10 @@
 'use client';
 
+import { AiGovernance } from './AiGovernance';
+import { dataUsed } from '@/lib/aiGovernance';
+import { useCloud } from '@/hooks/useCloud';
+import { useRole } from '@/hooks/useRole';
+import { apiFetch } from '@/lib/authBus';
 import { useEffect, useRef, useState } from 'react';
 import { MAX_QUESTION, type CopilotAnswer, type CopilotContext, type CopilotSource } from '@/lib/copilot';
 import { Badge } from './ui';
@@ -7,6 +12,9 @@ import { CopilotCards } from './CopilotCards';
 import { QUICK_ACTIONS } from '@/lib/copilotCards';
 
 interface Msg {
+  model?: string;
+  promptVersion?: string;
+  ctx?: Partial<CopilotContext>;
   id: number;
   role: 'user' | 'assistant' | 'error';
   text: string;
@@ -39,6 +47,8 @@ interface Props {
 
 /** Q&A chat: Gemini primary; server falls back to a local VADER + financial-rules engine with a 5-minute TTL cache. */
 export function AIStockCopilot({ symbol, name, getContext }: Props) {
+  const { cloud } = useCloud();
+  const { role } = useRole();
   const [msgs, setMsgs] = useState<Msg[]>([]);
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
@@ -62,7 +72,7 @@ export function AIStockCopilot({ symbol, name, getContext }: Props) {
     abort.current = ac;
     const timer = setTimeout(() => ac.abort(), 40_000);
     try {
-      const res = await fetch('/api/copilot', {
+      const res = await apiFetch('/api/copilot', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ question, context: getContext() }),
@@ -70,7 +80,7 @@ export function AIStockCopilot({ symbol, name, getContext }: Props) {
       });
       const data = (await res.json().catch(() => ({}))) as Partial<CopilotAnswer> & { error?: string };
       if (!res.ok || !data.answer) throw new Error(data.error ?? `Request failed (${res.status})`);
-      setMsgs((m) => [...m, { id: seq.current++, role: 'assistant', text: data.answer!, source: data.source, reason: data.fallbackReason, ageSec: data.ageSec }]);
+      setMsgs((m) => [...m, { id: seq.current++, role: 'assistant', text: data.answer!, source: data.source, reason: data.fallbackReason, ageSec: data.ageSec, model: data.model, promptVersion: data.promptVersion, ctx: getContext() }]);
     } catch (e) {
       const timedOut = e instanceof Error && e.name === 'AbortError';
       const text = timedOut ? 'The request timed out. Please try again.' : e instanceof Error ? e.message : 'Something went wrong.';
@@ -114,6 +124,9 @@ export function AIStockCopilot({ symbol, name, getContext }: Props) {
                   {m.source === 'cache' && <Badge tone="muted">Cached · {m.ageSec && m.ageSec >= 60 ? `${Math.round(m.ageSec / 60)}m` : `${m.ageSec ?? 0}s`} old</Badge>}
                   {m.source !== 'gemini' && reasonText(m.reason) && <span className="text-[10px] text-muted">{reasonText(m.reason)}</span>}
                 </div>
+              )}
+              {m.role === 'assistant' && (
+                <AiGovernance info={{ text: m.text, symbol, model: m.model, promptVersion: m.promptVersion, dataUsed: dataUsed(m.ctx) }} cloud={cloud} canSign={!!role && role !== 'viewer'} />
               )}
             </div>
           </div>

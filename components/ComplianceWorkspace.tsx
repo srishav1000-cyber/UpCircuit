@@ -7,8 +7,9 @@ import { SurveillanceRegister } from './SurveillanceRegister';
 import { AlertRuleManager } from './AlertRuleManager';
 import { AuditTrail } from './AuditTrail';
 import { UserAdmin } from './UserAdmin';
+import { AiSignoffs } from './AiSignoffs';
 
-const LABEL: Record<OpsTab, string> = { register: '🛡 Surveillance register', rules: '⏰ Alert rules', audit: '🔗 Audit trail', users: '👥 Users & roles' };
+const LABEL: Record<OpsTab, string> = { register: '🛡 Surveillance register', rules: '⏰ Alert rules', audit: '🔗 Audit trail', ai: '🤖 AI sign-offs', users: '👥 Users & roles' };
 
 export function ComplianceWorkspace({ cloud, userId, role, onOpenStock }: { cloud: CloudClient | null; userId: string | null; role: AppRole | null; onOpenStock: (s: string) => void }) {
   const tabs = opsTabs(role);
@@ -33,6 +34,7 @@ export function ComplianceWorkspace({ cloud, userId, role, onOpenStock }: { clou
           {active === 'register' && <SurveillanceRegister cloud={cloud} role={role} onOpenStock={onOpenStock} />}
           {active === 'rules' && <AlertRuleManager cloud={cloud} userId={userId} />}
           {active === 'audit' && <AuditTrail cloud={cloud} canVerify={can(role, 'audit.verify')} canExport={can(role, 'audit.export')} />}
+          {active === 'ai' && <AiSignoffs cloud={cloud} />}
           {active === 'users' && <UserAdmin cloud={cloud} selfId={userId} />}
           {!can(role, 'register.view') && <p className="mt-4 text-[11px] text-muted">Your role (Viewer) does not include the surveillance register. Ask an admin for the Analyst role.</p>}
         </>

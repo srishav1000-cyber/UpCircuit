@@ -27,11 +27,11 @@ export const can = (role: AppRole | null | undefined, perm: Perm): boolean => !!
 export const coerceAppRole = (x: unknown): AppRole => (typeof x === 'string' && (APP_ROLES as readonly string[]).includes(x) ? (x as AppRole) : DEFAULT_ROLE);
 
 /** Governance workspace tabs a role can open (empty → hide the entry point). */
-export type OpsTab = 'register' | 'rules' | 'audit' | 'users';
+export type OpsTab = 'register' | 'rules' | 'audit' | 'ai' | 'users';
 export function opsTabs(role: AppRole | null | undefined): OpsTab[] {
   const t: OpsTab[] = ['rules'];
   if (can(role, 'register.view')) t.unshift('register');
-  if (can(role, 'audit.view_all')) t.push('audit');
+  if (can(role, 'audit.view_all')) t.push('audit', 'ai');
   if (can(role, 'users.manage')) t.push('users');
   return t;
 }

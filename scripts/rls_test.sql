@@ -123,6 +123,7 @@ select t.back();
 select t.become(:alice); select t.ok((select count(*) from public.alert_deliveries) = 1, 'a user reads their own deliveries'); select t.back();
 select t.become(:bob); select t.ok((select count(*) from public.alert_deliveries) = 0, 'not other users'' deliveries'); select t.back();
 select t.ok(t.try('insert into public.alert_deliveries(user_id, symbol, kind, channel, status) values (''00000000-0000-0000-0000-00000000000a'', ''X'', ''y'', ''push'', ''sent'')', :alice) <> '', 'users cannot forge deliveries');
+update public.profiles set plan = 'full' where id = '00000000-0000-0000-0000-00000000000d';
 do $$ declare i int; begin
   perform t.become('00000000-0000-0000-0000-00000000000d');
   for i in 1..50 loop insert into public.alert_rules(user_id, symbol, kind, threshold) values ('00000000-0000-0000-0000-00000000000d', 'S' || i, 'price_above', i); end loop;
@@ -141,5 +142,40 @@ select t.become(:alice); insert into public.portfolios(user_id, symbol, quantity
 select t.become(:bob); select t.ok((select count(*) from public.portfolios) = 0, 'portfolios stay private'); select t.back();
 select t.ok(t.try('select * from public.profiles', null, 'anon') = '' and (select count(*) from (select t.become(null, 'anon')) _, public.profiles) = 0 or true, 'anon sees no profiles');
 select t.back();
+
+
+/* ── P1: plan limits, governance, DPDP ── */
+update public.profiles set plan = 'day' where id = '00000000-0000-0000-0000-00000000000b';
+do $$ declare i int; begin
+  perform t.become('00000000-0000-0000-0000-00000000000b');
+  for i in 1..5 loop insert into public.alert_rules(user_id, symbol, kind, threshold) values ('00000000-0000-0000-0000-00000000000b', 'P' || i, 'price_above', i); end loop;
+  begin insert into public.alert_rules(user_id, symbol, kind, threshold) values ('00000000-0000-0000-0000-00000000000b', 'P6', 'price_above', 6); perform t.back(); raise exception 'FAIL: day plan allowed a 6th rule';
+  exception when sqlstate '54000' then perform t.back(); end;
+end $$;
+insert into t.log(msg) values ('day plan is capped at 5 alert rules (server-side)');
+select t.ok(t.try('update public.profiles set plan = ''full''', :bob) <> '', 'users cannot upgrade their own plan');
+
+select t.ok(t.try('select public.sign_off_ai_output(''postmortem'', ''TCS'', ''gemini-2.5-flash'', ''pm-v1'', ''["quotes","news"]''::jsonb, repeat(''a'', 64), ''approved'')', :eve) like '%viewers cannot%', 'viewers cannot sign off AI output');
+select t.ok(t.try('select public.sign_off_ai_output(''postmortem'', ''TCS'', ''gemini-2.5-flash'', ''pm-v1'', ''[]''::jsonb, repeat(''a'', 64), ''rejected'')', :alice) like '%note is required%', 'rejection needs a note');
+select t.ok(t.try('select public.sign_off_ai_output(''postmortem'', ''TCS'', ''m'', ''pm-v1'', ''[]''::jsonb, ''nothex'', ''approved'')', :alice) <> '', 'output hash must be sha-256 hex');
+select t.become(:alice); select public.sign_off_ai_output('postmortem', 'TCS', 'gemini-2.5-flash', 'pm-v1', '["quotes","news"]'::jsonb, repeat('a', 64), 'approved', 'checked vs filings'); select t.back();
+select t.become(:alice); select t.ok((select count(*) from public.ai_signoffs) = 1, 'signer reads own sign-off'); select t.back();
+select t.become(:bob); select t.ok((select count(*) from public.ai_signoffs) = 0, 'others cannot read it'); select t.back();
+select t.become(:carol); select t.ok((select count(*) from public.ai_signoffs) = 1, 'compliance can read all sign-offs'); select t.back();
+select t.ok(t.try('insert into public.ai_signoffs(user_id, kind, model, prompt_version, output_hash, decision, signer_role) values (''00000000-0000-0000-0000-00000000000a'', ''copilot'', ''m'', ''v'', repeat(''a'',64), ''approved'', ''admin'')', :alice) <> '', 'no direct inserts into ai_signoffs');
+select t.ok((select count(*) from public.audit_log where action = 'ai.signoff') = 1, 'sign-off is audited');
+
+select t.become(:alice); create temp table exp as select public.export_my_data() as j; select t.back();
+grant select on exp to public;
+select t.ok((select j->'portfolio'->0->>'symbol' from exp) = 'TCS' and (select jsonb_array_length(j->'ai_signoffs') from exp) = 1 and (select j->>'role' from exp) = 'analyst', 'export_my_data returns my portfolio, sign-offs and role');
+select t.ok(not (select j::text like '%bob@x.test%' from exp), 'export contains no other user''s data');
+select t.ok((select count(*) from public.audit_log where action = 'account.export') = 1, 'export is audited');
+select t.ok(t.try('select public.export_my_data()', null, 'anon') <> '', 'anon cannot export');
+
+select t.ok(t.try('select public.delete_my_data()', :dave) like '%last admin%', 'the last admin cannot erase themself');
+select t.become(:alice); select public.delete_my_data(); select t.back();
+select t.ok((select count(*) from public.portfolios where user_id = '00000000-0000-0000-0000-00000000000a') = 0 and (select count(*) from public.alert_rules where user_id = '00000000-0000-0000-0000-00000000000a') = 0 and (select count(*) from public.profiles where id = '00000000-0000-0000-0000-00000000000a') = 0 and (select count(*) from public.ai_signoffs where user_id = '00000000-0000-0000-0000-00000000000a') = 0, 'delete_my_data erases the caller''s rows');
+select t.ok((select count(*) from public.audit_log where action = 'account.delete') = 1, 'erasure itself is audited (retained)');
+select t.become(:bob); select t.ok((select count(*) from public.portfolios) = 0 and (select count(*) from public.alert_rules) = 5, 'other users untouched'); select t.back();
 
 select count(*) || ' assertions passed' as result from t.log;

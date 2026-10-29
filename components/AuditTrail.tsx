@@ -25,6 +25,24 @@ export function AuditTrail({ cloud, canVerify, canExport }: { cloud: CloudClient
     downloadText(`audit-trail-${new Date().toISOString().slice(0, 10)}.csv`, toCsv(['Seq', 'Time (IST)', 'User', 'Role', 'Action', 'Entity', 'Entity id', 'Meta', 'Hash'], (rows ?? []).map((r) => [r.seq, when(r.at), r.user_id, r.actor_role, r.action, r.entity, r.entity_id, r.meta, r.hash])));
     audit({ action: 'audit.export', entity: 'audit_log', meta: { rows: rows?.length ?? 0 } });
   }
+  async function exportPdf() {
+    const { jsPDF } = await import('jspdf');
+    const doc = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'a4' });
+    const list = rows ?? [];
+    doc.setFontSize(14); doc.text('UpCircuit — Audit trail', 40, 40);
+    doc.setFontSize(8); doc.text(`Generated ${new Date().toLocaleString('en-GB', { timeZone: 'Asia/Kolkata' })} IST · ${list.length} entries${action ? ` · filter ${action}` : ''}${chain ? ` · chain ${chain.ok ? 'verified intact' : `BROKEN at #${chain.first_bad_seq}`}` : ' · chain not verified in this session'}`, 40, 56);
+    let y = 78;
+    doc.setFont('helvetica', 'bold'); ['#', 'Time (IST)', 'Role', 'Action', 'Entity', 'Hash (first 12)'].forEach((h, i) => doc.text(h, [40, 70, 170, 220, 340, 520][i], y));
+    doc.setFont('helvetica', 'normal'); y += 12;
+    for (const r of list.slice(0, 300)) {
+      if (y > 560) { doc.addPage(); y = 40; }
+      const cells = [String(r.seq), when(r.at), r.actor_role ?? 'system', r.action, [r.entity, r.entity_id].filter(Boolean).join(' · ').slice(0, 40), r.hash.slice(0, 12)];
+      cells.forEach((c, i) => doc.text(c, [40, 70, 170, 220, 340, 520][i], y));
+      y += 11;
+    }
+    doc.save(`audit-trail-${new Date().toISOString().slice(0, 10)}.pdf`);
+    audit({ action: 'audit.export', entity: 'audit_log', meta: { rows: list.length, format: 'pdf' } });
+  }
   return (
     <section data-testid="audit" aria-label="Audit trail">
       <div className="mb-3 flex flex-wrap items-center gap-2">
@@ -34,7 +52,8 @@ export function AuditTrail({ cloud, canVerify, canExport }: { cloud: CloudClient
         </select>
         <button onClick={() => void load()} className="h-8 rounded-md border border-line px-3 text-[12px] font-semibold text-ink hover:bg-line">↻ Refresh</button>
         {canVerify && <button onClick={() => void verify()} data-testid="audit-verify" className="h-8 rounded-md border border-accent/60 bg-accent/10 px-3 text-[12px] font-semibold text-accent hover:bg-accent/20">🔗 Verify hash chain</button>}
-        {canExport && <button onClick={exportCsv} disabled={!rows?.length} data-testid="audit-export" className="ml-auto h-8 rounded-md border border-line px-3 text-[12px] font-semibold text-ink hover:bg-line disabled:opacity-40">⬇ CSV</button>}
+        {canExport && <button onClick={() => void exportPdf()} disabled={!rows?.length} data-testid="audit-export-pdf" className="ml-auto h-8 rounded-md border border-line px-3 text-[12px] font-semibold text-ink hover:bg-line disabled:opacity-40">⬇ PDF</button>}
+        {canExport && <button onClick={exportCsv} disabled={!rows?.length} data-testid="audit-export" className="h-8 rounded-md border border-line px-3 text-[12px] font-semibold text-ink hover:bg-line disabled:opacity-40">⬇ CSV</button>}
       </div>
       {chain && <div data-testid="audit-chain" role="status" className={`mb-2 rounded-md border px-3 py-2 text-[12px] ${chain.ok ? 'border-up/40 bg-up/10 text-up' : 'border-down/40 bg-down/10 text-down'}`}>{chain.ok ? `Chain intact — ${chain.checked} entries recomputed, none altered.` : `Chain BROKEN at entry #${chain.first_bad_seq} — entries were modified or removed outside the application.`}</div>}
       {err && <div role="alert" className="mb-2 rounded-md border border-down/40 bg-down/10 px-3 py-2 text-[12px] text-down">{err}</div>}

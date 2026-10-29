@@ -2,6 +2,8 @@
 
 import { useEffect, useState } from 'react';
 import { useCloud } from './useCloud';
+import { useAuth } from './useAuth';
+import { installTokenGetter } from '@/lib/authBus';
 import { createAuditor } from '@/lib/audit';
 import { installAuditor } from '@/lib/auditBus';
 import { DEFAULT_ROLE, type AppRole } from '@/lib/rbac';
@@ -26,6 +28,8 @@ export function useRole(): { role: AppRole | null; loading: boolean } {
 /** Mount once: installs the audit writer for this session and records one `auth.login` per browser tab session. */
 export function useAuditSession(): void {
   const { cloud, userId } = useCloud();
+  const { getToken } = useAuth();
+  useEffect(() => { installTokenGetter(getToken); return () => installTokenGetter(null); }, [getToken]);
   useEffect(() => {
     if (!cloud || !userId) { installAuditor(null); return; }
     const a = createAuditor(cloud);

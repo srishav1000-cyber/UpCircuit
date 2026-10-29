@@ -91,6 +91,9 @@ export interface CopilotAnswer {
   fallbackReason?: string;
   /** seconds since the cached answer was produced */
   ageSec?: number;
+  /** governance: which engine wrote it and under which prompt revision */
+  model?: string;
+  promptVersion?: string;
   /** 2–3 suggested next questions (rendered as quick-reply pills) */
   followUps?: string[];
 }

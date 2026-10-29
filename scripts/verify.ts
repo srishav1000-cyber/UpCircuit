@@ -38,6 +38,10 @@ import { vwapBandSet, bandZScore, bandZone } from '../lib/analytics/vwapBands';
 import { avgPairwise, extremePairs, corrWord, sharpeParts as sharpePartsNew } from '../lib/analytics/correlation';
 import { historicalVar, portfolioReturns, varRupees, annualVolPct as annVol } from '../lib/analytics/varMath';
 import { METHODOLOGY } from '../lib/methodology';
+import { log, redact, parseDsn, captureException } from '../lib/log';
+import { ENTITLEMENTS, coercePlan, fetchPlan } from '../lib/entitlements';
+import { buildRiskReport } from '../lib/riskReport';
+import { sha256Hex, dataUsed, PROMPT_VERSION } from '../lib/aiGovernance';
 import { openingRange } from '../lib/analytics/orb';
 import { bucketTrades, surgeZ, surgeLevel } from '../lib/analytics/velocity';
 import { planPosition } from '../lib/analytics/positionSize';
@@ -1514,7 +1518,7 @@ t('rbac: permission map per role, tab visibility, unknown role → analyst', () 
   assert.equal(can('viewer', 'register.view'), false); assert.equal(can('analyst', 'register.view'), true); assert.equal(can('analyst', 'register.review'), false);
   assert.equal(can('risk', 'register.review'), true); assert.equal(can('risk', 'register.close_escalated'), false); assert.equal(can('compliance', 'register.close_escalated'), true);
   assert.equal(can('compliance', 'users.manage'), false); assert.equal(can('admin', 'users.manage'), true); assert.equal(can(null, 'rules.manage'), false);
-  assert.deepEqual(opsTabs('viewer'), ['rules']); assert.deepEqual(opsTabs('analyst'), ['register', 'rules']); assert.deepEqual(opsTabs('admin'), ['register', 'rules', 'audit', 'users']);
+  assert.deepEqual(opsTabs('viewer'), ['rules']); assert.deepEqual(opsTabs('analyst'), ['register', 'rules']); assert.deepEqual(opsTabs('admin'), ['register', 'rules', 'audit', 'ai', 'users']);
   assert.equal(coerceAppRole('root'), 'analyst'); assert.equal(coerceAppRole('admin'), 'admin'); assert.equal(APP_ROLES.length, 5);
   assert.deepEqual(reviewActions('risk', { status: 'open' }), ['acknowledge', 'escalate', 'close']); assert.deepEqual(reviewActions('risk', { status: 'escalated' }), []);
   assert.deepEqual(reviewActions('compliance', { status: 'escalated' }), ['close']); assert.deepEqual(reviewActions('admin', { status: 'closed' }), []); assert.deepEqual(reviewActions('analyst', { status: 'open' }), []);
@@ -1588,6 +1592,50 @@ t('legal pages: all four exist with disclaimer, data-licensing and DPDP content'
   assert.deepEqual(LEGAL.map((d) => d.slug).sort(), ['data-sources', 'disclaimer', 'privacy', 'terms']);
   assert.match(JSON.stringify(legalDoc('disclaimer')), /Research Analyst or Investment Adviser/); assert.match(JSON.stringify(legalDoc('data-sources')), /market-data licence/); assert.match(JSON.stringify(legalDoc('privacy')), /DPDP Act 2023/);
   assert.equal(legalDoc('nope'), undefined);
+});
+
+t('Week 8 P1 · logging: secrets redacted, levels respected, Sentry DSN parsed, envelope POSTed, reporter never throws', async () => {
+  assert.deepEqual(redact({ a: 1, Authorization: 'Bearer x', nested: { api_key: 'k', ok: 'y' } }), { a: 1, Authorization: '[redacted]', nested: { api_key: '[redacted]', ok: 'y' } });
+  const lines: string[] = []; log('info', 'hi', { token: 'zzz', n: 1 }, (l) => lines.push(l)); log('debug', 'hidden', {}, (l) => lines.push(l));
+  assert.equal(lines.length, 1); const o = JSON.parse(lines[0]); assert.equal(o.msg, 'hi'); assert.equal(o.token, '[redacted]'); assert.equal(o.level, 'info');
+  assert.deepEqual(parseDsn('https://abc123@o1.ingest.sentry.io/4507'), { key: 'abc123', host: 'https://o1.ingest.sentry.io', project: '4507' }); assert.equal(parseDsn('nope'), null);
+  process.env.SENTRY_DSN = 'https://abc123@o1.ingest.sentry.io/4507'; const calls: { url: string; init: RequestInit }[] = [];
+  await captureException(new Error('boom'), { rid: 'r1', password: 'p' }, (async (u: string, i: RequestInit) => { calls.push({ url: u, init: i }); return new Response('{}'); }) as unknown as typeof fetch);
+  assert.equal(calls[0].url, 'https://o1.ingest.sentry.io/api/4507/envelope/'); assert.match(String((calls[0].init.headers as Record<string, string>)['X-Sentry-Auth']), /sentry_key=abc123/); assert.ok(String(calls[0].init.body).includes('"boom"') && !String(calls[0].init.body).includes('"p"'));
+  await captureException(new Error('x'), {}, (async () => { throw new Error('net'); }) as unknown as typeof fetch); delete process.env.SENTRY_DSN;
+});
+t('Week 8 P1 · entitlements: plan table, plan lookup via the user token (cached), anonymous cap', async () => {
+  assert.equal(ENTITLEMENTS.day.alertRules, 5); assert.equal(ENTITLEMENTS.full.riskReport, true); assert.equal(ENTITLEMENTS.retail.riskReport, false); assert.equal(coercePlan('gold'), 'retail');
+  let hit = 0; const f = (async (u: string, i: RequestInit) => { hit++; assert.match(u, /profiles\?id=eq\.u9&select=plan/); assert.equal((i.headers as Record<string, string>).Authorization, 'Bearer tok'); return new Response(JSON.stringify([{ plan: 'day' }])); }) as unknown as typeof fetch;
+  process.env.NEXT_PUBLIC_SUPABASE_URL = 'http://sb.test'; assert.equal(await fetchPlan('tok', 'u9', f), 'day'); assert.equal(await fetchPlan('tok', 'u9', f), 'day'); assert.equal(hit, 1);
+  assert.equal(await fetchPlan('tok', 'u10', (async () => { throw new Error('x'); }) as unknown as typeof fetch), 'retail'); delete process.env.NEXT_PUBLIC_SUPABASE_URL;
+});
+t('Week 8 P1 · risk report: limits + stress tests from priced holdings, breach wording, unpriced symbols listed, circuit excluded', () => {
+  const rep = buildRiskReport([{ symbol: 'HDFCBANK', qty: 100, sector: 'Banking' }, { symbol: 'TCS', qty: 10, sector: 'IT' }, { symbol: 'GHOST', qty: 5 }], new Map([['HDFCBANK', 1600], ['TCS', 4000]]), { stock: 50, sector: 60, hhi: 5000, circuit: 20 }, new Date('2026-10-28T05:00:00Z'))!;
+  assert.deepEqual(rep.missing, ['GHOST']); assert.equal(Math.round(rep.total), 200000); assert.ok(!rep.rows.some((r) => r.id === 'circuit'));
+  assert.equal(rep.breaches.length, 3); assert.match(rep.subject, /3 limit breaches/); assert.match(rep.text, /BREACH\s+Largest single stock: 80\.0%/); assert.equal(rep.scenarios.length, 6);
+  assert.ok(rep.scenarios.find((s) => s.id === 'crash10')!.delta < 0); assert.match(rep.html, /Stress tests/);
+  assert.equal(buildRiskReport([{ symbol: 'X', qty: 1 }], new Map(), null), null);
+  assert.match(buildRiskReport([{ symbol: 'A', qty: 1, sector: 'IT' }, { symbol: 'B', qty: 1, sector: 'Banking' }, { symbol: 'C', qty: 1, sector: 'FMCG' }], new Map([['A', 100], ['B', 100], ['C', 100]]), { stock: 90, sector: 90, hhi: 9000, circuit: 20 })!.subject, /all limits OK/);
+});
+t('Week 8 P1 · AI governance: SHA-256 of the exact text, data classes actually used', async () => {
+  assert.equal(await sha256Hex('abc'), 'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad');
+  assert.deepEqual(dataUsed({ price: { ltp: 1 } as never, simulated: false, ratios: { pe: 20 } as never, technicals: { rsi: 55, sma50: null } as never }), ['live price', 'fundamentals', 'technicals', 'news headlines']);
+  assert.deepEqual(dataUsed(null, false), []); assert.match(PROMPT_VERSION, /^copilot-/);
+});
+t('Week 8 P1 · cloud: sign-off / export / risk-settings request shapes', async () => {
+  const calls: { url: string; body: unknown }[] = []; const f = (async (u: string, i: RequestInit) => { calls.push({ url: u, body: i.body ? JSON.parse(String(i.body)) : null }); return new Response(JSON.stringify(u.includes('sign_off') ? 'sid' : u.includes('preferences?user_id') ? [{ risk_limits: { stock: 25 }, risk_report: true }] : { ok: 1 })); }) as unknown as typeof fetch;
+  const c = createCloud({ url: 'http://sb', anonKey: 'k', getToken: async () => 't', fetch: f });
+  assert.equal(await c.signOffAi({ kind: 'copilot', symbol: 'TCS', model: 'gemini', promptVersion: 'v1', dataUsed: ['live price'], outputHash: 'a'.repeat(64), decision: 'rejected', note: 'wrong' }), 'sid');
+  assert.deepEqual(calls[0].body, { p_kind: 'copilot', p_symbol: 'TCS', p_model: 'gemini', p_prompt_version: 'v1', p_data_used: ['live price'], p_output_hash: 'a'.repeat(64), p_decision: 'rejected', p_note: 'wrong' });
+  await c.exportMyData(); assert.match(calls[1].url, /rpc\/export_my_data$/);
+  assert.deepEqual(await c.loadRiskSettings('u1'), { limits: { stock: 25 }, report: true });
+  await c.saveRiskSettings('u1', { report: false }); const last = calls[calls.length - 1]; assert.ok((last.body as { risk_report: boolean }[])[0].risk_report === false && !('risk_limits' in (last.body as object[])[0]));
+});
+t('Week 8 P1 · security headers: CSP allow-lists SmartAPI + Supabase, forbids framing / objects / foreign scripts', async () => {
+  const cfg = '../next.config.mjs'; const { csp } = (await import(cfg)) as { csp: () => string }; process.env.NEXT_PUBLIC_SUPABASE_URL = 'https://abc.supabase.co'; const v = csp(); // (tests run concurrently: set + read in the same tick)
+  assert.match(v, /default-src 'self'/); assert.match(v, /connect-src[^;]*wss:\/\/smartapisocket\.angelone\.in/); assert.match(v, /connect-src[^;]*https:\/\/abc\.supabase\.co/);
+  assert.match(v, /frame-ancestors 'none'/); assert.match(v, /object-src 'none'/); assert.ok(!/script-src[^;]*https:/.test(v)); delete process.env.NEXT_PUBLIC_SUPABASE_URL;
 });
 
 void Promise.all(pending).then(() => {

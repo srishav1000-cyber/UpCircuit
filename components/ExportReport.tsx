@@ -1,5 +1,6 @@
 'use client';
 
+import { apiFetch } from '@/lib/authBus';
 import { audit } from '@/lib/auditBus';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
@@ -106,7 +107,7 @@ export function ExportReport({ symbol, engine, holdings = [], mode = 'delayed', 
     try {
       const ac = new AbortController();
       const t = setTimeout(() => ac.abort(), 40_000);
-      const res = await fetch('/api/ask', { method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: ac.signal, body: JSON.stringify({ question: ANALYST_PROMPT(symbol, quote.name), history: [], context: buildAskContext(engine, holdings, symbol, mode) }) });
+      const res = await apiFetch('/api/ask', { method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: ac.signal, body: JSON.stringify({ question: ANALYST_PROMPT(symbol, quote.name), history: [], context: buildAskContext(engine, holdings, symbol, mode) }) });
       clearTimeout(t);
       const d = (await res.json().catch(() => ({}))) as Partial<CopilotAnswer>;
       if (res.ok && d.answer) ai = { text: d.answer, source: d.source === 'gemini' || d.source === 'cache' ? 'Gemini AI' : 'Local rules engine' };

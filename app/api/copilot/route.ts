@@ -1,7 +1,9 @@
-import { callGemini, geminiConfigured } from '@/lib/gemini';
+import { geminiModel, callGemini, geminiConfigured } from '@/lib/gemini';
 import { finishAnswer } from '@/lib/followups';
 import { getNews } from '@/lib/news';
 import { MAX_QUESTION, SYSTEM_PROMPT, answerLocally, buildPrompt, normalizeContext, relevantHeadlines, type CopilotAnswer } from '@/lib/copilot';
+import { PROMPT_VERSION } from '@/lib/aiGovernance';
+import { enforceAiQuota } from '@/lib/entitlements';
 import { TtlCache, allow } from '@/lib/ttlCache';
 
 // Edge-compatible: fetch only.
@@ -25,6 +27,8 @@ const json = (body: unknown, status = 200) => Response.json(body, { status, head
 export async function POST(req: Request) {
   const ip = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'anon';
   if (!allow('copilot:' + ip, 20, 60_000)) return json({ error: 'Too many questions — please wait a minute.' }, 429);
+  const quota = await enforceAiQuota(req);
+  if (quota) return quota;
 
   let body: { question?: unknown; context?: unknown };
   try {
@@ -56,14 +60,14 @@ export async function POST(req: Request) {
   if (geminiConfigured()) {
     const g = await callGemini({ system: SYSTEM_PROMPT, prompt: buildPrompt(question, ctx, items), maxTokens: 2048 });
     if (g.ok) {
-      answer = { answer: finishAnswer(g.text, g.truncated).answer, source: 'gemini' };
+      answer = { answer: finishAnswer(g.text, g.truncated).answer, source: 'gemini', model: geminiModel(), promptVersion: PROMPT_VERSION };
       cache.set(key, answer);
       return json(answer);
     }
     reason = g.detail ? `${g.reason} (${g.detail})` : g.reason;
   } else reason = 'no_key';
 
-  answer = { answer: answerLocally(question, ctx, news.items), source: 'local', fallbackReason: reason };
+  answer = { answer: answerLocally(question, ctx, news.items), source: 'local', fallbackReason: reason, model: 'local-rules-engine', promptVersion: PROMPT_VERSION };
   // never pin a local answer for 5 min after a transient Gemini failure — the next ask should retry Gemini
   if (reason?.startsWith('quota')) cache.set(key, answer);
   return json(answer);

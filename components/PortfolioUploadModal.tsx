@@ -1,5 +1,6 @@
 'use client';
 
+import { apiFetch } from '@/lib/authBus';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { MarketEngine, FeedMode } from '@/lib/market';
 import type { Holding, Instrument } from '@/lib/types';
@@ -204,7 +205,7 @@ export function PortfolioUploadModal({ instruments, engine, mode, onImport, onRe
     setAi({ loading: true });
     try {
       const ctx = buildAskContext(engine, validRows.map((r) => ({ symbol: r.symbol, qty: r.qty, avg: r.avg })), null, mode);
-      const res = await fetch('/api/ask', {
+      const res = await apiFetch('/api/ask', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ question: 'Diagnose this portfolio: asset concentration risk, diversification, sector exposure and rebalancing guidelines.', context: ctx }),

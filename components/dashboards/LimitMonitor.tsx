@@ -7,6 +7,10 @@ import { DEFAULT_LIMITS, evaluateLimits, logBreaches, sanitiseLimits, type Breac
 import { scoped } from '@/lib/scope';
 import type { MarketEngine } from '@/lib/market';
 import type { Holding } from '@/lib/types';
+import { useCloud } from '@/hooks/useCloud';
+import { useAuth } from '@/hooks/useAuth';
+import { audit } from '@/lib/auditBus';
+import { ENTITLEMENTS, coercePlan } from '@/lib/entitlements-shared';
 
 const LIM_KEY = 'upcircuit:limits:v1';
 const LOG_KEY = 'upcircuit:breachlog:v1';
@@ -21,7 +25,19 @@ const write = (k: string, v: unknown) => { try { localStorage.setItem(scoped(k),
 export function LimitMonitor({ engine, holdings, className = '' }: { engine: MarketEngine; holdings: Holding[]; className?: string }) {
   const [limits, setLimits] = useState<Limits>(DEFAULT_LIMITS);
   const [log, setLog] = useState<BreachEntry[]>([]);
+  const { cloud, userId } = useCloud();
+  const { user } = useAuth();
+  const [report, setReport] = useState(false);
+  const [saveErr, setSaveErr] = useState('');
+  const mayReport = ENTITLEMENTS[coercePlan(user?.plan)].riskReport;
   useEffect(() => { setLimits(sanitiseLimits(read(LIM_KEY, null))); setLog(read<BreachEntry[]>(LOG_KEY, [])); }, []);
+  // limits follow the account across devices (and are what the scheduled report uses)
+  useEffect(() => {
+    if (!cloud || !userId) return;
+    let live = true;
+    cloud.loadRiskSettings(userId).then((r) => { if (!live) return; if (r.limits) { const l = sanitiseLimits(r.limits); setLimits(l); write(LIM_KEY, l); } setReport(r.report); }).catch(() => undefined);
+    return () => { live = false; };
+  }, [cloud, userId]);
 
   const positions = holdings.map((h) => {
     const q = engine.quotes.get(h.symbol);
@@ -38,13 +54,15 @@ export function LimitMonitor({ engine, holdings, className = '' }: { engine: Mar
       const r = logBreaches(cur, rows, Date.now(), day);
       if (r.added.length === 0) return cur;
       write(LOG_KEY, r.log);
+      // governance: every new breach reaches the audit trail (once per rule per day, like the browser log)
+      r.added.forEach((b) => audit({ action: 'risk.breach', entity: 'limit', entity_id: b.id, meta: { actual: Math.round(b.actual * 100) / 100, limit: b.limit } }));
       return r.log;
     });
   }, [rows]);
 
   const setLimit = (id: LimitId, v: string) => {
     const n = Number(v);
-    setLimits((cur) => { const next = sanitiseLimits({ ...cur, [id]: n }); write(LIM_KEY, next); return next; });
+    setLimits((cur) => { const next = sanitiseLimits({ ...cur, [id]: n }); write(LIM_KEY, next); if (cloud && userId) cloud.saveRiskSettings(userId, { limits: next }).then(() => setSaveErr(''), () => setSaveErr('Could not sync limits to your account.')); return next; });
   };
   const breaches = rows?.filter((r) => r.status === 'breach').length ?? 0;
   return (
@@ -75,6 +93,13 @@ export function LimitMonitor({ engine, holdings, className = '' }: { engine: Mar
                 </ul>
               )}
             </div>
+            {cloud && userId && (
+              <label className="mt-2 flex items-center gap-2 text-[11px] text-muted" title={mayReport ? '' : 'Scheduled risk reports are part of the Full Access plan'}>
+                <input type="checkbox" data-testid="risk-report-toggle" checked={report} disabled={!mayReport} onChange={(e) => { const on = e.target.checked; setReport(on); cloud.saveRiskSettings(userId, { report: on }).catch(() => { setReport(!on); setSaveErr('Could not save the report setting.'); }); }} />
+                E-mail me a daily risk report (limits + stress tests){!mayReport && <span className="text-warn"> · Full Access plan</span>}
+              </label>
+            )}
+            {saveErr && <p role="alert" className="mt-1 text-[11px] text-down">{saveErr}</p>}
             <p className="mt-2 text-[10px] text-muted">BREACH = above the limit · NEAR = at or above 90 % of it. Circuit exposure = share of portfolio value in holdings locked at, or within {NEAR_PCT}% of, a price limit. Limits and the log live in this browser only; one log row per rule per day.</p>
           </>
         )}
