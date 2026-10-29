@@ -87,7 +87,7 @@ export function CircuitLogDrawer({ open, onClose, history, near, nameOf, onAnaly
         <div role="tablist" aria-label="Anomaly categories" className="flex flex-wrap gap-1.5 border-b border-slate-800 px-4 py-2">
           {HISTORY_TABS.map((t) => (
             <button key={t.id} role="tab" aria-selected={tab === t.id} onClick={() => setTab(t.id)} data-testid={`circuit-tab-${t.id}`} className={`rounded-full border px-2.5 py-1 text-[11px] font-semibold ${tab === t.id ? 'border-accent bg-accent/15 text-accent' : 'border-slate-700 text-slate-400 hover:text-white'}`}>
-              {t.label} <span className="num ml-0.5 text-[10px] opacity-70">{count(t.id)}</span>
+              {t.label} <span className="num ml-0.5 text-[10px] opacity-90">{count(t.id)}</span>
             </button>
           ))}
         </div>

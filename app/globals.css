@@ -9,7 +9,7 @@
   --c-panel: 21 25 36;
   --c-line: 30 34 45;
   --c-ink: 209 212 220;
-  --c-muted: 120 123 134;
+  --c-muted: 145 149 162; /* a11y: ≥4.5:1 on panel (was 120 123 134 = 4.1:1) */
   --c-up: 38 166 154;
   --c-down: 239 83 80;
   --c-accent: 41 98 255;
@@ -29,6 +29,12 @@
   --c-warn: 217 119 6;
   color-scheme: light;
 }
+
+/* a11y: the brand blue is 3.6:1 as TEXT on dark panels — use a lighter tint for text only (fills unchanged) */
+html:not(.light) .text-accent { color: rgb(116 156 255); }
+
+/* a11y: small tinted chips (bg-down/15) need a lighter red for text on dark */
+html:not(.light) .text-down[class*="bg-down/"] { color: rgb(255 138 128); }
 
 html,
 body {

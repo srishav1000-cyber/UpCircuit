@@ -97,7 +97,7 @@ export function WatchlistDrawer({ open, onClose, instruments, engine, lists, act
 
         {/* named watchlist tabs */}
         <div className="relative border-b border-line" data-testid="wl-tabbar">
-          <div className="flex items-stretch overflow-x-auto px-2" role="tablist" aria-label="Watchlists">
+          <div className="flex items-stretch overflow-x-auto px-2" role="group" aria-label="Watchlists">
             {lists.map((l) => {
               const on = l.id === active.id;
               if (on && mode === 'rename')
@@ -107,8 +107,7 @@ export function WatchlistDrawer({ open, onClose, instruments, engine, lists, act
               return (
                 <div key={l.id} className={`flex shrink-0 items-center border-b-2 ${on ? 'border-accent' : 'border-transparent'}`}>
                   <button
-                    role="tab"
-                    aria-selected={on}
+                    aria-pressed={on}
                     data-testid="wl-tab"
                     data-id={l.id}
                     onClick={() => onSelect(l.id)}

@@ -77,7 +77,7 @@ export function ProfilePopover({ mode, conn, liveReason, onPlans }: { mode: Feed
 
   return (
     <div ref={ref} className="relative">
-      <button onClick={() => setOpen((o) => !o)} aria-haspopup="menu" aria-expanded={open} aria-label="Account menu" data-testid="account-menu" className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-full bg-accent/20 text-[12px] font-bold text-accent ring-1 ring-accent/50 hover:bg-accent/30">
+      <button onClick={() => setOpen((o) => !o)} aria-haspopup="menu" aria-expanded={open} aria-label={user?.avatar ? 'Account menu' : `${initials} account menu`} data-testid="account-menu" className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-full bg-accent/20 text-[12px] font-bold text-accent ring-1 ring-accent/50 hover:bg-accent/30">
         {user?.avatar ? (
           // eslint-disable-next-line @next/next/no-img-element
           <img src={user.avatar} alt="" referrerPolicy="no-referrer" className="h-full w-full object-cover" />

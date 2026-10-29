@@ -71,7 +71,6 @@ export function MyFocusBasket({ persona, engine, focus, candidates, instruments,
                 role="button"
                 tabIndex={0}
                 aria-pressed={selected === s}
-                aria-label={`Select ${s}`}
                 onClick={() => onSelect(s)}
                 onKeyDown={(e) => { if ((e.key === 'Enter' || e.key === ' ') && e.target === e.currentTarget) { e.preventDefault(); onSelect(s); } }}
                 data-testid={`focus-${s}`}

@@ -225,8 +225,8 @@ export function RetailDashboard({ engine, quote, closes1D, holdings, favorites, 
           <div className="grid grid-cols-3 gap-1.5 sm:grid-cols-4">
             {rows.map((r) => (
               <button key={r.h.symbol} onClick={() => onSelect(r.h.symbol)} className="rounded px-2 py-1.5 text-left" style={{ background: rsiTint(r.rsi) }} title={`${r.h.symbol} RSI(14) ${r.rsi?.toFixed(1) ?? '—'}`}>
-                <div className="truncate text-[10px] font-semibold text-ink">{r.h.symbol}</div>
-                <div className={`num text-[14px] font-bold ${r.rsi === null ? 'text-muted' : r.rsi >= 70 ? 'text-down' : r.rsi <= 30 ? 'text-up' : 'text-ink'}`}>{r.rsi === null ? '—' : r.rsi.toFixed(0)}</div>
+                <div className={`truncate text-[10px] font-semibold ${r.rsi !== null && (r.rsi >= 70 || r.rsi <= 30) ? 'text-white' : 'text-ink'}`}>{r.h.symbol}</div>
+                <div className={`num text-[14px] font-bold ${r.rsi === null ? 'text-muted' : r.rsi >= 70 || r.rsi <= 30 ? 'text-white' : 'text-ink'}`}>{r.rsi === null ? '—' : r.rsi.toFixed(0)}</div>
               </button>
             ))}
           </div>

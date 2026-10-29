@@ -5,7 +5,7 @@ import { fmt, fmtPct, fmtSigned, tone } from '@/lib/format';
 export function IndexCard({ ix, onOpen }: { ix: IndexQuote; onOpen?: (id: string) => void }) {
   const dir = ix.pct > 0 ? '▲' : ix.pct < 0 ? '▼' : '■';
   return (
-    <button type="button" onClick={() => onOpen?.(ix.id)} aria-label={`Open ${ix.label} chart`} className="flex min-w-[148px] shrink-0 flex-col justify-center border-r border-line px-3 py-1 text-left last:border-r-0 hover:bg-line/40">
+    <button type="button" onClick={() => onOpen?.(ix.id)} title={`Open ${ix.label} chart`} className="flex min-w-[148px] shrink-0 flex-col justify-center border-r border-line px-3 py-1 text-left last:border-r-0 hover:bg-line/40">
       <div className="flex items-center gap-1.5">
         <span className="text-[10px] font-semibold uppercase tracking-wider text-muted">{ix.label}</span>
         <span className={`text-[8px] ${tone(ix.pct)}`}>{dir}</span>

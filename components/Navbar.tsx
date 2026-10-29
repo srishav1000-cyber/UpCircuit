@@ -59,6 +59,8 @@ interface Props {
   onAsk: () => void;
   /** show the Compliance tab (Supabase accounts) */
   showCompliance?: boolean;
+  /** opens the Ctrl/Cmd+K command palette */
+  onPalette?: () => void;
 }
 
 export function FeedBadge({ mode, className = '' }: { mode: FeedMode; className?: string }) {
@@ -197,7 +199,7 @@ function StatusPill({ mode, conn, liveReason }: { mode: FeedMode; conn: FeedConn
         aria-haspopup="dialog"
         aria-expanded={open}
         data-testid="status-pill"
-        aria-label={`Connections: AI ${ai.label}; market feed ${feed.label}`}
+        title={`Connections: AI ${ai.label}; market feed ${feed.label}`}
         className="flex items-center gap-2.5 px-2.5 text-[10px] font-semibold text-muted hover:bg-line md:text-[11px]"
       >
         <span className="flex items-center gap-1" data-testid="status-ai" data-health={ai.health}>
@@ -345,12 +347,14 @@ function AvatarMenu({ mode, conn, liveReason, onPlans }: { mode: FeedMode; conn:
 }
 
 
-export function Navbar({ view, onView, persona, onPersona, onPlans, audioOn = true, onToggleAudio, circuitCount = 0, onOpenCircuitLog, demo, indices, instruments, onSelect, onOpenIndex, symbol, watchlisted, activeAlerts, onDeepResearch, onToggleWatchlist, onSetAlert, searchRef, mode, liveReason, conn, onOpenWatchlist, priceOf, onOpenImport, onAsk, showCompliance = false }: Props) {
+export function Navbar({ view, onView, persona, onPersona, onPlans, audioOn = true, onToggleAudio, circuitCount = 0, onOpenCircuitLog, demo, indices, instruments, onSelect, onOpenIndex, symbol, watchlisted, activeAlerts, onDeepResearch, onToggleWatchlist, onSetAlert, searchRef, mode, liveReason, conn, onOpenWatchlist, priceOf, onOpenImport, onAsk, showCompliance = false, onPalette }: Props) {
   const actionProps = { symbol, watchlisted, activeAlerts, onDeepResearch, onToggleWatchlist, onSetAlert, onOpenWatchlist };
   return (
     <header className="relative">
       <div className="flex h-[52px] items-center gap-2 border-b border-line bg-panel px-3 md:gap-3">
         <Logo />
+
+        {onPalette && <button onClick={onPalette} data-testid="palette-trigger" title="Open command palette (Ctrl/⌘ K)" className="hidden h-8 shrink-0 items-center gap-1 rounded-md border border-line px-2 text-[11px] font-semibold text-muted hover:bg-line hover:text-ink lg:flex">⌘K</button>}
 
         <nav className="flex shrink-0 items-center gap-0.5" aria-label="Primary">
           {((showCompliance ? ['home', 'terminal', 'compliance'] : ['home', 'terminal']) as View[]).map((v) => (

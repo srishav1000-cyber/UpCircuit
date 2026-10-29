@@ -14,7 +14,7 @@ function Row({ label, z, recent, base, unit, testid }: { label: string; z: { z: 
         <span className="text-[10px] font-medium uppercase tracking-wider text-muted">{label}</span>
         {z ? <span className={`num text-[12px] font-semibold ${lvlTone(z.z)}`}>z = {z.z >= 0 ? '+' : '−'}{Math.abs(z.z).toFixed(2)} · {SURGE_LABEL[surgeLevel(z.z)]}</span> : <span className="text-[11px] text-muted">warming up / N/A</span>}
       </div>
-      <div className="relative mt-1.5 h-2 rounded-full bg-gradient-to-r from-line via-muted/30 to-down/60" role="meter" aria-valuemin={-4} aria-valuemax={4} aria-valuenow={z ? Number(z.z.toFixed(2)) : undefined} aria-label={label}>
+      <div className="relative mt-1.5 h-2 rounded-full bg-gradient-to-r from-line via-muted/30 to-down/60" role={z ? 'meter' : 'img'} aria-valuemin={z ? -4 : undefined} aria-valuemax={z ? 4 : undefined} aria-valuenow={z ? Number(z.z.toFixed(2)) : undefined} aria-label={label}>
         <span className="absolute left-1/2 top-0 h-full w-px bg-muted/50" />
         {z && <span className="absolute top-1/2 h-4 w-1.5 -translate-x-1/2 -translate-y-1/2 rounded-sm bg-ink ring-2 ring-panel" style={{ left: `${pos}%` }} />}
       </div>

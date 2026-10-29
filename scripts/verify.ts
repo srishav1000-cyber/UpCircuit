@@ -44,6 +44,9 @@ import { buildRiskReport } from '../lib/riskReport';
 import { sha256Hex, dataUsed, PROMPT_VERSION } from '../lib/aiGovernance';
 import { openingRange } from '../lib/analytics/orb';
 import { bucketTrades, surgeZ, surgeLevel } from '../lib/analytics/velocity';
+import { rank as paletteRank } from '../lib/palette';
+import { sanitizeLayouts, upsertLayout, removeLayout, cleanName, MAX_LAYOUTS, type Layout } from '../lib/layouts';
+import { backtest } from '../lib/backtest';
 import { planPosition } from '../lib/analytics/positionSize';
 import { estimateSlippage } from '../lib/analytics/slippage';
 import { quartileRanks, peerStat, ownPriceStat } from '../lib/analytics/peers';
@@ -1518,7 +1521,7 @@ t('rbac: permission map per role, tab visibility, unknown role → analyst', () 
   assert.equal(can('viewer', 'register.view'), false); assert.equal(can('analyst', 'register.view'), true); assert.equal(can('analyst', 'register.review'), false);
   assert.equal(can('risk', 'register.review'), true); assert.equal(can('risk', 'register.close_escalated'), false); assert.equal(can('compliance', 'register.close_escalated'), true);
   assert.equal(can('compliance', 'users.manage'), false); assert.equal(can('admin', 'users.manage'), true); assert.equal(can(null, 'rules.manage'), false);
-  assert.deepEqual(opsTabs('viewer'), ['rules']); assert.deepEqual(opsTabs('analyst'), ['register', 'rules']); assert.deepEqual(opsTabs('admin'), ['register', 'rules', 'audit', 'ai', 'users']);
+  assert.deepEqual(opsTabs('viewer'), ['rules']); assert.deepEqual(opsTabs('analyst'), ['register', 'rules', 'backtest']); assert.deepEqual(opsTabs('admin'), ['register', 'rules', 'backtest', 'audit', 'ai', 'users']);
   assert.equal(coerceAppRole('root'), 'analyst'); assert.equal(coerceAppRole('admin'), 'admin'); assert.equal(APP_ROLES.length, 5);
   assert.deepEqual(reviewActions('risk', { status: 'open' }), ['acknowledge', 'escalate', 'close']); assert.deepEqual(reviewActions('risk', { status: 'escalated' }), []);
   assert.deepEqual(reviewActions('compliance', { status: 'escalated' }), ['close']); assert.deepEqual(reviewActions('admin', { status: 'closed' }), []); assert.deepEqual(reviewActions('analyst', { status: 'open' }), []);
@@ -1636,6 +1639,30 @@ t('Week 8 P1 · security headers: CSP allow-lists SmartAPI + Supabase, forbids f
   const cfg = '../next.config.mjs'; const { csp } = (await import(cfg)) as { csp: () => string }; process.env.NEXT_PUBLIC_SUPABASE_URL = 'https://abc.supabase.co'; const v = csp(); // (tests run concurrently: set + read in the same tick)
   assert.match(v, /default-src 'self'/); assert.match(v, /connect-src[^;]*wss:\/\/smartapisocket\.angelone\.in/); assert.match(v, /connect-src[^;]*https:\/\/abc\.supabase\.co/);
   assert.match(v, /frame-ancestors 'none'/); assert.match(v, /object-src 'none'/); assert.ok(!/script-src[^;]*https:/.test(v)); delete process.env.NEXT_PUBLIC_SUPABASE_URL;
+});
+
+t('Week 8 P2 · command palette ranks exact/prefix above fuzzy and drops non-matches', () => {
+  const mk = (id: string, label: string) => ({ id, label, group: 'Go to' as const, run: () => {} });
+  const cmds = [mk('a', 'Open watchlist'), mk('b', 'Go to Terminal'), mk('c', 'Switch lens: Risk')];
+  assert.equal(paletteRank(cmds, 'term')[0].id, 'b'); assert.equal(paletteRank(cmds, 'zzzz').length, 0); assert.equal(paletteRank(cmds, '').length, 3);
+});
+t('Week 8 P2 · saved layouts: sanitize, upsert (case-insensitive), remove, cap', () => {
+  assert.equal(cleanName('  <b>Morning</b>\n '), 'bMorning/b'); // angle brackets/control chars stripped, trimmed
+  const good: Layout = { name: 'Desk', view: 'terminal', persona: 'day' as Layout['persona'], density: 'compact' };
+  assert.deepEqual(sanitizeLayouts([good, { name: '', view: 'x' }, 7, null]).map((l) => l.name), ['Desk']);
+  assert.equal(sanitizeLayouts('junk').length, 0);
+  let l = upsertLayout([], good); l = upsertLayout(l, { ...good, name: 'desk', density: 'comfortable' }); assert.equal(l.length, 1); assert.equal(l[0].density, 'comfortable');
+  for (let i = 0; i < 15; i++) l = upsertLayout(l, { ...good, name: `L${i}` }); assert.ok(l.length <= MAX_LAYOUTS);
+  assert.equal(removeLayout([good], 'DESK').length, 0);
+});
+t('Week 8 P2 · backtest: counts signals/hits against next day, N/A + not-enough when thin', () => {
+  const c = (close: number, high = close, low = close) => ({ time: 0, open: close, high, low, close, volume: 1 });
+  // day0 100, day1 109.2 (+9.2% → 10% band, 0.8% below limit 110) = signal; day2 touches ≥ 109.2*1.0995
+  const hit = [c(100), c(109.2), c(109.2, 120.5, 109)], miss = [c(100), c(109.2), c(109.2, 110, 109)];
+  const r1 = backtest({ A: hit }), r2 = backtest({ A: miss });
+  const b = (r: ReturnType<typeof backtest>) => r.byBand.find((x) => x.band === 10)!;
+  assert.equal(b(r1).signals, 1); assert.equal(b(r1).hits, 1); assert.equal(b(r2).signals, 1); assert.equal(b(r2).hits, 0);
+  assert.equal(r1.enough, false); const e = backtest({}); assert.equal(e.precision, null); assert.equal(e.lift, null); assert.equal(e.signals, 0);
 });
 
 void Promise.all(pending).then(() => {

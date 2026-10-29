@@ -148,7 +148,7 @@ export function HomePage({ engine, news, newsError, onOpenStock, instruments, on
                 aria-pressed={cap === c}
                 className={`rounded-full border px-3 py-1 text-[12px] font-semibold ${cap === c ? 'border-accent bg-accent/15 text-accent' : 'border-line text-muted hover:text-ink'}`}
               >
-                {c === 'All' ? 'All' : `${c} cap`} <span className="num ml-0.5 text-[10px] opacity-70">{counts[c]}</span>
+                {c === 'All' ? 'All' : `${c} cap`} <span className="num ml-0.5 text-[10px] opacity-90">{counts[c]}</span>
               </button>
             ))}
           </div>

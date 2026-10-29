@@ -178,4 +178,35 @@ select t.ok((select count(*) from public.portfolios where user_id = '00000000-00
 select t.ok((select count(*) from public.audit_log where action = 'account.delete') = 1, 'erasure itself is audited (retained)');
 select t.become(:bob); select t.ok((select count(*) from public.portfolios) = 0 and (select count(*) from public.alert_rules) = 5, 'other users untouched'); select t.back();
 
+
+/* ── P2: event log, consumer offsets, replay ── */
+select t.ok((select count(*) from public.event_log where topic = 'circuit.detected') = 3, 'register trigger published one event per new circuit event (dupes ignored)');
+select t.ok(t.try('select * from public.event_log', :bob) <> '', 'authenticated cannot read the raw event log');
+select t.ok(t.try('select * from public.event_poll(''c'', ''circuit.detected'')', :bob) <> '', 'authenticated cannot poll');
+select t.ok(t.try('select public.event_publish(''x.y'', null, ''{}''::jsonb)', :dave) <> '', 'authenticated cannot publish');
+select t.ok(t.try('select * from public.event_log', null, 'anon') <> '', 'anon cannot read the log');
+select t.become(null, 'service_role');
+select t.ok(public.event_lag('circuit-stats', 'circuit.detected') = 3, 'lag = 3 before consuming');
+create temp table n0 as select public.consume_circuit_stats() as n;
+select t.ok((select n from n0) = 3, 'consumer folds 3 events');
+select t.ok((select sum(events) from public.circuit_daily_stats) = 3 and public.event_lag('circuit-stats', 'circuit.detected') = 0, 'stats built, lag 0');
+create temp table n2 as select public.consume_circuit_stats() as n;
+select t.ok((select n from n2) = 0, 'second run consumes nothing (offset committed)');
+select public.register_circuit_event('INFY', 'UPPER', 10, 1650, 1500, 'smartapi');
+select t.ok(public.event_lag('circuit-stats', 'circuit.detected') = 1, 'new event → lag 1');
+do $$ begin perform public.consume_circuit_stats(); raise exception 'simulated crash after the batch'; exception when others then null; end $$;
+select t.ok(public.event_lag('circuit-stats', 'circuit.detected') = 1 and (select sum(events) from public.circuit_daily_stats) = 3, 'a crash mid-batch rolls back stats AND offset together (no double count)');
+create temp table n1 as select public.consume_circuit_stats() as n;
+select t.ok((select n from n1) = 1 and (select sum(events) from public.circuit_daily_stats) = 4, 'retry applies it exactly once');
+create temp table before_replay as select trade_date, direction, events, symbols from public.circuit_daily_stats;
+select public.replay_circuit_stats();
+select t.ok((select count(*) from public.circuit_daily_stats) = 0 and public.event_lag('circuit-stats', 'circuit.detected') = 4, 'replay wipes the view and rewinds to offset 0');
+select public.consume_circuit_stats(p_batch := 2); select public.consume_circuit_stats(p_batch := 2);
+select t.ok(not exists (select 1 from (select * from before_replay except select trade_date, direction, events, symbols from public.circuit_daily_stats) x) and not exists (select 1 from (select trade_date, direction, events, symbols from public.circuit_daily_stats except select * from before_replay) y), 'rebuilding from the log (in batches) reproduces identical results');
+select public.event_commit('circuit-stats', 'circuit.detected', 1);
+select t.ok(public.event_lag('circuit-stats', 'circuit.detected') = 0, 'commit never moves an offset backwards');
+select t.back();
+select t.become(:carol); select t.ok((select count(*) from public.circuit_daily_stats) >= 1, 'compliance can read the derived stats'); select t.back();
+select t.become(:eve); select t.ok((select count(*) from public.circuit_daily_stats) = 0, 'viewers cannot'); select t.back();
+
 select count(*) || ' assertions passed' as result from t.log;

@@ -235,6 +235,12 @@ export function createCloud(cfg: CloudConfig) {
     async exportMyData(): Promise<Record<string, unknown>> {
       return (await call('rpc/export_my_data', { method: 'POST', body: {} })) as Record<string, unknown>;
     },
+    async loadLayouts(userId: string): Promise<unknown> {
+      return ((await call(`preferences?${uid(userId)}&select=layouts`)) as { layouts?: unknown }[] | null)?.[0]?.layouts ?? null;
+    },
+    async saveLayouts(userId: string, layouts: unknown): Promise<void> {
+      await call('preferences?on_conflict=user_id', { method: 'POST', body: [{ user_id: userId, layouts, updated_at: new Date().toISOString() }], prefer: 'resolution=merge-duplicates,return=minimal' });
+    },
     async loadRiskSettings(userId: string): Promise<{ limits: unknown; report: boolean }> {
       const r = ((await call(`preferences?${uid(userId)}&select=risk_limits,risk_report`)) as { risk_limits?: unknown; risk_report?: boolean }[] | null)?.[0];
       return { limits: r?.risk_limits ?? null, report: !!r?.risk_report };

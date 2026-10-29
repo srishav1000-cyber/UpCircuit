@@ -58,7 +58,13 @@ import { useFullscreen } from '@/hooks/useFullscreen';
 import { usePriceAlerts } from '@/hooks/usePriceAlerts';
 import { buildAskContext } from '@/lib/ask';
 import { fmt } from '@/lib/format';
-import { personaOf, type Persona } from '@/lib/personas';
+import { PERSONAS, personaOf, type Persona } from '@/lib/personas';
+import { CommandPalette } from '@/components/CommandPalette';
+import type { Command } from '@/lib/palette';
+import { loadLayoutsLocal, removeLayout, sanitizeLayouts, saveLayoutsLocal, upsertLayout, type Layout } from '@/lib/layouts';
+import { buildIndex, searchInstruments } from '@/lib/fuzzy';
+import { setNotify } from '@/lib/notifyStore';
+import { useTheme } from 'next-themes';
 import type { Holding, Quote, Timeframe } from '@/lib/types';
 import type { DataState } from '@/hooks/useMarket';
 
@@ -134,6 +140,18 @@ function Terminal() {
   const [askOpen, setAskOpen] = useState(false);
   const [askReq, setAskReq] = useState<AskRequest | null>(null);
   const [importOpen, setImportOpen] = useState(false);
+
+  // ── command palette (Ctrl/Cmd+K) + saved layouts ──
+  const { theme, setTheme } = useTheme();
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [namePrompt, setNamePrompt] = useState<{ label: string; onSubmit: (n: string) => void } | null>(null);
+  const [layouts, setLayouts] = useState<Layout[]>([]);
+  const [layoutMsg, setLayoutMsg] = useState('');
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); setNamePrompt(null); setPaletteOpen((o) => !o); } };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
   const [alertFor, setAlertFor] = useState<string | null>(null);
   const askSeq = useRef(1);
   const searchRef = useRef<HTMLInputElement>(null);
@@ -147,6 +165,17 @@ function Terminal() {
   const { cloud, userId: cloudUser } = useCloud();
   const { role: appRole } = useRole();
   useAuditSession();
+  useEffect(() => {
+    setLayouts(loadLayoutsLocal());
+    if (!cloud || !cloudUser) return;
+    let live = true;
+    cloud.loadLayouts(cloudUser).then((r) => { const l = sanitizeLayouts(r); if (live && l.length) { setLayouts(l); saveLayoutsLocal(l); } }).catch(() => undefined);
+    return () => { live = false; };
+  }, [cloud, cloudUser]);
+  const commitLayouts = useCallback((next: Layout[]) => {
+    setLayouts(next); saveLayoutsLocal(next);
+    if (cloud && cloudUser) void cloud.saveLayouts(cloudUser, next).catch(() => undefined);
+  }, [cloud, cloudUser]);
   const audio = useAudioAlerts();
   // startup screen (Settings → Market & Layout): once per page load, only when the URL did not already pick a view / symbol
   const landed = useRef(false);
@@ -273,7 +302,7 @@ function Terminal() {
 
   useHotkeys(
     { r: () => act('r'), w: () => act('w'), f: () => act('f'), a: () => act('a'), '1': () => act('1'), '2': () => act('2'), '3': () => act('3'), '/': () => act('/'), Escape: () => act('Escape') },
-    !askOpen && !importOpen && !watchOpen && alertFor === null,
+    !askOpen && !importOpen && !watchOpen && alertFor === null && !paletteOpen,
   );
 
   useEffect(() => {
@@ -328,6 +357,33 @@ function Terminal() {
   const actions = { symbol, watchlisted: inAnyList(symbol), activeAlerts, onDeepResearch: deepResearch, onToggleWatchlist: toggleWatchlist, onSetAlert: setAlert };
   const alertTarget = alertFor ? engine.touch(alertFor) : undefined;
 
+  const searchIndex = useMemo(() => buildIndex(instruments), [instruments]);
+  const currentLayout = useCallback((name: string): Layout => ({ name, view, persona, density: getNotify().density }), [view, persona]);
+  const applyLayout = useCallback((l: Layout) => {
+    setView(l.view === 'compliance' && !cloud ? 'terminal' : l.view);
+    setPersona(l.persona);
+    setNotify({ density: l.density });
+    setLayoutMsg(`Layout “${l.name}” applied`);
+  }, [cloud, setPersona]);
+  const paletteCommands = useMemo<Command[]>(() => [
+    { id: 'go-home', group: 'Go to', label: 'Go to Discovery Hub', keywords: 'home discover', run: () => setView('home') },
+    { id: 'go-terminal', group: 'Go to', label: 'Go to Terminal', keywords: 'chart trade', run: () => setView('terminal') },
+    ...(cloud ? [{ id: 'go-compliance', group: 'Go to' as const, label: 'Go to Compliance & Surveillance', keywords: 'register audit alert rules', run: () => setView('compliance') }] : []),
+    ...PERSONAS.map((x): Command => ({ id: `lens-${x.id}`, group: 'Workspace', label: `Switch lens: ${x.label}`, hint: 'dashboard', keywords: 'persona role', run: () => { setPersona(x.id); setPanel('dashboard'); setView('terminal'); } })),
+    { id: 'ws-watch', group: 'Workspace', label: 'Open watchlist', hint: 'W', run: () => setWatchOpen(true) },
+    { id: 'ws-ask', group: 'Workspace', label: 'Ask UpCircuit AI', keywords: 'copilot question', run: () => openAsk() },
+    { id: 'ws-import', group: 'Workspace', label: 'Import portfolio', keywords: 'csv upload holdings', run: () => setImportOpen(true) },
+    { id: 'ws-theme', group: 'Workspace', label: theme === 'light' ? 'Switch to dark theme' : 'Switch to light theme', keywords: 'appearance', run: () => setTheme(theme === 'light' ? 'dark' : 'light') },
+    { id: 'ws-density', group: 'Workspace', label: getNotify().density === 'compact' ? 'Use comfortable density' : 'Use compact density', keywords: 'spacing size', run: () => setNotify({ density: getNotify().density === 'compact' ? 'comfortable' : 'compact' }) },
+    { id: 'lay-save', group: 'Layouts', label: 'Save current layout…', keywords: 'workspace arrangement', keepOpen: true, run: () => setNamePrompt({ label: 'Name this layout (e.g. Morning scan)', onSubmit: (n) => { commitLayouts(upsertLayout(layouts, currentLayout(n))); setLayoutMsg(`Layout “${n}” saved`); } }) },
+    ...layouts.flatMap((l): Command[] => [
+      { id: `lay-apply-${l.name}`, group: 'Layouts', label: `Apply layout: ${l.name}`, hint: `${l.view} · ${l.persona}`, run: () => applyLayout(l) },
+      { id: `lay-del-${l.name}`, group: 'Layouts', label: `Delete layout: ${l.name}`, run: () => { commitLayouts(removeLayout(layouts, l.name)); setLayoutMsg(`Layout “${l.name}” deleted`); } },
+    ]),
+  ], [cloud, theme, setTheme, layouts, openAsk, setPersona, commitLayouts, currentLayout, applyLayout]);
+  const paletteStocks = useCallback((q: string): Command[] => (q.trim().length < 1 ? [] : searchInstruments(searchIndex, q, 5).map((i): Command => ({ id: `stk-${i.symbol}`, group: 'Stocks', label: `Open ${i.symbol}`, hint: i.name, keywords: i.name, run: () => openStock(i.symbol) }))), [searchIndex, openStock]);
+  useEffect(() => { if (!layoutMsg) return; const t = setTimeout(() => setLayoutMsg(''), 2500); return () => clearTimeout(t); }, [layoutMsg]);
+
   if (!engine.ready) return <MarketGate state={dataState} onRetry={retryData} />;
 
   return (
@@ -338,6 +394,7 @@ function Terminal() {
           view={view}
           onView={setView}
           showCompliance={!!cloud}
+          onPalette={() => { setNamePrompt(null); setPaletteOpen(true); }}
           persona={persona}
           onPlans={() => setPlansFor('any')}
           audioOn={audio.on}
@@ -368,10 +425,12 @@ function Terminal() {
         <CircuitAlertOverlay log={circuit.log} audioOn={audio.on} />
         <CircuitLogDrawer open={logOpen} onClose={() => setLogOpen(false)} history={circuit.history} near={logOpen ? nearLimit(engine.quotes.values()) : []} nameOf={(s) => engine.master.get(s)?.name ?? engine.quotes.get(s)?.name ?? ''} onAnalyze={openStock} onClear={circuit.clearLog} synced={!!(cloud && cloudUser)} />
         {welcome && <WelcomeBanner onDismiss={dismissWelcome} />}
+        <CommandPalette open={paletteOpen} onClose={() => { setPaletteOpen(false); setNamePrompt(null); }} commands={paletteCommands} dynamic={paletteStocks} namePrompt={namePrompt} />
+        {layoutMsg && <div role="status" data-testid="layout-toast" className="fixed bottom-14 left-1/2 z-[95] -translate-x-1/2 rounded-md border border-line bg-panel px-3 py-2 text-[12px] font-semibold text-ink shadow-xl">{layoutMsg}</div>}
       </div>
 
       {view === 'compliance' ? (
-        <ComplianceWorkspace cloud={cloud} userId={cloudUser} role={appRole} onOpenStock={openStock} />
+        <ComplianceWorkspace cloud={cloud} userId={cloudUser} role={appRole} onOpenStock={openStock} backtestSymbols={circuitSymbols.slice(0, 20)} />
       ) : view === 'home' ? (
         <main className="flex-1">
           <HomePage engine={engine} news={news} newsError={newsError} onOpenStock={openStock} instruments={instruments} onOpenChart={openChart} />
