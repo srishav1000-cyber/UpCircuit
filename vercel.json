@@ -2,15 +2,7 @@
   "crons": [
     {
       "path": "/api/worker/alerts",
-      "schedule": "*/5 * * * *"
-    },
-    {
-      "path": "/api/worker/risk-report",
-      "schedule": "30 3 * * 1-5"
-    },
-    {
-      "path": "/api/worker/events",
-      "schedule": "*/10 * * * *"
+      "schedule": "0 0 * * *"
     }
   ]
 }
