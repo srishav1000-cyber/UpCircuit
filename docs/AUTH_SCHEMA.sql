@@ -5,6 +5,7 @@
 create table if not exists public.profiles (
   id        uuid primary key references auth.users(id) on delete cascade,
   email     text,
+  full_name text,
   role      text not null default 'retail' check (role in ('day','retail','institutional','executive')),
   plan      text not null default 'retail' check (plan in ('day','retail','full')),
   created_at timestamptz not null default now()
@@ -42,13 +43,16 @@ create policy "own prefs"      on public.preferences for all using (auth.uid() =
 -- Sign-up trigger: builds the profile from the metadata the app sends. The metadata is user-controlled, so a client could
 -- ask for plan='full'. For real billing, change the default below to 'retail' and ignore metadata.plan; grant paid plans from your webhook:
 --   update public.profiles set plan = 'full' where id = '<uid>';
+alter table public.profiles add column if not exists full_name text;  -- existing installs
+
 create or replace function public.handle_new_user() returns trigger language plpgsql security definer set search_path = public as $$
 declare p text := coalesce(new.raw_user_meta_data->>'plan', 'retail');
         r text := coalesce(new.raw_user_meta_data->>'role', 'retail');
+        n text := nullif(left(btrim(regexp_replace(coalesce(new.raw_user_meta_data->>'full_name', new.raw_user_meta_data->>'name', ''), '[<>[:cntrl:]]', '', 'g')), 60), '');  -- from signUp options.data.full_name
 begin
   if p not in ('day','retail','full') then p := 'retail'; end if;
   if r not in ('day','retail','institutional','executive') then r := 'retail'; end if;
-  insert into public.profiles(id, email, role, plan) values (new.id, new.email, r, p);
+  insert into public.profiles(id, email, full_name, role, plan) values (new.id, new.email, n, r, p);
   return new;
 end $$;
 drop trigger if exists on_auth_user_created on auth.users;

@@ -15,7 +15,9 @@ interface Ctx {
   /** false → NEXT_PUBLIC_AUTH_REQUIRED=false: the app opens without login (full access, shared storage) */
   required: boolean;
   backend: 'local' | 'supabase';
-  signUp: (i: { email: string; password: string; role: Role; plan: PlanId }) => Promise<AuthResult>;
+  signUp: (i: { email: string; password: string; role: Role; plan: PlanId; fullName?: string }) => Promise<AuthResult>;
+  /** Supabase: e-mail a recovery link (lands on /reset-password) */
+  resetPassword: (email: string) => Promise<{ ok: true } | { ok: false; error: string }>;
   signIn: (email: string, password: string) => Promise<AuthResult>;
   signOut: () => Promise<void>;
   /** fresh Supabase access token for server calls (null on demo accounts) */
@@ -92,6 +94,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       backend: process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ? 'supabase' : 'local',
       signUp: (i) => wrap(() => need().signUp(i)),
       signIn: (e, p) => wrap(() => need().signIn(e, p)),
+      resetPassword: async (email) => (be.current?.resetPassword ? be.current.resetPassword(email, appUrl('/reset-password')) : { ok: false as const, error: 'Password reset needs Supabase accounts — demo accounts live only in this browser.' }),
       signInWithGoogle: async (next) => {
         const b = be.current;
         if (!b?.startOAuth) return { ok: false as const, error: 'Google sign-in needs Supabase accounts — set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY.' };

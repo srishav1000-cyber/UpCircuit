@@ -1,5 +1,6 @@
 'use client';
 
+import { Minimize2, SquareTerminal } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTheme } from 'next-themes';
 import { ColorType, CrosshairMode, createChart, type IChartApi, type ISeriesApi, type UTCTimestamp } from 'lightweight-charts';
@@ -464,10 +465,10 @@ export function PriceChart({ symbol, ltp, volume, tf, onTf, className = '', live
             aria-label={max ? 'Exit full screen terminal (Esc)' : 'Open full screen terminal'}
             title={max ? 'Exit full screen terminal (Esc)' : 'Expand the chart into a full-screen terminal with drawing tools'}
             data-testid="chart-max"
-            className="absolute bottom-4 right-14 z-20 flex cursor-pointer items-center gap-1 rounded-md border border-line bg-panel/90 px-2.5 py-1 text-xs font-medium text-ink shadow-md hover:bg-line"
+            className="group absolute bottom-4 right-14 z-20 flex h-8 w-8 cursor-pointer items-center justify-center rounded-lg border border-line/80 bg-bg/60 text-muted shadow-lg shadow-black/30 ring-1 ring-white/5 backdrop-blur-md transition hover:border-accent/60 hover:bg-bg/80 hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
           >
-            <span>{max ? 'Exit' : 'Terminal'}</span>
-            <span aria-hidden className="text-[13px] leading-none">⧉</span>
+            {max ? <Minimize2 className="h-4 w-4" aria-hidden /> : <SquareTerminal className="h-4 w-4" aria-hidden />}
+            <span aria-hidden className="pointer-events-none absolute bottom-full right-0 mb-2 whitespace-nowrap rounded-md border border-line bg-panel/95 px-2 py-1 text-[11px] font-medium text-ink opacity-0 shadow-xl backdrop-blur-md transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100">{max ? 'Exit terminal' : 'Open terminal'}{max && <kbd className="ml-1 rounded border border-line px-1 text-[10px] text-muted">Esc</kbd>}</span>
           </button>
           {api && <DrawingLayer chart={api.chart} series={api.series} getBars={getBars} tool={tool} onTool={setTool} magnet={magnet} locked={locked} visible={showDrawings} drawings={drawings} setDrawings={setDrawings} />}
         </div>

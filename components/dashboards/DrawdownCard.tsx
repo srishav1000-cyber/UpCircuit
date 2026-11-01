@@ -25,7 +25,7 @@ export function DrawdownCard({ engine, holdings, className = '' }: { engine: Mar
   const y = (v: number) => (v / lo) * (H - 6) + 2;
   const eps = res ? [...res.sum.episodes].sort((a, b) => a.depthPct - b.depthPct).slice(0, 3) : [];
   return (
-    <Card title="Drawdown & recovery · 1Y" badges={['yahoo', 'computed']} className={className} right={res ? <span className="num text-[10px] text-muted">{res.dd.length} trading days</span> : undefined}>
+    <Card title="Drawdown & recovery · 1Y" badges={['baseline', 'computed']} className={className} right={res ? <span className="num text-[10px] text-muted">{res.dd.length} trading days</span> : undefined}>
       <div data-testid="drawdown-card" data-maxdd={res ? res.sum.maxPct.toFixed(2) : 'na'}>
         {!res ? (
           <p className="py-4 text-center text-[12px] text-muted" data-testid="drawdown-na">N/A — import holdings with at least 30 days of price history.</p>

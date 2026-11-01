@@ -20,7 +20,7 @@ export function VarCard({ engine, holdings, className = '' }: { engine: MarketEn
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key, engine, engine.histVer]);
   return (
-    <Card title="Value-at-Risk 95% · 1-day" badges={['yahoo', 'computed']} className={className} right={res ? <span className="num text-[10px] text-muted">{res.v.n} daily returns</span> : undefined}>
+    <Card title="Value-at-Risk 95% · 1-day" badges={['baseline', 'computed']} className={className} right={res ? <span className="num text-[10px] text-muted">{res.v.n} daily returns</span> : undefined}>
       <div data-testid="var-card" data-var={res ? res.v.varPct.toFixed(4) : 'na'}>
         {!res ? (
           <p className="py-4 text-center text-[12px] text-muted" data-testid="var-na">N/A — import holdings with at least {VAR_MIN_OBS} days of price history to estimate VaR.</p>

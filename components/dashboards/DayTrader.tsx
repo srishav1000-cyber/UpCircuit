@@ -11,6 +11,7 @@ import { liveKind } from '../DataBadge';
 import { OrbCard } from './OrbCard';
 import { SurgeMeter } from './SurgeMeter';
 import { PositionCalc } from './PositionCalc';
+import { DayTraderSkills } from './DayTraderSkills';
 import { fmt, fmtInt, fmtPct, fmtSigned, tone } from '@/lib/format';
 import type { DashboardProps } from './types';
 
@@ -26,7 +27,7 @@ const SHORTCUTS: { key: string; label: string; action: string; cls?: string }[] 
   { key: 'Esc', label: 'Close / exit full screen', action: 'Escape' },
 ];
 
-export function DayTraderDashboard({ engine, quote, mode, onAction, onSelect }: DashboardProps) {
+export function DayTraderDashboard({ engine, quote, mode, favorites, onAskAI, onAddAlert, onAction, onSelect }: DashboardProps) {
   const live = mode === 'live';
   /** Yahoo has no tick stream: the tape is its real 1-minute bars, so windows are wider and stats are per bar */
   const winMs = live ? 5 * 60_000 : 30 * 60_000;
@@ -108,6 +109,7 @@ export function DayTraderDashboard({ engine, quote, mode, onAction, onSelect }: 
       <CircuitPredictor engine={engine} onSelect={onSelect} />
       <OrbCard engine={engine} symbol={quote.symbol} />
       <SurgeMeter engine={engine} mode={mode} />
+      <DayTraderSkills quote={quote} mode={mode} favorites={favorites} onSelect={onSelect} onAskAI={onAskAI} onAddAlert={onAddAlert} className={WIDE} />
       <PositionCalc quote={quote} className={WIDE} />
 
       <Card title="VWAP bands · ±1σ / ±2σ" badges={[liveKind(mode), 'computed']} right={<span className="num text-[10px] text-muted">last {winMs / 60_000} min · {bands?.n ?? 0} {live ? 'trades' : '1-min bars'}</span>}>
@@ -116,9 +118,9 @@ export function DayTraderDashboard({ engine, quote, mode, onAction, onSelect }: 
             <BandChart price={bandPrices} vwap={bands.vwap} upper={bands.upper2} lower={bands.lower2} upper1={bands.upper1} lower1={bands.lower1} />
             <div className="num mt-1 grid grid-cols-5 gap-1 text-center text-[11px]">
               <div><div className="text-[9px] uppercase tracking-wider text-muted">+2σ</div><b className="text-down">{fmt(bands.upper2)}</b></div>
-              <div><div className="text-[9px] uppercase tracking-wider text-muted">+1σ</div><b className="text-down/80">{fmt(bands.upper1)}</b></div>
+              <div><div className="text-[9px] uppercase tracking-wider text-muted">+1σ</div><b className="text-down">{fmt(bands.upper1)}</b></div>
               <div><div className="text-[9px] uppercase tracking-wider text-muted">VWAP</div><b className="text-warn">{fmt(bands.vwap)}</b></div>
-              <div><div className="text-[9px] uppercase tracking-wider text-muted">−1σ</div><b className="text-up/80">{fmt(bands.lower1)}</b></div>
+              <div><div className="text-[9px] uppercase tracking-wider text-muted">−1σ</div><b className="text-up">{fmt(bands.lower1)}</b></div>
               <div><div className="text-[9px] uppercase tracking-wider text-muted">−2σ</div><b className="text-up">{fmt(bands.lower2)}</b></div>
             </div>
             <p className="mt-1.5 text-[10px] text-muted">
@@ -143,7 +145,7 @@ export function DayTraderDashboard({ engine, quote, mode, onAction, onSelect }: 
           <span className="num text-[12px] text-muted">{sigmaMin === null ? '' : `σ ≈ ${sigmaMin.toFixed(3)}% per minute`}</span>
         </div>
         <div className="mt-2">
-          <Meter value={Math.min(80, sig?.annualisedPct ?? 0)} max={80} zones={[{ to: 20, color: ZONE.up }, { to: 40, color: ZONE.muted }, { to: 80, color: ZONE.down }]} />
+          <Meter label="Annualised volatility" value={Math.min(80, sig?.annualisedPct ?? 0)} max={80} zones={[{ to: 20, color: ZONE.up }, { to: 40, color: ZONE.muted }, { to: 80, color: ZONE.down }]} />
           <div className="num mt-1 flex justify-between text-[10px] text-muted"><span>0</span><span>20 low</span><span>40 high</span><span>80+</span></div>
         </div>
         <p className="mt-2 text-[10px] text-muted" style={{ color: C.muted }}>{live ? 'Stdev of 250 ms log-returns over the last 60 s, annualised.' : 'Stdev of real 1-minute log-returns, annualised.'}</p>

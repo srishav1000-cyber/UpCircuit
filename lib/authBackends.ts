@@ -1,12 +1,13 @@
 import { appUrl } from './appUrl';
 import { challengeOf, newVerifier } from './pkce';
-import { PLANS, coerceRole, canUse, validateCredentials, type AuthBackend, type AuthResult, type PlanId, type Role, type User, ALL_ROLES } from './auth';
+import { PLANS, coerceRole, canUse, cleanFullName, MIN_PASSWORD, validateCredentials, type AuthBackend, type AuthResult, type PlanId, type Role, type User, ALL_ROLES } from './auth';
 
 type Store = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
 const isRole = (x: unknown): x is Role => typeof x === 'string' && (ALL_ROLES as string[]).includes(x);
 const isPlan = (x: unknown): x is PlanId => typeof x === 'string' && PLANS.some((p) => p.id === x);
 const fail = (error: string): AuthResult => ({ ok: false, error });
 const normEmail = (e: string) => e.trim().toLowerCase();
+const EMAIL_OK = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 /* ───────────── local demo backend ───────────── */
 
@@ -173,16 +174,38 @@ export function createSupabaseBackend(url: string, anonKey: string, store: Store
         return null;
       }
     },
-    async signUp({ email, password, role, plan }) {
+    async signUp({ email, password, role, plan, fullName }) {
       const bad = validateCredentials(email, password);
       if (bad) return fail(bad);
       if (!canUse(plan, role)) return fail('That role is not included in the selected plan.');
+      const name = fullName ? cleanFullName(fullName).slice(0, 60) : '';
       try {
-        const r = await f(`${base}/auth/v1/signup?redirect_to=${encodeURIComponent(appUrl('/login'))}`, { method: 'POST', headers: hdr(), body: JSON.stringify({ email: normEmail(email), password, data: { role, plan } }) });
+        // options.data.full_name → auth.users.raw_user_meta_data → public.profiles.full_name (handle_new_user trigger)
+        const r = await f(`${base}/auth/v1/signup?redirect_to=${encodeURIComponent(appUrl('/login'))}`, { method: 'POST', headers: hdr(), body: JSON.stringify({ email: normEmail(email), password, data: { role, plan, ...(name ? { full_name: name } : {}) } }) });
         if (!r.ok) return fail(await msg(r, 'Sign-up failed.'));
         return finish(await r.json());
       } catch {
         return fail('Network error — please try again.');
+      }
+    },
+    async resetPassword(email, redirectTo) {
+      if (!EMAIL_OK.test(email.trim())) return { ok: false, error: 'Enter a valid email address.' };
+      try {
+        const r = await f(`${base}/auth/v1/recover?redirect_to=${encodeURIComponent(redirectTo)}`, { method: 'POST', headers: hdr(), body: JSON.stringify({ email: normEmail(email) }) });
+        if (r.status === 429) return { ok: false, error: 'Too many requests — wait a minute and try again.' };
+        if (!r.ok && r.status >= 500) return { ok: false, error: await msg(r, 'Could not send the reset e-mail. Try again shortly.') };
+        return { ok: true }; // 200 whether or not the address exists — no account enumeration
+      } catch {
+        return { ok: false, error: 'Network error — please try again.' };
+      }
+    },
+    async updatePassword(accessToken, password) {
+      if (password.length < MIN_PASSWORD) return { ok: false, error: `Password must be at least ${MIN_PASSWORD} characters.` };
+      try {
+        const r = await f(`${base}/auth/v1/user`, { method: 'PUT', headers: hdr(accessToken), body: JSON.stringify({ password }) });
+        return r.ok ? { ok: true } : { ok: false, error: await msg(r, 'The reset link has expired — request a new one.') };
+      } catch {
+        return { ok: false, error: 'Network error — please try again.' };
       }
     },
     async signIn(email, password) {

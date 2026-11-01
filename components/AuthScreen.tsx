@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { OTP_RE, PLANS, ROLES, canUse, coerceRole, normalizeIndianMobile, planOf, validateCredentials, type PlanId, type Role } from '@/lib/auth';
+import { OTP_RE, PLANS, ROLES, canUse, cleanFullName, coerceRole, normalizeIndianMobile, planOf, validateCredentials, validateFullName, type PlanId, type Role } from '@/lib/auth';
 import { safeNext } from '@/lib/oauthCallback';
 import { useAuth } from '@/hooks/useAuth';
 import { UpCircuitLogo } from './UpCircuitLogo';
@@ -11,8 +11,11 @@ const SHORT: Record<string, string> = { institutional: 'Institutional', executiv
 
 /** Email + password login / sign-up. On sign-up the user picks a plan (Tier 1–3) and a primary role with radio buttons. */
 export function AuthScreen({ onDone }: { onDone?: () => void } = {}) {
-  const { signIn, signUp, signInWithGoogle, sendOtp, verifyOtp, backend } = useAuth();
+  const { signIn, signUp, signInWithGoogle, sendOtp, verifyOtp, resetPassword, backend } = useAuth();
   const [mode, setMode] = useState<'login' | 'signup'>('signup');
+  const [fullName, setFullName] = useState('');
+  const [forgot, setForgot] = useState(false); // "Forgot password?" sub-form on the Log In tab
+  const [info, setInfo] = useState<string | null>(null);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [plan, setPlan] = useState<PlanId>('full');
@@ -72,11 +75,22 @@ export function AuthScreen({ onDone }: { onDone?: () => void } = {}) {
       return;
     }
     setTouched(true);
+    if (forgot) {
+      if (wait > 0) return;
+      setBusy(true); setErr(null); setInfo(null);
+      const r = await resetPassword(email);
+      setBusy(false);
+      if (!r.ok) return setErr(r.error);
+      setInfo(`If an account exists for ${email.trim()}, a password-reset link is on its way. Check your inbox (and spam).`);
+      setWait(30);
+      return;
+    }
+    if (mode === 'signup') { const nb = validateFullName(fullName); if (nb) return setErr(nb); }
     const bad = validateCredentials(email, password);
     if (bad) return setErr(bad);
     setBusy(true);
     setErr(null);
-    const r = mode === 'login' ? await signIn(email, password) : await signUp({ email, password, role, plan });
+    const r = mode === 'login' ? await signIn(email, password) : await signUp({ email, password, role, plan, fullName: cleanFullName(fullName) });
     setBusy(false);
     if (!r.ok) setErr(r.error);
     else onDone?.();
@@ -103,7 +117,7 @@ export function AuthScreen({ onDone }: { onDone?: () => void } = {}) {
         </section>
 
         {/* RIGHT · form */}
-        <form onSubmit={submit} noValidate data-testid="auth-form" className="flex min-w-0 flex-col gap-3 overflow-y-auto lg:gap-4">
+        <form onSubmit={submit} noValidate data-testid="auth-form" className="flex min-w-0 flex-col gap-3 overflow-y-auto pb-20 lg:gap-4">
           <div className="md:hidden"><UpCircuitLogo size="sm" /></div>
           <button type="button" onClick={google} data-testid="auth-google" className="flex w-full items-center justify-center gap-3 rounded-lg border border-slate-700 bg-white px-4 py-3 text-sm font-semibold text-slate-900 shadow-sm transition hover:bg-slate-100 lg:text-[15px]">
             <svg width="20" height="20" viewBox="0 0 48 48" aria-hidden="true"><path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9.1 3.6l6.8-6.8C35.8 2.4 30.3 0 24 0 14.6 0 6.5 5.4 2.6 13.2l7.9 6.1C12.4 13.6 17.7 9.5 24 9.5z"/><path fill="#4285F4" d="M46.5 24.5c0-1.6-.1-3.1-.4-4.5H24v9h12.7c-.6 3-2.3 5.5-4.8 7.2l7.5 5.8c4.4-4.1 7.1-10.1 7.1-17.5z"/><path fill="#FBBC05" d="M10.5 28.7a14.5 14.5 0 0 1 0-9.4l-7.9-6.1a24 24 0 0 0 0 21.6l7.9-6.1z"/><path fill="#34A853" d="M24 48c6.5 0 11.9-2.1 15.9-5.8l-7.5-5.8c-2.1 1.4-4.9 2.3-8.4 2.3-6.3 0-11.6-4.1-13.5-9.8l-7.9 6.1C6.5 42.6 14.6 48 24 48z"/></svg>
@@ -112,7 +126,7 @@ export function AuthScreen({ onDone }: { onDone?: () => void } = {}) {
           <div className="flex items-center gap-3 text-[10px] uppercase tracking-widest text-slate-500"><span className="h-px flex-1 bg-slate-800" />or<span className="h-px flex-1 bg-slate-800" /></div>
           <div className="grid grid-cols-2 gap-1 rounded-full border border-slate-800 bg-slate-950/70 p-1 text-[12px] font-semibold" role="tablist">
             {(['signup', 'login'] as const).map((m) => (
-              <button key={m} type="button" role="tab" aria-selected={mode === m} data-testid={`auth-tab-${m}`} onClick={() => { setMode(m); setErr(null); }} className={`rounded-full py-2.5 transition ${mode === m ? 'bg-blue-500/20 text-white shadow-[0_0_12px_rgba(59,130,246,0.3)]' : 'text-slate-400 hover:text-slate-200'}`}>
+              <button key={m} type="button" role="tab" aria-selected={mode === m} data-testid={`auth-tab-${m}`} onClick={() => { setMode(m); setErr(null); setInfo(null); setForgot(false); }} className={`rounded-full py-2.5 transition ${mode === m ? 'bg-blue-500/20 text-white shadow-[0_0_12px_rgba(59,130,246,0.3)]' : 'text-slate-400 hover:text-slate-200'}`}>
                 {m === 'signup' ? 'Sign Up' : 'Log In'}
               </button>
             ))}
@@ -124,15 +138,29 @@ export function AuthScreen({ onDone }: { onDone?: () => void } = {}) {
           </div>
           {method === 'email' && (
             <>
+          {mode === 'signup' && (
+            <div className="relative mt-1.5">
+              <input id="auth-fullname" data-testid="auth-fullname" type="text" autoComplete="name" maxLength={60} value={fullName} onChange={(e) => setFullName(e.target.value)} placeholder=" " className={`${field} peer`} />
+              <label htmlFor="auth-fullname" className={`pointer-events-none absolute left-3 top-4 bg-slate-900 px-1 text-slate-400 transition-all ${lbl}`}>Full Name</label>
+            </div>
+          )}
           <div className="relative mt-1.5">
             <input id="auth-email" data-testid="auth-email" type="email" autoComplete="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder=" " className={`${field} peer`} />
             <label htmlFor="auth-email" className={`pointer-events-none absolute left-3 top-4 bg-slate-900 px-1 text-slate-400 transition-all ${lbl}`}>Email</label>
           </div>
+          {!forgot && (
           <div className="relative mt-1.5">
             <input id="auth-password" data-testid="auth-password" type={show ? 'text' : 'password'} autoComplete={mode === 'login' ? 'current-password' : 'new-password'} value={password} onChange={(e) => setPassword(e.target.value)} placeholder=" " className={`${field} peer pr-14`} />
             <label htmlFor="auth-password" className={`pointer-events-none absolute left-3 top-4 bg-slate-900 px-1 text-slate-400 transition-all ${lbl}`}>Password (min 8 characters)</label>
             <button type="button" onClick={() => setShow((v) => !v)} aria-label={show ? 'Hide password' : 'Show password'} data-testid="auth-show" className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-semibold text-slate-400 hover:text-white">{show ? 'Hide' : 'Show'}</button>
           </div>
+          )}
+          {mode === 'login' && (
+            <div className="-mt-1 flex items-center justify-between text-[12px]">
+              {forgot ? <span className="text-slate-400">We’ll e-mail you a reset link.</span> : <span />}
+              <button type="button" data-testid="auth-forgot" onClick={() => { setForgot((v) => !v); setErr(null); setInfo(null); }} className="font-semibold text-blue-400 hover:text-blue-300">{forgot ? 'Back to log in' : 'Forgot password?'}</button>
+            </div>
+          )}
 
             </>
           )}
@@ -185,9 +213,10 @@ export function AuthScreen({ onDone }: { onDone?: () => void } = {}) {
           )}
 
           {method === 'email' && (err ?? inline) && !err && <p data-testid="auth-inline" className="text-[11px] text-down">{inline}</p>}
+          {info && <p role="status" data-testid="auth-info" className="rounded-md bg-up/10 px-3 py-2 text-[12px] text-up">{info}</p>}
           {err && <p role="alert" data-testid="auth-error" className="rounded-md bg-down/10 px-3 py-2 text-[12px] text-down">{err}</p>}
-          <button type="submit" disabled={busy} data-testid="auth-submit" className="mt-1 w-full rounded-lg bg-gradient-to-r from-blue-600 to-blue-500 px-6 py-4 text-base font-bold lg:text-lg text-white shadow-[0_0_18px_rgba(59,130,246,0.35)] hover:brightness-110 disabled:opacity-60">
-            {busy ? 'Please wait…' : method === 'phone' ? (otpSent ? 'Verify & continue' : 'Send code') : mode === 'login' ? 'Log In' : 'Create Account'}
+          <button type="submit" disabled={busy || (forgot && wait > 0)} data-testid="auth-submit" className="mt-1 w-full rounded-lg bg-gradient-to-r from-blue-600 to-blue-500 px-6 py-4 text-base font-bold lg:text-lg text-white shadow-[0_0_18px_rgba(59,130,246,0.35)] hover:brightness-110 disabled:opacity-60">
+            {busy ? 'Please wait…' : forgot && method === 'email' ? (wait > 0 ? `Link sent · resend in ${wait}s` : 'Send reset link') : method === 'phone' ? (otpSent ? 'Verify & continue' : 'Send code') : mode === 'login' ? 'Log In' : 'Create Account'}
           </button>
           {backend === 'local' && <p className="text-[10px] text-slate-500">Demo mode: accounts are stored only in this browser. Set the Supabase variables for real accounts.</p>}
         </form>

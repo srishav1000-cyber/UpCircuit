@@ -17,6 +17,8 @@ export interface DashboardProps {
   /** opens the ⚖️ Rebalance Portfolio simulator */
   onOpenRebalance: () => void;
   onAskAI: (prompt?: string) => void;
+  /** sets a price alert (Day Trader skill 11); `ltp` decides above/below */
+  onAddAlert?: (symbol: string, target: number, ltp: number) => { ok: true } | { ok: false; error: string };
   onResetPortfolio: () => void;
   /** dispatches a terminal action from the hotkey panel */
   onAction: (key: string) => void;

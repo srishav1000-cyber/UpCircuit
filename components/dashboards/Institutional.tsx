@@ -126,7 +126,7 @@ export function InstitutionalDashboard({ engine, quote, closes1D, holdings, favo
         <p className="mt-2 text-[10px] text-muted">Selected stock {quote.symbol}: {t2m.toFixed(3)}% · {fmtInt(all.length)} stocks tracked. Higher = more of the cap changed hands today.</p>
       </Card>
 
-      <Card title="Sector correlation · 4 × 4 Pearson r" badges={['yahoo', 'computed']} right={<span className="text-[10px] text-muted">1Y daily returns</span>} className={WIDE}>
+      <Card title="Sector correlation · 4 × 4 Pearson r" badges={['baseline', 'computed']} right={<span className="text-[10px] text-muted">1Y daily returns</span>} className={WIDE}>
         <CorrelationMatrix data={secCorr} compact cellTestId="sector-corr-cell" />
         <p className="mt-2 text-[10px] text-muted">Each sector = equal-weighted index of its three largest names. r = cov(x, y) ÷ (σx σy); lower cross-sector r means better diversification.</p>
       </Card>
@@ -155,7 +155,7 @@ export function InstitutionalDashboard({ engine, quote, closes1D, holdings, favo
         </div>
       </Card>
 
-      <Card title="Stock correlation · Pearson r" badges={['yahoo', 'computed']} className={WIDE} right={<span className="text-[10px] text-muted">1Y daily returns</span>}>
+      <Card title="Stock correlation · Pearson r" badges={['baseline', 'computed']} className={WIDE} right={<span className="text-[10px] text-muted">1Y daily returns</span>}>
         <CorrelationMatrix data={corr} highlight={quote.symbol} />
         <p className="mt-2 text-[10px] text-muted">r = cov(x, y) ÷ (σx σy). Basket: selected stock, holdings, favourites, then largest caps. Low correlation between holdings means better diversification.</p>
       </Card>

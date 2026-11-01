@@ -344,6 +344,7 @@ function Terminal() {
     onOpenImport: () => setImportOpen(true),
     onOpenRebalance: () => setRebalanceOpen(true),
     onAskAI: openAsk,
+    onAddAlert: (sym: string, target: number, ltp: number) => priceAlerts.add(sym, target, ltp),
     onResetPortfolio: resetHoldings,
     onAction: act,
   };

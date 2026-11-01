@@ -74,7 +74,7 @@ export function PortfolioRiskEngine({ engine, holdings, className = '' }: { engi
           <div className={tile}><div className="text-[9px] uppercase tracking-wider text-muted">Largest position</div><div className="num text-lg font-semibold text-ink">{r.stocks[0].weightPct.toFixed(1)}%</div><div className="text-[10px] text-muted">{r.stocks[0].symbol}</div></div>
         </div>
         <p className="flex flex-wrap items-center gap-1.5 text-[10px] text-muted">
-          <DataBadge kind="computed" /> <DataBadge kind="yahoo" label="Yahoo 1Y closes" />
+          <DataBadge kind="computed" /> <DataBadge kind="baseline" />
           <span>HHI = Σ sᵢ² (weights in %; &lt; 1,500 low · 1,500–2,500 moderate · &gt; 2,500 high). β = Cov(Rp, Rm) ÷ Var(Rm) on {r.obs} paired daily returns; Sharpe uses Rf 6.5%. Estimates from history, not forecasts.</span>
         </p>
       </div>

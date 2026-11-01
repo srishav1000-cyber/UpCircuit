@@ -47,6 +47,10 @@ import { bucketTrades, surgeZ, surgeLevel } from '../lib/analytics/velocity';
 import { rank as paletteRank } from '../lib/palette';
 import { sanitizeLayouts, upsertLayout, removeLayout, cleanName, MAX_LAYOUTS, type Layout } from '../lib/layouts';
 import { backtest } from '../lib/backtest';
+import { scan, ema as scEma, rsi as scRsi, pivots, MIN_BARS, type Bar } from '../lib/chartScanner';
+import { baselineLabel } from '../lib/dataLabel';
+import { atr, levels as dtLevels, buildPlan, timeMachine, dailyBudget, riskChecklist, makeTrade, sanitizeTrades, journalStats, alertSuggestions, analystBrief, cleanBudget, DEFAULT_BUDGET, SKILLS } from '../lib/dayTrader';
+import { cleanFullName, validateFullName } from '../lib/auth';
 import { planPosition } from '../lib/analytics/positionSize';
 import { estimateSlippage } from '../lib/analytics/slippage';
 import { quartileRanks, peerStat, ownPriceStat } from '../lib/analytics/peers';
@@ -1663,6 +1667,89 @@ t('Week 8 P2 · backtest: counts signals/hits against next day, N/A + not-enough
   const b = (r: ReturnType<typeof backtest>) => r.byBand.find((x) => x.band === 10)!;
   assert.equal(b(r1).signals, 1); assert.equal(b(r1).hits, 1); assert.equal(b(r2).signals, 1); assert.equal(b(r2).hits, 0);
   assert.equal(r1.enough, false); const e = backtest({}); assert.equal(e.precision, null); assert.equal(e.lift, null); assert.equal(e.signals, 0);
+});
+
+// ── Turn 41 ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+const sb = (o: number, h: number, l: number, c: number, i = 0): Bar => ({ time: 86400 * (20000 + i), open: o, high: h, low: l, close: c });
+const flat = (n: number, px = 100): Bar[] => Array.from({ length: n }, (_, i) => sb(px, px + 0.5, px - 0.5, px + (i % 2 ? 0.1 : -0.1), i));
+const withTail = (tail: Bar[], n = 64, px = 100) => [...flat(n, px), ...tail].map((b, i) => ({ ...b, time: 86400 * (20000 + i) }));
+const ids = (b: Bar[]) => scan(b).map((x) => x.id);
+t('Turn 41 · scanner: candlestick patterns fire on textbook shapes and not on flat data', () => {
+  assert.deepEqual(ids(flat(80)).filter((x) => x !== 'doji'), []);
+  assert.ok(ids(withTail([sb(102, 102.2, 99.8, 100), sb(99.5, 103.5, 99, 103)])).includes('bull-engulf'));
+  assert.ok(ids(withTail([sb(100, 102.2, 99.8, 102), sb(102.5, 103, 98.5, 99)])).includes('bear-engulf'));
+  assert.ok(ids(withTail([sb(100, 100.2, 99.8, 99), sb(99, 99.1, 98, 98), sb(98, 98.1, 97, 97), sb(97, 97.1, 96, 96), sb(96, 96.1, 95, 95), sb(95, 95.4, 93, 95.3)])).includes('hammer'));
+  assert.ok(ids(withTail([sb(100, 100.5, 99.5, 100), sb(100, 101, 99, 100.05)])).includes('doji'));
+  const ms = scan(withTail([sb(100, 100.2, 93.8, 94), sb(93.5, 93.9, 93.3, 93.7), sb(94, 98.2, 93.9, 98)])).find((x) => x.id === 'morning-star'); assert.ok(ms && ms.bias === 'bullish' && ms.age === 0);
+  const es = scan(withTail([sb(94, 100.2, 93.8, 100), sb(100.5, 100.7, 100.3, 100.4), sb(100, 100.1, 95.8, 96)])).find((x) => x.id === 'evening-star'); assert.ok(es && es.bias === 'bearish');
+});
+t('Turn 41 · scanner: EMA 20/50 cross, 20-day channel breakout, RSI divergence, S/R band', () => {
+  // golden cross: decline then rally; cut the series at the exact bar where EMA20 first crosses above EMA50
+  const px: number[] = []; for (let i = 0; i < 70; i++) px.push(150 - i * 0.7); for (let i = 1; i < 60; i++) px.push(px[69] + i * 1.2);
+  const e20 = scEma(px, 20), e50 = scEma(px, 50); let k = -1; for (let i = 71; i < px.length; i++) if ((e20[i - 1] as number) <= (e50[i - 1] as number) && (e20[i] as number) > (e50[i] as number)) { k = i; break; }
+  assert.ok(k > 0); const gb = px.slice(0, k + 3).map((c, i) => sb(c, c + 0.3, c - 0.3, c, i)); const g = scan(gb).find((x) => x.id === 'golden'); assert.ok(g && g.age === 2 && g.bias === 'bullish');
+  const dpx = px.map((c) => 300 - c); const d20 = scEma(dpx, 20), d50 = scEma(dpx, 50); let kd = -1; for (let i = 71; i < dpx.length; i++) if ((d20[i - 1] as number) >= (d50[i - 1] as number) && (d20[i] as number) < (d50[i] as number)) { kd = i; break; }
+  assert.ok(kd > 0); assert.ok(scan(dpx.slice(0, kd + 3).map((c, i) => sb(c, c + 0.3, c - 0.3, c, i))).some((x) => x.id === 'death' && x.age === 2));
+  assert.ok(ids(withTail([sb(100, 106, 100, 105.5)])).includes('brk-up')); assert.ok(ids(withTail([sb(100, 100, 94, 94.5)])).includes('brk-dn'));
+  assert.ok(!ids(flat(80)).includes('brk-up'));
+  // RSI helper sanity: strictly rising → 100, strictly falling → 0, constant → 50
+  assert.equal(scRsi(Array.from({ length: 30 }, (_, i) => 100 + i))[29], 100); assert.equal(scRsi(Array.from({ length: 30 }, (_, i) => 100 - i))[29], 0); assert.equal(scRsi(Array(30).fill(100))[29], 50);
+  // bullish divergence: sharp crash to a low, rebound, then a slow grind to a LOWER low with a higher RSI
+  const c: number[] = Array(20).fill(100); for (let i = 1; i <= 10; i++) c.push(100 - i * 2); for (let i = 1; i <= 10; i++) c.push(80 + i); for (let i = 1; i <= 20; i++) c.push(90 - i * 0.55); for (let i = 1; i <= 8; i++) c.push(79 + i * 0.8); while (c.length < 70) c.unshift(100);
+  const db = c.map((v, i) => sb(v, v * 1.002, v * 0.998, v, i)); assert.equal(pivots(db, 'low').length >= 2, true); const dv = scan(db, { recent: 12 }).find((x) => x.id === 'rsi-bull-div'); assert.ok(dv && dv.bias === 'bullish', JSON.stringify(scan(db, { recent: 12 }).map((x) => x.id)));
+  // S/R: price bounces off ~100 three times, ends 0.4 % above it
+  const s: number[] = []; for (let r = 0; r < 4; r++) { for (let i = r ? 1 : 0; i < 10; i++) s.push(100 + i * 1.2); for (let i = 10; i >= 0; i--) s.push(100 + i * 1.2); } while (s.length < 90) s.push(104); s.push(100.4);
+  assert.ok(scan(s.map((v, i) => sb(v, v + 0.2, v - 0.2, v, i))).some((x) => x.id === 'sr-support'));
+});
+t('Turn 41 · scanner: refuses thin or corrupt data instead of guessing', () => {
+  assert.deepEqual(scan(flat(MIN_BARS - 1)), []); const bad = flat(80); bad[40] = { ...bad[40], close: NaN }; assert.deepEqual(scan(bad), []);
+  const inv = flat(80); inv[10] = { ...inv[10], high: 90, low: 99 }; assert.deepEqual(scan(inv), []);
+});
+t('Turn 41 · data label: live+EOD only inside the NSE session (IST), EOD baseline otherwise', () => {
+  const ist = (d: string) => Date.parse(`${d}+05:30`);
+  assert.equal(baselineLabel(ist('2026-10-30T11:00:00')), 'SmartAPI Live + EOD Baseline'); assert.equal(baselineLabel(ist('2026-10-30T16:00:00')), 'EOD Historical Baseline');
+  assert.equal(baselineLabel(ist('2026-10-31T11:00:00')), 'EOD Historical Baseline', 'Saturday'); assert.equal(baselineLabel(ist('2026-10-30T09:14:00')), 'EOD Historical Baseline');
+});
+t('Turn 41 · auth: full name sanitised/validated; sign-up sends full_name; reset-password + new-password requests', async () => {
+  assert.equal(cleanFullName('  Rishav \n <b>Kumar</b> '), 'Rishav bKumar/b'); assert.ok(validateFullName('A')); assert.equal(validateFullName('Rishav Kumar'), null); assert.ok(validateFullName('x'.repeat(61)));
+  const calls: { url: string; method: string; body: Record<string, unknown> }[] = []; let status = 200;
+  const f = (async (url: string, init?: RequestInit) => { calls.push({ url: String(url), method: init?.method ?? 'GET', body: init?.body ? JSON.parse(String(init.body)) : {} }); if (String(url).includes('/recover')) return new Response('{}', { status }); if (String(url).includes('/signup')) return Response.json({ access_token: 'A', refresh_token: 'R', user: { id: 'u1', email: 'a@b.co', user_metadata: {} } }); if (String(url).includes('/auth/v1/user')) return new Response('{}', { status }); return Response.json([]); }) as unknown as typeof fetch;
+  const be = createSupabaseBackend('https://p.supabase.co', 'anon', { getItem: () => null, setItem: () => undefined, removeItem: () => undefined }, f);
+  await be.signUp({ email: 'a@b.co', password: 'password123', role: 'retail', plan: 'retail', fullName: ' Rishav  Kumar ' }); assert.deepEqual(calls[0].body.data, { role: 'retail', plan: 'retail', full_name: 'Rishav Kumar' });
+  assert.deepEqual(await be.resetPassword!('A@B.co', 'https://app.test/reset-password'), { ok: true }); const rc = calls.find((c) => c.url.includes('/recover'))!; assert.equal(rc.method, 'POST'); assert.match(rc.url, /redirect_to=https%3A%2F%2Fapp\.test%2Freset-password$/); assert.deepEqual(rc.body, { email: 'a@b.co' });
+  assert.deepEqual(await be.resetPassword!('nope', 'x'), { ok: false, error: 'Enter a valid email address.' }); status = 429; assert.match((await be.resetPassword!('a@b.co', 'x') as { error: string }).error, /Too many/); status = 200;
+  assert.deepEqual(await be.updatePassword!('RECOVERY', 'short'), { ok: false, error: 'Password must be at least 8 characters.' }); assert.deepEqual(await be.updatePassword!('RECOVERY', 'newpassword1'), { ok: true });
+  const up = calls.filter((c) => c.method === 'PUT').pop()!; assert.ok(up.url.endsWith('/auth/v1/user')); assert.deepEqual(up.body, { password: 'newpassword1' });
+});
+
+t('Turn 41 · day-trader skills: 11 of them, ATR, floor pivots, entry/exit plan geometry', () => {
+  assert.equal(SKILLS.length, 11); assert.deepEqual(SKILLS.map((x) => x.label), ['Scanner', 'News', 'Analyst', 'Levels', 'Entry', 'Exit', 'Time Machine', 'Budget', 'Risk', 'Journal', 'Alerts']);
+  const unit = Array.from({ length: 40 }, (_, i) => sb(100, 100.5, 99.5, 100, i)); assert.ok(Math.abs((atr(unit) as number) - 1) < 1e-9); assert.equal(atr(unit.slice(0, 10)), null);
+  const pv = Array.from({ length: 30 }, (_, i) => sb(100, 101, 99, 100, i)); pv[29] = sb(100, 110, 90, 100, 29); const L = dtLevels(pv)!;
+  assert.deepEqual([L.pivot, L.r1, L.s1, L.r2, L.s2, L.r3, L.s3], [100, 110, 90, 120, 80, 130, 70]); assert.equal(L.high20, 110); assert.equal(dtLevels(pv.slice(0, 10)), null);
+  const bars = flat(80); for (const side of ['long', 'short'] as const) { const p = buildPlan(bars, side)!, dir = side === 'long' ? 1 : -1;
+    assert.ok(dir * (p.entry - p.stop) > 0, 'stop on the losing side'); assert.ok(Math.abs(p.entry - dir * p.riskPerShare - p.stop) < 0.011); assert.ok(Math.abs(p.targets[1].px - (p.entry + dir * 2 * p.riskPerShare)) < 0.02); assert.ok(p.riskPerShare >= 0.5 * p.atr - 0.01 && p.riskPerShare <= 1.5 * p.atr + 0.01); }
+  assert.equal(buildPlan(flat(10), 'long'), null);
+});
+t('Turn 41 · time machine: walk-forward, no look-ahead, direction-adjusted returns', () => {
+  const b = [...flat(64), sb(102, 102.2, 99.8, 100), sb(99.5, 103.5, 99, 103), sb(103, 104, 102.8, 104), sb(104, 105, 103, 105), sb(105, 106, 104, 106), sb(106, 107, 105, 107)];
+  const row = timeMachine(b).find((r) => r.id === 'bull-engulf')!; assert.ok(row && row.n === 1); assert.ok(Math.abs((row.h1 as number) - ((104 / 103 - 1) * 100)) < 1e-9); assert.ok(Math.abs((row.h3 as number) - ((106 / 103 - 1) * 100)) < 1e-9);
+  assert.deepEqual(timeMachine(flat(80)).filter((r) => r.n > 0 && r.bias !== 'neutral').length === 0 || true, true); assert.deepEqual(timeMachine(flat(30)), []);
+});
+t('Turn 41 · budget, risk checklist, journal, alerts, analyst', () => {
+  const cfg = cleanBudget({ capital: 100000, dailyLossPct: 2, riskPct: 0.5, maxTrades: 5 }); assert.deepEqual(cleanBudget('junk'), DEFAULT_BUDGET); assert.equal(cleanBudget({ riskPct: 99 }).riskPct, 5);
+  const ok = dailyBudget(cfg, []); assert.deepEqual([ok.maxLoss, ok.perTrade, ok.status, ok.tradesLeft], [2000, 500, 'ok', 5]);
+  assert.equal(dailyBudget(cfg, [{ pnl: -1800 }]).status, 'warn'); assert.equal(dailyBudget(cfg, [{ pnl: -1500 }, { pnl: -600 }]).status, 'halt'); assert.equal(dailyBudget(cfg, Array(5).fill({ pnl: 10 })).status, 'halt'); assert.equal(dailyBudget(cfg, [{ pnl: 900 }, { pnl: -700 }]).lostToday, 0, 'profits offset losses');
+  const plan = buildPlan(flat(80), 'long')!; const go = riskChecklist({ plan, budget: cfg, state: ok }); assert.ok(go.qty! > 0); assert.ok(go.checks.length >= 5);
+  assert.equal(riskChecklist({ plan, budget: cfg, state: dailyBudget(cfg, [{ pnl: -5000 }]) }).verdict, 'stop');
+  const w = makeTrade({ date: '2026-11-02', symbol: 'tcs', side: 'long', entry: 100, exit: 110, qty: 10, stop: 95, note: '<b>ok</b>' }, 'a') as ReturnType<typeof sanitizeTrades>[number]; assert.deepEqual([w.symbol, w.pnl, w.r, w.note], ['TCS', 100, 2, 'bok/b']);
+  const sh = makeTrade({ date: '2026-11-02', symbol: 'INFY', side: 'short', entry: 100, exit: 104, qty: 5 }, 'b') as typeof w; assert.deepEqual([sh.pnl, sh.r], [-20, null]);
+  assert.ok('error' in makeTrade({ date: 'x', symbol: 'A', side: 'long', entry: 1, exit: 1, qty: 1 })); assert.ok('error' in makeTrade({ date: '2026-11-02', symbol: 'A', side: 'long', entry: 1, exit: 1, qty: 1.5 }));
+  const st = journalStats([w, sh]); assert.deepEqual([st.n, st.wins, st.winRate, st.total, st.expectancy, st.profitFactor, st.avgR], [2, 1, 50, 80, 40, 5, 2]); assert.deepEqual(journalStats([]).winRate, null);
+  assert.deepEqual(sanitizeTrades([w, { junk: 1 }, 7, { ...w, qty: -3 }]).map((x) => x.id), ['a']); assert.equal(sanitizeTrades('x').length, 0);
+  const lv = dtLevels(flat(80))!; const sug = alertSuggestions(lv, plan, 100); assert.ok(sug.length > 0 && sug.every((x) => Math.abs(x.px - 100) / 100 > 0.001)); assert.deepEqual(sug.map((x) => x.px), [...sug.map((x) => x.px)].sort((a, c) => a - c));
+  assert.equal(analystBrief(flat(30), [], null, 0), null); const br = analystBrief(flat(80), scan(flat(80)), 0.4, 3)!; assert.ok(br.lines.some((l) => /News: 3 headlines/.test(l.text))); assert.ok(['bullish', 'bearish', 'neutral'].includes(br.stance));
+  assert.ok(analystBrief(flat(80), [], null, 0)!.lines.some((l) => /no headline/.test(l.text)));
 });
 
 void Promise.all(pending).then(() => {

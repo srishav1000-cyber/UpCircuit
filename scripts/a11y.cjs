@@ -4,7 +4,7 @@ const { chromium } = require('playwright'); const axe = require('axe-core');
 const BASE = process.env.BASE || 'http://localhost:3000';
 (async () => {
   const b = await chromium.launch({ args: ['--no-sandbox'], executablePath: process.env.CHROME || undefined }); const p = await (await b.newContext({ viewport: { width: 1440, height: 900 } })).newPage();
-  const pages = ['/', '/login', '/status', '/privacy', '/terms', '/disclaimer', '/data-licence'];
+  const pages = ['/', '/login', '/reset-password', '/status', '/privacy', '/terms', '/disclaimer', '/data-licence'];
   let bad = 0;
   for (const path of pages) {
     await p.goto(BASE + path, { waitUntil: 'networkidle' }).catch(() => {}); await p.waitForTimeout(800);

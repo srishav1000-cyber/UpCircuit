@@ -59,7 +59,11 @@ export interface AuthBackend {
   kind: 'local' | 'supabase';
   /** the signed-in user from a stored session, or null */
   restore(): Promise<User | null>;
-  signUp(i: { email: string; password: string; role: Role; plan: PlanId }): Promise<AuthResult>;
+  signUp(i: { email: string; password: string; role: Role; plan: PlanId; fullName?: string }): Promise<AuthResult>;
+  /** Supabase only: e-mail a password-recovery link that lands on `redirectTo` (the answer never reveals whether the address has an account) */
+  resetPassword?(email: string, redirectTo: string): Promise<{ ok: true } | { ok: false; error: string }>;
+  /** Supabase only: set a new password using the recovery access token from the e-mailed link */
+  updatePassword?(accessToken: string, password: string): Promise<{ ok: true } | { ok: false; error: string }>;
   signIn(email: string, password: string): Promise<AuthResult>;
   signOut(): Promise<void>;
   /** a valid access token for server calls (refreshed if needed); null for backends without server-verifiable sessions */
@@ -83,6 +87,12 @@ export interface AuthBackend {
 
 export const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 export const MIN_PASSWORD = 8;
+/** Display name: control chars and <> removed, whitespace collapsed; 2–60 characters. */
+export const cleanFullName = (s: string) => s.replace(/[\u0000-\u001f\u007f<>]/g, '').replace(/\s+/g, ' ').trim();
+export function validateFullName(s: string): string | null {
+  const n = cleanFullName(s);
+  return n.length < 2 ? 'Enter your full name (at least 2 characters).' : n.length > 60 ? 'Full name is too long (max 60 characters).' : null;
+}
 export function validateCredentials(email: string, password: string): string | null {
   if (!EMAIL_RE.test(email.trim())) return 'Enter a valid email address.';
   if (password.length < MIN_PASSWORD) return `Password must be at least ${MIN_PASSWORD} characters.`;

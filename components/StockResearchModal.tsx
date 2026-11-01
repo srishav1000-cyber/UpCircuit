@@ -65,7 +65,7 @@ function OutlookCard({ title, horizon, o }: { title: string; horizon: string; o:
             <Badge tone={badge}>{o.label}</Badge>
             <span className="num text-[12px] text-muted">score {o.score > 0 ? '+' : ''}{o.score}</span>
           </div>
-          <Meter value={o.score} min={-100} max={100} zones={[{ to: -33, color: ZONE.down }, { to: 33, color: ZONE.muted }, { to: 100, color: ZONE.up }]} />
+          <Meter label="Overall score" value={o.score} min={-100} max={100} zones={[{ to: -33, color: ZONE.down }, { to: 33, color: ZONE.muted }, { to: 100, color: ZONE.up }]} />
           <ul className="mt-3 space-y-1.5">
             {o.signals.map((s) => (
               <li key={s.name} className="flex items-center justify-between gap-2 text-[12px]">

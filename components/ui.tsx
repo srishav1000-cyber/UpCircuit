@@ -52,11 +52,11 @@ export const ZONE = {
 };
 
 /** Horizontal meter. `value` and the zones are on the same scale (min…max). */
-export function Meter({ value, min = 0, max = 100, zones }: { value: number; min?: number; max?: number; zones: { to: number; color: string }[] }) {
+export function Meter({ value, min = 0, max = 100, zones, label = 'Gauge' }: { label?: string; value: number; min?: number; max?: number; zones: { to: number; color: string }[] }) {
   const pos = Math.min(100, Math.max(0, ((value - min) / (max - min)) * 100));
   let prev = min;
   return (
-    <div className="relative h-2 w-full rounded-full bg-line" role="meter" aria-valuenow={value} aria-valuemin={min} aria-valuemax={max}>
+    <div className="relative h-2 w-full rounded-full bg-line" role="meter" aria-label={label} aria-valuenow={value} aria-valuemin={min} aria-valuemax={max}>
       <div className="flex h-full w-full overflow-hidden rounded-full">
         {zones.map((z, i) => {
           const w = ((z.to - prev) / (max - min)) * 100;

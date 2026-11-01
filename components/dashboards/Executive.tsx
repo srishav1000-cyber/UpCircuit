@@ -111,7 +111,7 @@ export function ExecutiveDashboard({ engine, holdings, onSelect }: DashboardProp
                 <Badge tone={sentimentTone(sent.label)}>{sent.label}</Badge>
               </div>
               <div className="mt-3">
-                <Meter value={sent.score} min={-1} max={1} zones={[{ to: -0.25, color: ZONE.down }, { to: 0.25, color: ZONE.muted }, { to: 1, color: ZONE.up }]} />
+                <Meter label="Sentiment" value={sent.score} min={-1} max={1} zones={[{ to: -0.25, color: ZONE.down }, { to: 0.25, color: ZONE.muted }, { to: 1, color: ZONE.up }]} />
                 <div className="num mt-1 flex justify-between text-[10px] text-muted">
                   <span>−1 Bearish</span>
                   <span>0</span>
@@ -145,8 +145,8 @@ export function ExecutiveDashboard({ engine, holdings, onSelect }: DashboardProp
       <LimitMonitor engine={engine} holdings={holdings} className={WIDE} />
       <CircuitPredictor engine={engine} onSelect={onSelect} className={WIDE} />
 
-      <Card title="Weighted portfolio risk score" badges={['yahoo', 'computed']} right={<span className={`num text-[12px] font-semibold ${wTone}`}>{wrisk.score}/100</span>} className={WIDE}>
-        <Meter value={wrisk.score} zones={[{ to: 35, color: ZONE.up }, { to: 65, color: ZONE.warn }, { to: 100, color: ZONE.down }]} />
+      <Card title="Weighted portfolio risk score" badges={['baseline', 'computed']} right={<span className={`num text-[12px] font-semibold ${wTone}`}>{wrisk.score}/100</span>} className={WIDE}>
+        <Meter label="Weighted risk score" value={wrisk.score} zones={[{ to: 35, color: ZONE.up }, { to: 65, color: ZONE.warn }, { to: 100, color: ZONE.down }]} />
         <div className="num mt-1 flex justify-between text-[10px] text-muted"><span>0 Low</span><span>Moderate</span><span>High 100</span></div>
         <table className="num mt-3 w-full text-[12px]">
           <thead className="text-[10px] uppercase tracking-wider text-muted">
@@ -162,7 +162,7 @@ export function ExecutiveDashboard({ engine, holdings, onSelect }: DashboardProp
       </Card>
 
       <Card title="Market risk gauge" className={WIDE}>
-        <Meter value={risk} zones={[{ to: 35, color: ZONE.up }, { to: 65, color: ZONE.warn }, { to: 100, color: ZONE.down }]} />
+        <Meter label="Risk score" value={risk} zones={[{ to: 35, color: ZONE.up }, { to: 65, color: ZONE.warn }, { to: 100, color: ZONE.down }]} />
         <div className="num mt-1 flex justify-between text-[10px] text-muted">
           <span>0 Low</span>
           <span>Moderate</span>

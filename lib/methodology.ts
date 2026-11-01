@@ -1,5 +1,5 @@
 // Single source of truth for the Methodology Audit Drawer: every analytic's formula, inputs, source and caveat, in words.
-export type SourceKind = 'smartapi' | 'yahoo' | 'computed' | 'na';
+export type SourceKind = 'smartapi' | 'yahoo' | 'computed' | 'na' | 'baseline';
 
 export interface MethodEntry {
   id: string;
