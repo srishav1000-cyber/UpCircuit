@@ -23,7 +23,7 @@ Vercel → Deployments → promote previous build. Schema migrations are additiv
 
 ## Backup / restore
 - Automated: Supabase backups/PITR.
-- Drill (monthly, and in CI): `./scripts/backup-drill.sh` — builds a scratch cluster, seeds, `pg_dump -Fc`, `pg_restore`, then compares row counts, audit head hash, chain validity and RLS isolation. Exit code ≠ 0 means the drill failed.
+- Drill (monthly, and in CI against postgres:15): `./scripts/backup-drill.sh` — seeds, `pg_dump -Fc`, drops the database, `pg_restore`s into a fresh one, then compares row counts, audit head hash, chain validity and RLS isolation. Exit code ≠ 0 means the drill failed.
 - Real restore: restore to a new Supabase project/branch, run the fingerprint SQL from the script against both, switch `NEXT_PUBLIC_SUPABASE_URL`.
 
 ## Release checklist

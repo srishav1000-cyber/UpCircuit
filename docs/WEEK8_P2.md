@@ -19,4 +19,4 @@ Excluded from automated contrast checks (transient animation frames): `.animate-
 Signal = daily close within 1.5 % of its inferred 5/10/20 % band; hit = next day touches the same band again; baseline = unconditional touch rate over all stock-days; lift = precision ÷ baseline. Nothing is fitted. It warns when < 30 signals. Daily bars hide intraday proximity, the band is inferred, a year is a small sample, and results apply only to the symbols you choose. It is evidence about a heuristic, not a trading claim.
 
 ## Honest limits
-The event log is Postgres, not Kafka. The drill is a logical dump/restore on synthetic data, not a Supabase PITR test. CI does not yet run the drill (needs Postgres 16 binaries on the runner).
+The event log is Postgres, not Kafka. The drill is a logical dump/restore on synthetic data, not a Supabase PITR test. CI runs the drill against a postgres:15 service container (turn 40).
