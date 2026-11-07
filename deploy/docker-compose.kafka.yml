@@ -52,3 +52,4 @@ services:
       "
       kafka-topics --bootstrap-server kafka:29092 --create --if-not-exists --topic market-ticks --partitions 3 --replication-factor 1
       "
+      

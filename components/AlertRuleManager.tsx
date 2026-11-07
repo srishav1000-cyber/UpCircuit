@@ -40,7 +40,7 @@ export function AlertRuleManager({ cloud, userId }: { cloud: CloudClient; userId
         <div className="flex gap-4 text-[12px] text-ink sm:col-span-5">
           <label className="flex items-center gap-1.5"><input type="checkbox" checked={f.push} onChange={(e) => setF({ ...f, push: e.target.checked })} /> Web push</label>
           <label className="flex items-center gap-1.5"><input type="checkbox" checked={f.email} onChange={(e) => setF({ ...f, email: e.target.checked })} /> E-mail</label>
-          <span className="text-muted">Rules run on the server every few minutes, even with the app closed. Prices are delayed server-side quotes.</span>
+          <span className="text-muted">Rules run on the server even with the app closed: instantly when the live alert daemon is deployed, otherwise on the 5-minute cron backstop (delayed quotes).</span>
         </div>
       </form>
       {err && <div role="alert" data-testid="rule-error" className="mb-2 rounded-md border border-down/40 bg-down/10 px-3 py-2 text-[12px] text-down">{err}</div>}

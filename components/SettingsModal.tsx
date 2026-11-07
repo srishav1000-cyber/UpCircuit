@@ -1,5 +1,6 @@
 'use client';
 
+import { TestPushSection } from '@/components/settings/TestPushSection';
 import { downloadText } from '@/lib/csvOut';
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { useAuth } from '@/hooks/useAuth';
@@ -247,6 +248,7 @@ function AlertsTab() {
         </div>
         {push.msg && <p role="status" data-testid="settings-msg" className={`mt-3 rounded-md px-3 py-2 text-[12px] ${push.msg.kind === 'ok' ? 'bg-up/10 text-up' : 'bg-down/10 text-down'}`}>{push.msg.text}</p>}
       </section>
+      <TestPushSection />
       <section className={card} data-testid="settings-sound">
         <h3 className={h2}>Alarm sound</h3>
         <div className="mt-2"><SoundPicker /></div>

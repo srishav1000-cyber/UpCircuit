@@ -93,11 +93,14 @@ export interface CircuitEvent { id: string; symbol: string; direction: 'UPPER' |
 export interface AuditRow { seq: number; at: string; user_id: string | null; actor_role: string | null; action: string; entity: string | null; entity_id: string | null; meta: Record<string, unknown>; hash: string }
 export interface AdminUser { id: string; email: string | null; full_name: string | null; role: AppRole; created_at?: string }
 export interface AlertRuleRow { id: string; symbol: string; kind: RuleKind; threshold: number; cooldown_min: number; channels: { push?: boolean; email?: boolean }; enabled: boolean; last_triggered_at: string | null; created_at: string }
-export interface AlertDelivery { id: string; fired_at: string; symbol: string; kind: string; price: number | null; channel: string; status: string; detail: string | null }
+export interface AlertDelivery { id: string; fired_at: string; symbol: string; kind: string; price: number | null; channel: string; status: string; detail: string | null; tick_time?: string | null; daemon_matched_at?: string | null; push_sent_at?: string | null; sw_ack_at?: string | null; displayed_at?: string | null }
 
 export interface AiSignoff { id: string; kind: string; symbol: string | null; model: string; prompt_version: string; data_used: string[]; output_hash: string; decision: 'approved' | 'rejected'; note: string | null; signer_role: string; signed_at: string }
 
 export type CloudClient = ReturnType<typeof createCloud>;
+const DELIVERY_COLS = 'id,fired_at,symbol,kind,price,channel,status,detail';
+const DELIVERY_LATENCY_COLS = 'tick_time,daemon_matched_at,push_sent_at,sw_ack_at,displayed_at';
+
 export function createCloud(cfg: CloudConfig) {
   const base = cfg.url.replace(/\/+$/, '');
   const f = cfg.fetch ?? ((...a: Parameters<typeof fetch>) => fetch(...a));
@@ -221,8 +224,14 @@ export function createCloud(cfg: CloudConfig) {
       await call(`alert_rules?id=eq.${encodeURIComponent(id)}`, { method: 'DELETE', prefer: 'return=minimal' });
     },
     async listDeliveries(limit = 50): Promise<AlertDelivery[]> {
-      const r = await call(`alert_deliveries?select=id,fired_at,symbol,kind,price,channel,status,detail&order=fired_at.desc&limit=${limit}`);
+      const q = (cols: string) => `alert_deliveries?select=${cols}&order=fired_at.desc&limit=${limit}`;
+      // the latency columns exist only after docs/WEEK9_SCHEMA.sql — fall back to the original columns before that migration
+      const r = await call(q(`${DELIVERY_COLS},${DELIVERY_LATENCY_COLS}`)).catch(() => call(q(DELIVERY_COLS)));
       return Array.isArray(r) ? (r as AlertDelivery[]) : [];
+    },
+    async getDelivery(id: string): Promise<AlertDelivery | null> {
+      const r = await call(`alert_deliveries?id=eq.${encodeURIComponent(id)}&select=${DELIVERY_COLS},${DELIVERY_LATENCY_COLS}&limit=1`);
+      return Array.isArray(r) && r[0] ? (r[0] as AlertDelivery) : null;
     },
     async signOffAi(x: { kind: 'postmortem' | 'copilot' | 'report'; symbol?: string; model: string; promptVersion: string; dataUsed: string[]; outputHash: string; decision: 'approved' | 'rejected'; note?: string }): Promise<string> {
       return (await call('rpc/sign_off_ai_output', { method: 'POST', body: { p_kind: x.kind, p_symbol: x.symbol ?? '', p_model: x.model, p_prompt_version: x.promptVersion, p_data_used: x.dataUsed, p_output_hash: x.outputHash, p_decision: x.decision, p_note: x.note ?? null } })) as string;

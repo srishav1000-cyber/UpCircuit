@@ -209,4 +209,28 @@ select t.back();
 select t.become(:carol); select t.ok((select count(*) from public.circuit_daily_stats) >= 1, 'compliance can read the derived stats'); select t.back();
 select t.become(:eve); select t.ok((select count(*) from public.circuit_daily_stats) = 0, 'viewers cannot'); select t.back();
 
+/* ── Week 9 / Turn 42: claim_alert_rule(rule, window), latency columns, Realtime ── */
+select t.ok((select count(*) from information_schema.columns where table_name = 'alert_deliveries' and column_name in ('tick_time','daemon_matched_at','push_sent_at','sw_ack_at','displayed_at')) = 5, 'alert_deliveries has the 5 latency columns');
+select t.ok(exists (select 1 from pg_publication_tables where pubname = 'supabase_realtime' and tablename = 'alert_rules'), 'alert_rules is in the supabase_realtime publication');
+insert into public.alert_rules(user_id, symbol, kind, threshold, cooldown_min) values (:alice, 'W9TEST', 'price_above', 10, 30);
+create temp table w9 as select id from public.alert_rules where symbol = 'W9TEST'; grant select on w9 to public;
+select t.ok(t.try('select public.claim_alert_rule((select id from w9), ''k1'')', :alice) <> '', 'users cannot call the 2-arg claim');
+select t.ok(t.try('select public.claim_alert_rule((select id from w9), ''k1'')', null, 'anon') <> '', 'anon cannot call the 2-arg claim');
+select t.ok(t.try('select count(*) from public.alert_claims', :alice) <> '', 'users cannot read alert_claims');
+select t.become(:alice, 'service_role');
+select t.ok(public.claim_alert_rule((select id from w9), 'k1') = true, 'first claim wins');
+select t.ok(public.claim_alert_rule((select id from w9), 'k1') = false, 'same window → duplicate suppressed');
+select t.ok(public.claim_alert_rule((select id from w9), 'k2') = false, 'different window inside the cooldown → still suppressed');
+select t.back();
+update public.alert_rules set last_triggered_at = now() - interval '2 days' where id = (select id from w9);
+select t.become(:alice, 'service_role');
+select t.ok(public.claim_alert_rule((select id from w9), 'k1') = false, 'a replayed window key stays claimed even after the cooldown');
+select t.ok(public.claim_alert_rule((select id from w9), 'k3') = true, 'new window after the cooldown → claimed');
+select t.back();
+update public.alert_rules set last_triggered_at = null, enabled = false where id = (select id from w9);
+select t.become(:alice, 'service_role'); select t.ok(public.claim_alert_rule((select id from w9), 'k9') = false, 'disabled rule cannot be claimed'); select t.ok(public.claim_alert_rule('99999999-9999-9999-9999-999999999999', 'k9') = false, 'unknown rule → false, no error'); select t.back();
+update public.alert_rules set enabled = true where id = (select id from w9);
+select t.ok(t.try('select public.claim_alert_rule((select id from w9), '''')', :alice, 'service_role') <> '', 'empty window key rejected');
+select t.ok((select count(*) from public.alert_claims) = 2, 'one claim row per successful window');
+
 select count(*) || ' assertions passed' as result from t.log;

@@ -11,9 +11,12 @@
     "typecheck": "tsc --noEmit",
     "sync:instruments": "node scripts/sync-instruments.mjs --force",
     "test": "tsx scripts/verify.ts && tsx scripts/verify-auth.ts",
-    "postinstall": "node scripts/copy-ocr-assets.mjs"
+    "postinstall": "node scripts/copy-ocr-assets.mjs",
+    "daemon": "tsx daemon/index.ts",
+    "daemon:smoke": "bash scripts/daemon-smoke.sh"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.45.4",
     "jspdf": "^2.5.2",
     "lightweight-charts": "^4.2.0",
     "lucide-react": "^0.454.0",

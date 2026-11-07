@@ -1752,6 +1752,125 @@ t('Turn 41 · budget, risk checklist, journal, alerts, analyst', () => {
   assert.ok(analystBrief(flat(80), [], null, 0)!.lines.some((l) => /no headline/.test(l.text)));
 });
 
+
+/* ───────────── Turn 42: real-time alert daemon ───────────── */
+t('daemon engine: edge crossing, cooldown, state across edits', async () => {
+  const { RuleIndex, toRule } = await import('../daemon/engine');
+  const R = (o: Partial<AlertRule> = {}): AlertRule => ({ id: 'r1', user_id: 'u1', symbol: 'abc', kind: 'price_above', threshold: 100, cooldown_min: 10, channels: { push: true }, enabled: true, last_triggered_at: null, ...o });
+  const T = (ltp: number, ts = 1, prevClose = 100) => ({ symbol: 'ABC', ltp, prevClose, ts });
+  const ix = new RuleIndex(); ix.upsert(R());
+  assert.deepEqual(ix.symbols(), ['ABC']); assert.equal(ix.bySymbol.get('ABC')?.length, 1);
+  assert.equal(ix.onTick(T(105), 0).length, 0, 'first observation only seeds (already above)');
+  assert.equal(ix.onTick(T(99), 1000).length, 0);
+  const m = ix.onTick(T(101, 5), 2000); assert.equal(m.length, 1); assert.equal(m[0].tickTime, 5); assert.equal(m[0].matchedAt, 2000);
+  assert.equal(ix.onTick(T(102), 3000).length, 0, 'staying above does not re-fire');
+  assert.equal(ix.onTick(T(99), 4000).length, 0); assert.equal(ix.onTick(T(101), 5000).length, 0, 'crossing inside the cooldown is swallowed');
+  assert.equal(ix.onTick(T(99), 6000).length, 0); assert.equal(ix.onTick(T(101), 10 * 60_000 + 3000).length, 1, 'fires again once the cooldown has passed');
+  // unrelated edit (cooldown) keeps state; threshold edit re-seeds
+  const ix2 = new RuleIndex(); ix2.upsert(R()); ix2.onTick(T(99), 0);
+  ix2.upsert(R({ cooldown_min: 5 })); assert.equal(ix2.onTick(T(101), 1000).length, 1, 'edit that keeps symbol/kind/threshold keeps the armed state');
+  ix2.upsert(R({ threshold: 110, cooldown_min: 0 })); assert.equal(ix2.onTick(T(120), 2000).length, 0, 'threshold change re-seeds'); assert.equal(ix2.size, 1);
+  // pct rules need prevClose; a tick without it must not flip state
+  const ix3 = new RuleIndex(); ix3.upsert(R({ kind: 'pct_up', threshold: 2 }));
+  ix3.onTick(T(101), 0); assert.equal(ix3.onTick({ symbol: 'ABC', ltp: 103, ts: 1 }, 1).length, 0); assert.equal(ix3.onTick(T(103), 2).length, 1, 'missing prevClose is ignored, not treated as a fall');
+  // price_below, remove, disable, symbol move, replaceAll
+  const ix4 = new RuleIndex(); ix4.upsert(R({ kind: 'price_below', threshold: 50 })); ix4.onTick(T(60), 0); assert.equal(ix4.onTick(T(49), 1).length, 1);
+  ix4.upsert(R({ symbol: 'XYZ', kind: 'price_below', threshold: 50 })); assert.deepEqual(ix4.symbols(), ['XYZ']);
+  ix4.upsert(R({ enabled: false })); assert.equal(ix4.size, 0); assert.equal(ix4.symbols().length, 0);
+  ix4.upsert(R({ id: 'a' })); ix4.upsert(R({ id: 'b', symbol: 'Q' })); assert.deepEqual(ix4.replaceAll([R({ id: 'b', symbol: 'Q' }), R({ id: 'c' })]), { added: 1, removed: 1 }); assert.equal(ix4.has('a'), false);
+  // recent last_triggered_at (e.g. loaded from DB) blocks an immediate fire
+  const ix5 = new RuleIndex(); ix5.upsert(R({ last_triggered_at: new Date(500_000).toISOString() })); ix5.onTick(T(99), 600_000); assert.equal(ix5.onTick(T(101), 601_000).length, 0);
+  // row coercion
+  assert.equal(toRule({ id: 'x', user_id: 'u', symbol: ' reliance ', kind: 'price_above', threshold: '1500.5', cooldown_min: 30, channels: { push: true }, enabled: true })?.symbol, 'RELIANCE');
+  assert.equal(toRule({ id: 'x', user_id: 'u', symbol: 'A', kind: 'nope', threshold: 1, cooldown_min: 5 }), null); assert.equal(toRule(null), null);
+  // 2,000 rules over 200 symbols: one tick only touches its own symbol's rules
+  const big = new RuleIndex(); for (let i = 0; i < 2000; i++) big.upsert(R({ id: `r${i}`, symbol: `S${i % 200}`, threshold: 100 + (i % 7) }));
+  assert.equal(big.size, 2000); assert.equal(big.bySymbol.get('S3')?.length, 10);
+});
+
+t('daemon dispatcher: claim → push → stamped delivery row; duplicates; failures; queue', async () => {
+  const { createDispatcher } = await import('../daemon/dispatcher');
+  const { ackToken, verifyAckToken, ackSecret } = await import('../lib/ackToken');
+  const { stagesOf, summarize, percentile, fmtMs, latencyTone } = await import('../lib/deliveryLatency');
+  const rows: Record<string, unknown>[] = []; const calls: string[] = []; let claimAnswer: boolean | number = true; const pushed: { endpoint: string; body: string }[] = []; let goneEndpoint = '';
+  const sub = (n: number) => ({ endpoint: `https://fcm.googleapis.com/fcm/send/dev${n}`, keys: { p256dh: 'B'.repeat(80), auth: 'a'.repeat(22) } });
+  const fakeFetch = (async (url: string, init?: RequestInit) => {
+    const u = String(url); calls.push(`${init?.method ?? 'GET'} ${u.split('/rest/v1/')[1] ?? u}`);
+    const json = (b: unknown, status = 200) => new Response(JSON.stringify(b), { status });
+    if (u.includes('rpc/claim_alert_rule')) { if (claimAnswer === 500) return json({}, 500); return json(claimAnswer); }
+    if (u.includes('rpc/audit_write')) return json(null);
+    if (u.includes('push_subscriptions') && init?.method === 'DELETE') { goneEndpoint = decodeURIComponent(u.split('endpoint=eq.')[1]); return json(null); }
+    if (u.includes('push_subscriptions')) return json(u.includes('user_id=eq.nodev') ? [] : [sub(1), sub(2)]);
+    if (u.includes('/alert_deliveries')) { rows.push(...(JSON.parse(String(init?.body)) as Record<string, unknown>[])); return json(null, 201); }
+    return json({}, 404);
+  }) as unknown as typeof fetch;
+  const secret = ackSecret({ VAPID_PRIVATE_KEY: 'k'.repeat(40) })!;
+  let t = 1_000_000;
+  const mk = (over: Record<string, unknown> = {}) => createDispatcher({ supabaseUrl: 'http://sb.test', serviceKey: 'svc', ackSecret: secret, fetchImpl: fakeFetch, now: () => (t += 40), send: async (s, body) => { if (s.endpoint.endsWith('dev2') && goneEndpoint === 'FAIL410') throw Object.assign(new Error('gone'), { statusCode: 410 }); pushed.push({ endpoint: s.endpoint, body }); }, ...over });
+  const match = (o: Record<string, unknown> = {}) => ({ rule: { id: '11111111-1111-1111-1111-111111111111', user_id: 'u1', symbol: 'ABC', kind: 'price_above' as const, threshold: 100, cooldown_min: 10, channels: { push: true }, enabled: true, last_triggered_at: null }, price: 101, pct: 1, message: 'ABC above 100', tickTime: 1_000_000 - 300, matchedAt: 1_000_000, ...o });
+
+  let d = mk(); let r = await d.dispatch(match());
+  assert.equal(r.outcome, 'delivered'); assert.equal(r.sent, 2); assert.equal(pushed.length, 2);
+  const row = rows.find((x) => x.channel === 'push')!; assert.equal(row.status, 'sent'); assert.equal(row.id, r.deliveryId);
+  assert.equal(row.daemon_matched_at, new Date(1_000_000).toISOString()); assert.equal(row.tick_time, new Date(1_000_000 - 300).toISOString()); assert.ok(typeof row.push_sent_at === 'string' && Date.parse(row.push_sent_at as string) > 1_000_000);
+  const payload = JSON.parse(pushed[0].body); assert.equal(payload.delivery_id, r.deliveryId); assert.ok(verifyAckToken(payload.delivery_id, payload.ack, secret));
+  assert.ok(!verifyAckToken(payload.delivery_id, payload.ack + 'x', secret) && !verifyAckToken('22222222-2222-2222-2222-222222222222', payload.ack, secret) && !verifyAckToken(payload.delivery_id, payload.ack, undefined) && !verifyAckToken('nope', 'x', secret));
+  assert.ok(calls.some((c) => c.startsWith('POST rpc/claim_alert_rule')));
+  // duplicate suppression: claim=false → nothing sent, nothing recorded
+  rows.length = 0; pushed.length = 0; claimAnswer = false; r = await d.dispatch(match()); assert.equal(r.outcome, 'duplicate'); assert.equal(pushed.length + rows.length, 0); assert.equal(d.stats().duplicates, 1);
+  // claim RPC down (5xx twice) → error outcome, no push
+  claimAnswer = 500; r = await d.dispatch(match()); assert.equal(r.outcome, 'error'); assert.equal(pushed.length, 0); claimAnswer = true;
+  // no devices
+  rows.length = 0; r = await d.dispatch(match({ rule: { ...match().rule, user_id: 'nodev' } })); assert.equal(r.outcome, 'no_devices'); assert.equal(rows[0].status, 'skipped');
+  // expired device is pruned, the other still gets it
+  rows.length = 0; pushed.length = 0; goneEndpoint = 'FAIL410'; d = mk(); r = await d.dispatch(match()); await new Promise((x) => setTimeout(x, 10));
+  assert.equal(r.sent, 1); assert.equal(rows[0].detail, '1/2 devices'); assert.ok(calls.some((c) => c.startsWith('DELETE push_subscriptions')));
+  // push off for the rule → in-app row only, no push
+  rows.length = 0; pushed.length = 0; goneEndpoint = ''; r = await mk().dispatch(match({ rule: { ...match().rule, channels: { push: false } } })); assert.equal(pushed.length, 0); assert.equal(rows[0].channel, 'inapp');
+  // unconfigured (no sender) → untouched
+  assert.equal((await createDispatcher({ supabaseUrl: 'http://sb.test', serviceKey: 's', fetchImpl: fakeFetch }).dispatch(match())).outcome, 'unconfigured');
+  // test push writes a 'test' row with an ack token
+  rows.length = 0; pushed.length = 0; goneEndpoint = ''; const tp = await mk().sendTest('33333333-3333-3333-3333-333333333333'); assert.ok(tp.ok && tp.devices === 2); assert.equal(rows[0].kind, 'test'); assert.equal(rows[0].rule_id, null);
+  assert.equal((await mk().sendTest('not-a-uuid')).ok, false); assert.equal((await createDispatcher({ supabaseUrl: 'http://x', serviceKey: 's', fetchImpl: fakeFetch }).sendTest('33333333-3333-3333-3333-333333333333')).ok, false);
+  // bounded queue: 40 matches, concurrency 4 — all processed, never more than 4 in flight
+  rows.length = 0; let peak = 0, cur = 0;
+  const q = mk({ concurrency: 4, send: async () => { cur++; peak = Math.max(peak, cur); await new Promise((x) => setTimeout(x, 5)); cur--; } });
+  for (let i = 0; i < 40; i++) q.enqueue(match({ rule: { ...match().rule, id: `aaaaaaaa-aaaa-aaaa-aaaa-${String(i).padStart(12, '0')}`, user_id: `usr${i}` } }));
+  await q.drain(5000); assert.equal(q.stats().delivered, 40); assert.ok(peak <= 4 * 2 + 0 && q.stats().inFlight === 0 && q.stats().queued === 0, `peak ${peak}`);
+  // latency maths
+  const iso = (n: number) => new Date(n).toISOString();
+  const s = stagesOf({ tick_time: iso(1000), daemon_matched_at: iso(1300), push_sent_at: iso(1500), sw_ack_at: iso(1900), displayed_at: iso(1800) });
+  assert.deepEqual([s.tickToMatchMs, s.matchToPushMs, s.pushToDisplayMs, s.pushToAckMs, s.crossToPushMs, s.skew], [300, 200, 300, 400, 500, false]);
+  assert.equal(stagesOf({ tick_time: null, daemon_matched_at: iso(1300), push_sent_at: iso(1500), sw_ack_at: null, displayed_at: iso(1400) }).pushToDisplayMs, null, 'device clock behind → skew, hidden');
+  assert.equal(stagesOf({ tick_time: null, daemon_matched_at: iso(1300), push_sent_at: iso(1500), sw_ack_at: null, displayed_at: iso(1400) }).skew, true);
+  assert.equal(percentile([5, 1, 3, 2, 4], 50), 3); assert.equal(percentile([], 50), null); assert.equal(percentile([1, 2, 3, 4], 95), 4);
+  assert.deepEqual([fmtMs(null), fmtMs(250), fmtMs(1500), fmtMs(12_000)], ['—', '250 ms', '1.50 s', '12.0 s']); assert.deepEqual([latencyTone(500), latencyTone(1500), latencyTone(2500), latencyTone(null)], ['up', 'warn', 'down', 'muted']);
+  const sm = summarize([{ id: 'a', fired_at: '', symbol: 'A', kind: 'k', price: 1, channel: 'push', status: 'sent', detail: null, tick_time: iso(1000), daemon_matched_at: iso(1300), push_sent_at: iso(1500), sw_ack_at: iso(1900) }, { id: 'b', fired_at: '', symbol: 'A', kind: 'k', price: 1, channel: 'email', status: 'sent', detail: null }]);
+  assert.equal(sm.rows, 1); assert.equal(sm.acked, 1); assert.equal(sm.p50.crossToPush, 500);
+});
+
+
+t('service worker: push shows the banner then ACKs with the local display time; retries on 404; plain circuit pushes send no ACK', async () => {
+  const { readFileSync } = await import('node:fs'); const vm = await import('node:vm');
+  const run = async (payload: unknown, statuses: number[]) => {
+    const listeners: Record<string, (e: unknown) => void> = {}; const shown: unknown[] = []; const fetched: { url: string; body: Record<string, unknown> }[] = []; let waits: Promise<unknown>[] = [];
+    const sandbox: Record<string, unknown> = {
+      self: { addEventListener: (n: string, f: (e: unknown) => void) => (listeners[n] = f), skipWaiting() {}, clients: { claim() {}, matchAll: async () => [], openWindow: async () => null }, location: { origin: 'https://x.test' }, registration: { showNotification: async (title: string, o: unknown) => { shown.push({ title, o }); } } },
+      fetch: async (url: string, init: { body: string }) => { fetched.push({ url, body: JSON.parse(init.body) }); return { ok: statuses[Math.min(fetched.length - 1, statuses.length - 1)] < 300, status: statuses[Math.min(fetched.length - 1, statuses.length - 1)] }; },
+      setTimeout: (f: () => void) => { f(); return 0; }, URL, Date, JSON, Promise,
+    };
+    vm.runInNewContext(readFileSync('public/sw.js', 'utf8'), sandbox);
+    listeners.push({ data: { json: () => payload, text: () => '' }, waitUntil: (p: Promise<unknown>) => waits.push(p) }); await Promise.all(waits); waits = [];
+    return { shown, fetched };
+  };
+  const a = await run({ title: 'UpCircuit · ABC', body: 'b', delivery_id: 'd1', ack: 'tok', sent_at: 5 }, [200]);
+  assert.equal(a.shown.length, 1); assert.equal(a.fetched.length, 1); assert.equal(a.fetched[0].url, '/api/alerts/ack');
+  assert.equal(a.fetched[0].body.delivery_id, 'd1'); assert.equal(a.fetched[0].body.ack, 'tok'); assert.ok(typeof a.fetched[0].body.displayed_at === 'number' && (a.fetched[0].body.displayed_at as number) >= (a.fetched[0].body.received_at as number));
+  const b = await run({ title: 'x', delivery_id: 'd2', ack: 't' }, [404, 404, 200]); assert.equal(b.fetched.length, 3, '404 (row not inserted yet) is retried');
+  const c = await run({ title: 'x', delivery_id: 'd3', ack: 't' }, [401]); assert.equal(c.fetched.length, 1, 'a rejected ACK is not retried');
+  const d = await run({ title: '▲ UPPER CIRCUIT · ABC', body: 'b' }, [200]); assert.equal(d.shown.length, 1); assert.equal(d.fetched.length, 0, 'circuit pushes without delivery_id send no ACK');
+});
+
 void Promise.all(pending).then(() => {
   console.log(`\n${passed} checks passed${process.exitCode ? ' — WITH FAILURES' : ''}`);
   process.exit(process.exitCode ?? 0); // some modules keep timers alive

@@ -4,6 +4,7 @@ import { useState } from 'react';
 import type { CloudClient } from '@/lib/cloud';
 import { ROLE_INFO, can, opsTabs, type AppRole, type OpsTab } from '@/lib/rbac';
 import { SurveillanceRegister } from './SurveillanceRegister';
+import { AlertDeliveryLog } from './dashboards/AlertDeliveryLog';
 import { AlertRuleManager } from './AlertRuleManager';
 import { AuditTrail } from './AuditTrail';
 import { UserAdmin } from './UserAdmin';
@@ -33,7 +34,7 @@ export function ComplianceWorkspace({ cloud, userId, role, onOpenStock, backtest
             {tabs.map((t) => <button key={t} role="tab" aria-selected={active === t} data-testid={`tab-${t}`} onClick={() => setTab(t)} className={`whitespace-nowrap border-b-2 px-3 py-2 text-[13px] font-semibold ${active === t ? 'border-accent text-accent' : 'border-transparent text-muted hover:text-ink'}`}>{LABEL[t]}</button>)}
           </nav>
           {active === 'register' && <SurveillanceRegister cloud={cloud} role={role} onOpenStock={onOpenStock} />}
-          {active === 'rules' && <AlertRuleManager cloud={cloud} userId={userId} />}
+          {active === 'rules' && <><AlertRuleManager cloud={cloud} userId={userId} /><AlertDeliveryLog cloud={cloud} /></>}
           {active === 'audit' && <AuditTrail cloud={cloud} canVerify={can(role, 'audit.verify')} canExport={can(role, 'audit.export')} />}
           {active === 'backtest' && <PredictionBacktest defaultSymbols={backtestSymbols} />}
           {active === 'ai' && <AiSignoffs cloud={cloud} />}
