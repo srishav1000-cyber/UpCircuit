@@ -434,7 +434,7 @@ function Terminal() {
       <FeedHealthStatus variant="banner" conn={conn} mode={mode} reason={liveReason} getLastTickAt={getLastTickAt} cloud={cloud} />
 
       {view === 'compliance' ? (
-        <ComplianceWorkspace feed={{ conn, mode, reason: liveReason, getLastTickAt }} cloud={cloud} userId={cloudUser} role={appRole} onOpenStock={openStock} backtestSymbols={circuitSymbols.slice(0, 20)} />
+        <ComplianceWorkspace desk={{ engine, symbol, version }} feed={{ conn, mode, reason: liveReason, getLastTickAt }} cloud={cloud} userId={cloudUser} role={appRole} onOpenStock={openStock} backtestSymbols={circuitSymbols.slice(0, 20)} />
       ) : view === 'home' ? (
         <main className="flex-1">
           <HomePage engine={engine} news={news} newsError={newsError} onOpenStock={openStock} instruments={instruments} onOpenChart={openChart} />

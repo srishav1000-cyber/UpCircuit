@@ -13,6 +13,7 @@ import { fetchBars } from '../lib/yahooQuotes';
 import { RuleIndex, toRule } from './engine';
 import { BaselineStore } from './baselines';
 import { createDispatcher } from './dispatcher';
+import type { DepthFlag } from '../lib/heuristicFlags';
 
 /* ───────────── config ───────────── */
 type Env = Record<string, string | undefined>;
@@ -69,6 +70,28 @@ export async function main(cfg = loadConfig(), env: Env = process.env): Promise<
     log,
   });
   index.setBaselineLookup((sym) => baselines.get(sym));
+  // heuristic depth flags (walls, rapid add/cancel) → public.depth_flags: batched every 2 s, bounded buffer, rows older than 2 days pruned hourly.
+  // They are screening hints for the Surveillance workspace, never alert rules and never proof of manipulation.
+  const flagBuf: DepthFlag[] = [];
+  let flagFailLogged = 0;
+  index.setFlagSink((f) => { if (flagBuf.length < 500) flagBuf.push(f); });
+  const flushFlags = async () => {
+    if (!flagBuf.length) return;
+    const batch = flagBuf.splice(0, 100);
+    try {
+      const r = await fetch(`${sbBase}/rest/v1/depth_flags`, {
+        method: 'POST', headers: { ...sbHeaders, Prefer: 'return=minimal' }, signal: AbortSignal.timeout(6000),
+        body: JSON.stringify(batch.map((f) => ({ symbol: f.symbol, kind: f.kind, side: f.side, severity: f.severity, price: f.price, qty: f.qty, detail: f.detail, label: f.label, flagged_at: new Date(f.ts > 0 ? f.ts : Date.now()).toISOString() }))),
+      });
+      if (!r.ok) throw new Error(`depth_flags ${r.status}`);
+    } catch (e) {
+      const t = Date.now();
+      if (t - flagFailLogged > 60_000) { flagFailLogged = t; log('warn', 'depth flag write failed (is docs/WEEK9_TURN44_SCHEMA.sql applied?)', { error: e instanceof Error ? e.message : String(e), dropped: batch.length }); }
+    }
+  };
+  const pruneFlags = () => void fetch(`${sbBase}/rest/v1/depth_flags?flagged_at=lt.${encodeURIComponent(new Date(Date.now() - 2 * 86_400_000).toISOString())}`, { method: 'DELETE', headers: sbHeaders, signal: AbortSignal.timeout(8000) }).catch(() => undefined);
+  const flagTimer = setInterval(() => void flushFlags(), 2000);
+  const flagPruneTimer = setInterval(pruneFlags, 3_600_000);
   const wantBaselines = () => baselines.want(index.symbolsWithKind('volume_surge'));
   if (!dispatcher.configured) log('warn', 'web push is NOT configured (VAPID_* / ACK secret) — rules will be evaluated but nothing can be sent');
 
@@ -200,7 +223,7 @@ export async function main(cfg = loadConfig(), env: Env = process.env): Promise<
     try {
       const r = await fetch(`${sbBase}/rest/v1/rpc/daemon_beat`, {
         method: 'POST', headers: sbHeaders, signal: AbortSignal.timeout(4000),
-        body: JSON.stringify({ p_id: 'alert-daemon', p_feed_status: health.feed, p_last_tick_age_ms: health.lastTickAt ? now - health.lastTickAt : null, p_ticks: health.ticks, p_reconnects: health.reconnects, p_rules: index.size, p_symbols: index.symbols().length, p_started_at: new Date(health.startedAt).toISOString(), p_version: 'turn43' }),
+        body: JSON.stringify({ p_id: 'alert-daemon', p_feed_status: health.feed, p_last_tick_age_ms: health.lastTickAt ? now - health.lastTickAt : null, p_ticks: health.ticks, p_reconnects: health.reconnects, p_rules: index.size, p_symbols: index.symbols().length, p_started_at: new Date(health.startedAt).toISOString(), p_version: 'turn44' }),
       });
       if (!r.ok) throw new Error(`daemon_beat ${r.status}`);
     } catch (e) {
@@ -216,7 +239,7 @@ export async function main(cfg = loadConfig(), env: Env = process.env): Promise<
     const age = health.lastTickAt ? Date.now() - health.lastTickAt : null;
     const stalled = isStreamWindow(Date.now()) && (age === null ? Date.now() - health.startedAt > 60_000 : age > 60_000);
     res.writeHead(stalled ? 503 : 200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
-    res.end(JSON.stringify({ ok: !stalled, uptimeS: Math.round((Date.now() - health.startedAt) / 1000), feed: health.feed, ticks: health.ticks, lastTickAgeMs: age, lastTickLagMs: health.lastTickLagMs, reconnects: health.reconnects, logins: health.logins, rules: index.size, symbols: index.symbols().length, unresolvedSymbols: health.unresolved.length, realtime: health.realtime, resyncs: health.resyncs, dispatch: dispatcher.stats(), baselines: baselines.stats(), volumeRulesNA: index.volumeRulesNA(), pushConfigured: dispatcher.configured }));
+    res.end(JSON.stringify({ ok: !stalled, uptimeS: Math.round((Date.now() - health.startedAt) / 1000), feed: health.feed, ticks: health.ticks, lastTickAgeMs: age, lastTickLagMs: health.lastTickLagMs, reconnects: health.reconnects, logins: health.logins, rules: index.size, symbols: index.symbols().length, unresolvedSymbols: health.unresolved.length, realtime: health.realtime, resyncs: health.resyncs, dispatch: dispatcher.stats(), baselines: baselines.stats(), volumeRulesNA: index.volumeRulesNA(), depthFlags: { ...index.flagStats(), buffered: flagBuf.length }, pushConfigured: dispatcher.configured }));
   });
   http.listen(cfg.port, () => log('info', 'daemon up', { port: cfg.port, rules: index.size }));
 
@@ -224,7 +247,7 @@ export async function main(cfg = loadConfig(), env: Env = process.env): Promise<
     if (stopping) return;
     stopping = true;
     log('info', 'shutting down');
-    clearInterval(resyncTimer); clearInterval(baselineTimer); clearInterval(beatTimer);
+    clearInterval(resyncTimer); clearInterval(baselineTimer); clearInterval(beatTimer); clearInterval(flagTimer); clearInterval(flagPruneTimer); await flushFlags();
     stopHooks.splice(0).forEach((h) => h());
     await dispatcher.drain(5000);
     await sb.removeChannel(channel).catch(() => undefined);

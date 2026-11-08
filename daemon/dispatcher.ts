@@ -8,6 +8,7 @@ import { ackToken } from '../lib/ackToken';
 import { terminalUrl } from '../lib/appUrl';
 import { ruleEmail } from '../lib/alertWorker';
 import { sendEmail } from '../lib/email';
+import { bypassesQuiet, quietDecision, sanitizeQuiet, type QuietHours } from '../lib/quietHours';
 import type { RuleMatch } from './engine';
 
 export interface DispatcherConfig {
@@ -30,12 +31,15 @@ export interface DispatcherConfig {
   /** push TTL seconds (default 300 — a stale price alert is worse than none) */
   ttlSec?: number;
   emailEnabled?: boolean;
+  /** per-user Quiet Hours (default: user_quiet_hours table, cached for quietTtlMs). Return null = none set. A rejected lookup delivers (fail open). */
+  quietLookup?: (userId: string) => Promise<QuietHours | null>;
+  quietTtlMs?: number;
   log?: (level: 'info' | 'warn' | 'error', msg: string, meta?: Record<string, unknown>) => void;
 }
 
-export type DispatchOutcome = 'delivered' | 'no_devices' | 'push_failed' | 'duplicate' | 'error' | 'unconfigured';
+export type DispatchOutcome = 'delivered' | 'held' | 'no_devices' | 'push_failed' | 'duplicate' | 'error' | 'unconfigured';
 export interface DispatchResult { outcome: DispatchOutcome; deliveryId?: string; sent: number; devices: number; failed: number; matchedAt: number; pushSentAt: number | null; detail?: string }
-export interface DispatcherStats { enqueued: number; delivered: number; duplicates: number; noDevices: number; failed: number; errors: number; queued: number; inFlight: number; lastMatchToPushMs: number | null }
+export interface DispatcherStats { enqueued: number; delivered: number; duplicates: number; held: number; overridden: number; noDevices: number; failed: number; errors: number; queued: number; inFlight: number; lastMatchToPushMs: number | null }
 
 const iso = (ms: number | null | undefined): string | null => (ms && Number.isFinite(ms) ? new Date(ms).toISOString() : null);
 const isUuid = (x: unknown): x is string => typeof x === 'string' && /^[0-9a-f-]{36}$/i.test(x);
@@ -56,7 +60,7 @@ export function createDispatcher(cfg: DispatcherConfig) {
     cfg.send ?? (cfg.vapid ? (sub, body) => webpush.sendNotification(sub, body, { TTL: ttl, urgency: 'high', timeout: 8000, vapidDetails: cfg.vapid! }).then(() => undefined) : null);
   const configured = !!send && !!cfg.ackSecret;
 
-  const stats: DispatcherStats = { enqueued: 0, delivered: 0, duplicates: 0, noDevices: 0, failed: 0, errors: 0, queued: 0, inFlight: 0, lastMatchToPushMs: null };
+  const stats: DispatcherStats = { enqueued: 0, delivered: 0, duplicates: 0, held: 0, overridden: 0, noDevices: 0, failed: 0, errors: 0, queued: 0, inFlight: 0, lastMatchToPushMs: null };
 
   /* ───────── devices ───────── */
   const subsCache = new Map<string, { at: number; subs: PushSub[] }>();
@@ -81,6 +85,33 @@ export function createDispatcher(cfg: DispatcherConfig) {
     if (!endpoints.length) return;
     subsCache.delete(userId);
     await Promise.all(endpoints.map((e) => rest(`push_subscriptions?user_id=eq.${encodeURIComponent(userId)}&endpoint=eq.${encodeURIComponent(e)}`, { method: 'DELETE' }).catch(() => null)));
+  }
+
+  /* ───────── quiet hours ───────── */
+  const quietTtl = cfg.quietTtlMs ?? 60_000;
+  const quietCache = new Map<string, { at: number; q: QuietHours | null }>();
+  const quietLookup = cfg.quietLookup ?? (async (userId: string): Promise<QuietHours | null> => {
+    const r = await rest(`user_quiet_hours?user_id=eq.${encodeURIComponent(userId)}&select=enabled,start_min,end_min,tz&limit=1`);
+    if (!r.ok) throw new Error(`user_quiet_hours ${r.status}`);
+    const rows = (await r.json()) as unknown[];
+    return rows[0] ? sanitizeQuiet(rows[0]) : null;
+  });
+  /** null on any failure: an alert is never lost because the preference could not be read */
+  async function loadQuiet(userId: string): Promise<QuietHours | null> {
+    const hit = quietCache.get(userId);
+    if (hit && now() - hit.at < quietTtl) return hit.q;
+    try {
+      const q = await quietLookup(userId);
+      if (quietCache.size > 5000) quietCache.clear();
+      quietCache.set(userId, { at: now(), q });
+      return q;
+    } catch (e) { log('warn', 'quiet-hours lookup failed — delivering', { error: String(e) }); return null; }
+  }
+  /** critical rules never wait on the preference: use what is cached (so the row can say it overrode Quiet Hours) and refresh in the background */
+  function peekQuiet(userId: string): QuietHours | null {
+    const hit = quietCache.get(userId);
+    if (!hit || now() - hit.at >= quietTtl) void loadQuiet(userId);
+    return hit?.q ?? null;
   }
 
   /* ───────── DB writes ───────── */
@@ -132,15 +163,31 @@ export function createDispatcher(cfg: DispatcherConfig) {
     try {
       const windowKey = `${Math.floor(m.matchedAt / Math.max(1, rule.cooldown_min * 60_000))}`;
       // claim and device lookup run in parallel — the lookup is cached, the claim is the only mandatory round-trip
-      const [claimed, subs] = await Promise.all([
+      const [claimed, subs, quiet] = await Promise.all([
         claim(rule.id, windowKey),
         rule.channels.push ? loadSubs(rule.user_id).catch((e) => { log('warn', 'device lookup failed', { error: String(e) }); return null; }) : Promise.resolve([] as PushSub[]),
+        bypassesQuiet(rule.kind) ? Promise.resolve(peekQuiet(rule.user_id)) : loadQuiet(rule.user_id),     // critical rules never wait on the preference
       ]);
       if (!claimed) { stats.duplicates++; return { ...empty, outcome: 'duplicate' }; }
+      const qd = quietDecision(quiet, rule.kind, m.matchedAt);
 
       const base = { rule_id: rule.id, user_id: rule.user_id, symbol: rule.symbol, kind: rule.kind, price: m.price };
       const tick = m.tickTime && Math.abs(m.tickTime - m.matchedAt) < 6 * 3600_000 ? m.tickTime : null;
       let result: DispatchResult = { ...empty, outcome: 'no_devices' };
+
+      if (qd.hold) {
+        // routine alert inside the user's Quiet Hours: nothing is sent; every channel the rule uses leaves a 'skipped' row so the log shows what was held.
+        // It is not replayed when the window ends — a stale price alert is worse than none (push TTL is 5 minutes for the same reason).
+        const when = { fired_at: iso(m.matchedAt), tick_time: iso(tick), daemon_matched_at: iso(m.matchedAt) };
+        const detail = `${qd.reason} · ${m.message}`;
+        const chans: ('push' | 'email' | 'inapp')[] = [...(rule.channels.push ? ['push' as const] : ['inapp' as const]), ...(rule.channels.email ? ['email' as const] : [])];
+        await Promise.all(chans.map((channel) => record({ ...base, channel, status: 'skipped', detail, ...when })));
+        stats.held++;
+        void audit(rule.id, { symbol: rule.symbol, kind: rule.kind, price: m.price, via: 'daemon', held: 'quiet_hours' });
+        return { ...empty, outcome: 'held', detail: qd.reason };
+      }
+      if (qd.overridden) stats.overridden++;
+      const via = qd.overridden ? ' · quiet-hours override' : '';
 
       if (rule.channels.push) {
         if (subs === null) {
@@ -156,17 +203,17 @@ export function createDispatcher(cfg: DispatcherConfig) {
           const p = await pushTo(subs, payload);
           void pruneGone(rule.user_id, p.gone);
           const ok = p.sent > 0;
-          await record({ ...base, id, channel: 'push', status: ok ? 'sent' : 'failed', detail: ok ? `${p.sent}/${p.devices} devices` : 'no device accepted the push', fired_at: iso(m.matchedAt), tick_time: iso(tick), daemon_matched_at: iso(m.matchedAt), push_sent_at: iso(p.firstAcceptedAt) });
+          await record({ ...base, id, channel: 'push', status: ok ? 'sent' : 'failed', detail: ok ? `${p.sent}/${p.devices} devices${via}` : 'no device accepted the push', fired_at: iso(m.matchedAt), tick_time: iso(tick), daemon_matched_at: iso(m.matchedAt), push_sent_at: iso(p.firstAcceptedAt) });
           if (ok) { stats.delivered++; stats.lastMatchToPushMs = (p.firstAcceptedAt ?? now()) - m.matchedAt; } else stats.failed++;
           result = { outcome: ok ? 'delivered' : 'push_failed', deliveryId: id, sent: p.sent, devices: p.devices, failed: p.failed, matchedAt: m.matchedAt, pushSentAt: p.firstAcceptedAt };
         }
       } else {
         // push switched off for this rule: keep the user-visible trace the cron worker always wrote
-        await record({ ...base, channel: 'inapp', status: 'sent', detail: m.message, fired_at: iso(m.matchedAt), tick_time: iso(tick), daemon_matched_at: iso(m.matchedAt) });
+        await record({ ...base, channel: 'inapp', status: 'sent', detail: `${m.message}${via}`, fired_at: iso(m.matchedAt), tick_time: iso(tick), daemon_matched_at: iso(m.matchedAt) });
       }
 
       if (rule.channels.email) void emailFallback(m).catch((e) => log('warn', 'email failed', { error: String(e) }));
-      void audit(rule.id, { symbol: rule.symbol, kind: rule.kind, price: m.price, via: 'daemon' });
+      void audit(rule.id, { symbol: rule.symbol, kind: rule.kind, price: m.price, via: 'daemon', ...(qd.overridden ? { quiet_hours_override: true } : {}) });
       return result;
     } catch (e) {
       stats.errors++;
@@ -235,6 +282,6 @@ export function createDispatcher(cfg: DispatcherConfig) {
     });
   }
 
-  return { dispatch, enqueue, drain, sendTest, stats: () => ({ ...stats }), configured, invalidateDevices: (userId?: string) => (userId ? subsCache.delete(userId) : subsCache.clear()) };
+  return { dispatch, enqueue, drain, sendTest, stats: () => ({ ...stats }), configured, invalidateDevices: (userId?: string) => (userId ? subsCache.delete(userId) : subsCache.clear()), invalidateQuiet: (userId?: string) => (userId ? quietCache.delete(userId) : quietCache.clear()) };
 }
 export type Dispatcher = ReturnType<typeof createDispatcher>;

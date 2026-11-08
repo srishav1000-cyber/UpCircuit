@@ -3,6 +3,8 @@
 //   volume_surge            today's cumulative volume ≥ threshold × the stock's typical full-day volume (baseline lookup; N/A while the baseline is missing or short)
 //   order_imbalance_above   top-5 depth (Σbid − Σask) ÷ (Σbid + Σask) ≥ +threshold   (a heuristic of resting orders)
 //   order_imbalance_below   the same ratio ≤ −threshold
+// Turn 44: every depth snapshot of a watched symbol also feeds a DepthFlagTracker (lib/heuristicFlags.ts) — large resting-order walls and rapid
+// add/cancel patterns are reported through the flag sink as "Heuristic Flag / Possible Manipulation Pattern" (never proof, never an alert rule).
 //
 // Semantics: a rule fires on the tick where its condition goes from FALSE to TRUE (a crossing), not while it merely stays true.
 //  • the first observation of a rule only seeds its state (a rule created while the price is already beyond the threshold does not fire);
@@ -10,6 +12,7 @@
 //  • a tick that cannot evaluate a percentage rule (no previous close) is ignored — it never flips state, so a missing field cannot fake a crossing.
 import { canEvaluate, evaluateRule, isRuleKind, type AlertRule, type RuleKind, type RuleQuote } from '../lib/alertRules';
 import { topFiveImbalance } from '../lib/depthImbalance';
+import { DepthFlagTracker, type DepthFlag } from '../lib/heuristicFlags';
 import type { DepthLevel } from '../lib/types';
 
 export interface TickIn {
@@ -45,6 +48,14 @@ export class RuleIndex {
   private readonly rules = new Map<string, AlertRule>();
   private readonly states = new Map<string, State>();
   private baseline: BaselineLookup = () => null;
+  private readonly flags = new DepthFlagTracker();
+  private flagSink: ((f: DepthFlag) => void) | null = null;
+  private flagsSeen = 0;
+  private lastPrune = 0;
+
+  /** receives every NEW heuristic depth flag (daemon/index.ts persists them to depth_flags); null disables flag detection */
+  setFlagSink(f: ((flag: DepthFlag) => void) | null): void { this.flagSink = f; }
+  flagStats(): { symbols: number; emitted: number } { return { symbols: this.flags.size, emitted: this.flagsSeen }; }
 
   /** where volume_surge rules get their baseline from (until set, every volume rule is N/A) */
   setBaselineLookup(f: BaselineLookup): void { this.baseline = f; }
@@ -102,6 +113,11 @@ export class RuleIndex {
     const sym = t.symbol.toUpperCase();
     const list = this.bySymbol.get(sym);
     if (!list || !(t.ltp > 0)) return [];
+    if (this.flagSink && t.depth && (t.depth.bids.length || t.depth.asks.length)) {
+      try { for (const f of this.flags.observe(sym, t.depth, t.ltp, t.ts > 0 ? t.ts : now)) { this.flagsSeen++; this.flagSink(f); } }
+      catch { /* a flag problem must never stop rule evaluation */ }
+      if (now - this.lastPrune > 60_000) { this.lastPrune = now; this.flags.prune(now); }
+    }
     const quote: RuleQuote = { symbol: t.symbol, ltp: t.ltp, prevClose: t.prevClose && t.prevClose > 0 ? t.prevClose : 0, volume: t.volume };
     // derived inputs are computed once per tick, and only if some rule on the symbol needs them
     let derived = false;

@@ -14,7 +14,7 @@ export interface FeedHealthStatusProps {
   reason?: LiveReason;
   /** epoch ms of the newest tick on the browser socket (0 = none). A getter, so this component can tick every second without re-rendering the page. */
   getLastTickAt: () => number;
-  /** with a signed-in cloud client the closed-app alert daemonthe closed-app alert daemon's heartbeatapos;s heartbeat is shown too */
+  /** with a signed-in cloud client the closed-app alert daemon's heartbeat is shown too */
   cloud?: CloudClient | null;
   variant?: Variant;
   className?: string;
@@ -36,7 +36,7 @@ const DAEMON_TONE = { running: 'text-up', degraded: 'text-warn', stale: 'text-wa
  * Feed health + lag. Three renderings of one state machine (lib/feedHealth.ts):
  *   pill   — "● Live · 0.8 s"            (compact, for toolbars)
  *   banner — floating warning, only while the feed is delayed / reconnecting / down during market hours (dismissible until it gets worse)
- *   panel  — full detail: browser feed, tick age, thresholds, and the closed-app alert daemonthe closed-app alert daemon's heartbeatapos;s heartbeat
+ *   panel  — full detail: browser feed, tick age, thresholds, and the closed-app alert daemon's heartbeat
  * Lag = now − timestamp of the newest tick received (local receive clock, so exchange-vs-device clock skew cannot distort it).
  */
 export function FeedHealthStatus({ conn, mode, reason, getLastTickAt, cloud = null, variant = 'panel', className = '', clock = Date.now }: FeedHealthStatusProps) {

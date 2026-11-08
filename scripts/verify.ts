@@ -2064,6 +2064,123 @@ t('rules API: auth, per-kind validation, dry run with honest notes, create / edi
   } finally { globalThis.fetch = realFetch; for (const k of Object.keys(env)) { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]; } }
 });
 
+t('quiet hours: windows, wrap past midnight, time zones + DST, critical bypass', async () => {
+  const Q = await import('../lib/quietHours');
+  const { parseHHMM, fmtHHMM, isQuietAt, minutesUntilEnd, quietDecision, sanitizeQuiet, validateQuiet, isValidTz, bypassesQuiet, DEFAULT_QUIET } = Q;
+  assert.equal(parseHHMM('22:30'), 1350); assert.equal(parseHHMM('7:05'), 425); assert.equal(parseHHMM('24:00'), null); assert.equal(parseHHMM('12:60'), null); assert.equal(parseHHMM('x'), null); assert.equal(fmtHHMM(425), '07:05');
+  const ist = { enabled: true, start: 22 * 60, end: 7 * 60, tz: 'Asia/Kolkata' };
+  const at = (iso: string) => Date.parse(iso);
+  assert.ok(isQuietAt(ist, at('2026-11-09T18:00:00Z')));            // 23:30 IST
+  assert.ok(isQuietAt(ist, at('2026-11-09T21:00:00Z')));            // 02:30 IST (after midnight)
+  assert.ok(!isQuietAt(ist, at('2026-11-10T01:30:00Z')));           // 07:00 IST — end is exclusive
+  assert.ok(isQuietAt(ist, at('2026-11-10T01:29:00Z')));            // 06:59 IST
+  assert.ok(!isQuietAt(ist, at('2026-11-09T09:00:00Z')));           // 14:30 IST
+  assert.ok(isQuietAt(ist, at('2026-11-09T16:30:00Z')));            // 22:00 IST — start is inclusive
+  assert.equal(minutesUntilEnd(ist, at('2026-11-09T18:00:00Z')), 450); assert.equal(minutesUntilEnd(ist, at('2026-11-09T09:00:00Z')), null);
+  assert.ok(isQuietAt({ enabled: true, start: 13 * 60, end: 14 * 60, tz: 'Asia/Kolkata' }, at('2026-11-09T08:00:00Z')));
+  assert.ok(!isQuietAt({ ...ist, enabled: false }, at('2026-11-09T18:00:00Z')) && !isQuietAt({ ...ist, start: 600, end: 600 }, at('2026-11-09T18:00:00Z')) && !isQuietAt({ ...ist, tz: 'Mars/Base' }, at('2026-11-09T18:00:00Z')) && !isQuietAt(null, 1));
+  const ny = { enabled: true, start: 22 * 60, end: 7 * 60, tz: 'America/New_York' };
+  assert.ok(isQuietAt(ny, at('2026-11-10T03:30:00Z')));             // 22:30 EST
+  assert.ok(isQuietAt(ny, at('2026-03-09T02:30:00Z')));             // 22:30 EDT, the day DST began
+  assert.ok(!isQuietAt(ny, at('2026-03-08T02:30:00Z')));            // 21:30 EST the evening before
+  const d1 = quietDecision(ist, 'price_above', at('2026-11-09T18:00:00Z')); assert.equal(d1.hold, true); assert.ok(d1.reason!.startsWith('held: quiet hours 22:00–07:00 Asia/Kolkata'));
+  const d2 = quietDecision(ist, 'circuit_proximity', at('2026-11-09T18:00:00Z')); assert.equal(d2.hold, false); assert.equal(d2.overridden, true);
+  assert.deepEqual(quietDecision(ist, 'price_above', at('2026-11-09T09:00:00Z')), { hold: false, overridden: false });
+  assert.ok(bypassesQuiet('circuit_proximity') && !bypassesQuiet('volume_surge') && !bypassesQuiet('order_imbalance_above') && !bypassesQuiet('price_above'));
+  assert.deepEqual(sanitizeQuiet({ enabled: true, start_min: 1320, end_min: 420, tz: 'Asia/Kolkata' }), ist); assert.deepEqual(sanitizeQuiet({ enabled: true, start: '22:00', end: '07:00' }), ist);
+  assert.equal(sanitizeQuiet({ enabled: true, start_min: 2000, end_min: 1, tz: 'Asia/Kolkata' }), null); assert.equal(sanitizeQuiet({ enabled: true, start_min: 1, end_min: 2, tz: 'Nope/Zone' }), null); assert.equal(sanitizeQuiet(null), null);
+  assert.deepEqual(validateQuiet({ ...ist, start: 5, end: 5 }).length, 1); assert.deepEqual(validateQuiet(ist), []); assert.deepEqual(validateQuiet({ ...ist, enabled: false, start: 5, end: 5 }), []);
+  assert.ok(isValidTz('Asia/Kolkata') && !isValidTz('') && !isValidTz('x'.repeat(80)) && !isValidTz(5)); assert.equal(DEFAULT_QUIET.enabled, false);
+});
+
+t('heuristic flags: walls, add/cancel cycles, fills and displacement are not cancels', async () => {
+  const { detectWalls, DepthFlagTracker, FLAG_LABEL, FLAG_PARAMS } = await import('../lib/heuristicFlags');
+  const lv = (p0: number, step: number, qs: number[]) => qs.map((q, i) => ({ price: +(p0 + step * i).toFixed(2), qty: q, orders: 1 }));
+  const bids = (qs: number[]) => lv(100, -0.1, qs), asks = (qs: number[]) => lv(100.1, 0.1, qs);
+  let w = detectWalls('ABC', bids([800, 700, 9000, 600, 500]), asks([700, 650, 600, 550, 500]), 1);
+  assert.equal(w.length, 1); assert.equal(w[0].side, 'bid'); assert.equal(w[0].kind, 'wall'); assert.equal(w[0].price, 99.8); assert.equal(w[0].qty, 9000); assert.equal(w[0].severity, 'elevated');
+  assert.equal(w[0].label, FLAG_LABEL); assert.equal(w[0].label, 'Heuristic Flag / Possible Manipulation Pattern'); assert.equal(w[0].heuristic, true); assert.equal(w[0].definitive, false);
+  assert.equal(detectWalls('ABC', bids([800, 700, 650, 600, 500]), asks([700, 650, 600, 550, 500]), 1).length, 0);
+  assert.equal(detectWalls('ABC', bids([400, 100, 100, 100, 100]), asks([100, 100, 100, 100, 100]), 1).length, 0);
+  assert.equal(detectWalls('ABC', bids([9000, 100]), asks([9000, 100]), 1).length, 0);
+  w = detectWalls('ABC', bids([2000, 1000, 900, 800, 700]), asks([100, 100, 100, 100, 6000]), 1); assert.equal(w.length, 1); assert.equal(w[0].side, 'ask'); assert.equal(w[0].severity, 'elevated');
+  w = detectWalls('ABC', bids([5000, 1000, 1000, 1000, 1000]), asks([700, 650, 600, 550, 500]), 1); assert.equal(w[0].severity, 'watch');
+  const base = bids([800, 800, 800, 800, 800]);
+  const withBig = (p: number) => [...base, { price: p, qty: 2500, orders: 1 }].sort((a, b) => b.price - a.price).slice(0, 5);
+  const tr = new DepthFlagTracker(); const A = asks([700, 700, 700, 700, 700]);
+  let T = 1_000_000, got: ReturnType<typeof tr.observe> = [];
+  tr.observe('ABC', { bids: base, asks: A }, 100.1, T);
+  for (const p of [99.95, 99.85, 99.75]) {
+    T += 2000; tr.observe('ABC', { bids: withBig(p), asks: A }, 100.1, T);
+    T += 1500; got = tr.observe('ABC', { bids: base, asks: A }, 100.1, T);
+  }
+  const f = got.find((x) => x.kind === 'add_cancel');
+  assert.ok(f, 'three cycles flag'); assert.equal(f!.side, 'bid'); assert.equal(f!.qty, FLAG_PARAMS.CYCLES_WATCH); assert.equal(f!.severity, 'watch'); assert.equal(f!.label, FLAG_LABEL); assert.ok(/appeared and vanished/.test(f!.detail));
+  T += 1000; assert.equal(tr.observe('ABC', { bids: base, asks: A }, 100.1, T).filter((x) => x.kind === 'add_cancel').length, 0, 'not re-emitted inside the cooldown');
+  const two = new DepthFlagTracker(); T = 5_000_000; two.observe('X', { bids: base, asks: A }, 100.1, T);
+  for (const p of [99.95, 99.85]) { T += 2000; two.observe('X', { bids: withBig(p), asks: A }, 100.1, T); T += 1500; assert.equal(two.observe('X', { bids: base, asks: A }, 100.1, T).filter((x) => x.kind === 'add_cancel').length, 0); }
+  const slow = new DepthFlagTracker(); T = 6_000_000; slow.observe('X', { bids: base, asks: A }, 100.1, T); let slowFlag = 0;
+  for (const p of [99.95, 99.85, 99.75, 99.65]) { T += 2000; slow.observe('X', { bids: withBig(p), asks: A }, 100.1, T); T += 8000; slowFlag += slow.observe('X', { bids: base, asks: A }, 100.1, T).filter((x) => x.kind === 'add_cancel').length; }
+  assert.equal(slowFlag, 0);
+  const fill = new DepthFlagTracker(); T = 7_000_000; fill.observe('X', { bids: base, asks: A }, 100.1, T); let fillFlag = 0;
+  for (const p of [99.95, 99.85, 99.75]) { T += 2000; fill.observe('X', { bids: withBig(p), asks: A }, 100.1, T); T += 1500; fillFlag += fill.observe('X', { bids: base, asks: A }, p - 0.05, T).filter((x) => x.kind === 'add_cancel').length; }
+  assert.equal(fillFlag, 0, 'an order the market traded through was filled, not cancelled');
+  const disp = new DepthFlagTracker(); T = 8_000_000; let dispFlag = 0;
+  const shifted = (n: number) => lv(100 + 0.1 * n, -0.1, [800, 800, 800, 800, 800]);
+  disp.observe('X', { bids: lv(100, -0.1, [800, 800, 800, 800, 3000]), asks: A }, 100.5, T);
+  for (let n = 1; n <= 6; n++) { T += 1000; dispFlag += disp.observe('X', { bids: shifted(n), asks: A }, 100.5, T).filter((x) => x.kind === 'add_cancel').length; }
+  assert.equal(dispFlag, 0);
+  assert.equal(new DepthFlagTracker().observe('Z', { bids: [], asks: [] }, 1, 1).length, 0);
+  const idle = new DepthFlagTracker(); idle.observe('A', { bids: base, asks: A }, 100, 1000); idle.observe('B', { bids: base, asks: A }, 100, 1000 + FLAG_PARAMS.IDLE_MS + 5); assert.equal(idle.prune(1000 + FLAG_PARAMS.IDLE_MS + 6), 1); assert.equal(idle.size, 1);
+  const wl = new DepthFlagTracker(); const wb = bids([800, 700, 9000, 600, 500]);
+  assert.equal(wl.observe('W', { bids: wb, asks: A }, 100.5, 1000).length, 1); assert.equal(wl.observe('W', { bids: wb, asks: A }, 100.5, 2000).length, 0); assert.equal(wl.observe('W', { bids: wb, asks: A }, 100.5, 1000 + FLAG_PARAMS.COOLDOWN_MS + 1).length, 1);
+});
+
+t('daemon engine: heuristic flag sink (never stops rule evaluation)', async () => {
+  const { RuleIndex } = await import('../daemon/engine');
+  const rule = { id: 'r1', user_id: 'u', symbol: 'ABC', kind: 'price_above' as const, threshold: 100, cooldown_min: 0, channels: { push: true, email: false }, enabled: true, last_triggered_at: null };
+  const wall = { bids: [800, 700, 9000, 600, 500].map((q, i) => ({ price: 99.9 - i * 0.1, qty: q, orders: 1 })), asks: [700, 650, 600, 550, 500].map((q, i) => ({ price: 100.5 + i * 0.1, qty: q, orders: 1 })) };
+  const idx = new RuleIndex(); idx.upsert(rule);
+  idx.onTick({ symbol: 'ABC', ltp: 99, prevClose: 98, ts: 1, depth: wall }, 1);
+  const seen: { label: string; kind: string }[] = []; idx.setFlagSink((f) => seen.push(f));
+  idx.onTick({ symbol: 'ABC', ltp: 99, prevClose: 98, ts: 2, depth: wall }, 2); assert.equal(seen.length, 1); assert.equal(seen[0].label, 'Heuristic Flag / Possible Manipulation Pattern'); assert.equal(seen[0].kind, 'wall');
+  assert.equal(idx.flagStats().emitted, 1);
+  idx.setFlagSink(() => { throw new Error('sink down'); });
+  const hit = idx.onTick({ symbol: 'ABC', ltp: 101, prevClose: 98, ts: 100_000, depth: wall }, 100_000); assert.equal(hit.length, 1, 'rule still fires when the flag sink throws');
+  idx.setFlagSink(null); idx.onTick({ symbol: 'ABC', ltp: 99, prevClose: 98, ts: 200_000, depth: wall }, 200_000);
+  const none = new RuleIndex(); let n = 0; none.setFlagSink(() => n++); none.onTick({ symbol: 'ZZZ', ltp: 10, ts: 1, depth: wall }, 1); assert.equal(n, 0, 'symbols with no rule are not tracked');
+});
+
+t('daemon dispatcher: quiet hours hold routine alerts, critical rules bypass, lookup failures deliver', async () => {
+  const { createDispatcher } = await import('../daemon/dispatcher');
+  const { ackSecret } = await import('../lib/ackToken');
+  const rows: Record<string, unknown>[] = []; const pushed: string[] = []; let lookups = 0;
+  const sub = { endpoint: 'https://fcm.googleapis.com/fcm/send/devQ', keys: { p256dh: 'B'.repeat(80), auth: 'a'.repeat(22) } };
+  const f = (async (url: string, init?: RequestInit) => {
+    const u = String(url); const json = (b: unknown, s = 200) => new Response(JSON.stringify(b), { status: s });
+    if (u.includes('rpc/claim_alert_rule')) return json(true); if (u.includes('rpc/audit_write')) return json(null);
+    if (u.includes('push_subscriptions')) return json([sub]);
+    if (u.includes('/alert_deliveries')) { rows.push(...(JSON.parse(String(init?.body)) as Record<string, unknown>[])); return json(null, 201); }
+    return json({}, 404);
+  }) as unknown as typeof fetch;
+  const win = { enabled: true, start: 1320, end: 420, tz: 'Asia/Kolkata' };
+  let quiet: unknown = win; let clock = 0;
+  const mk = () => createDispatcher({ supabaseUrl: 'http://sb.test', serviceKey: 'svc', ackSecret: ackSecret({ VAPID_PRIVATE_KEY: 'k'.repeat(40) })!, fetchImpl: f, now: () => (clock += 1), send: async (_s, body) => { pushed.push(body); },
+    quietLookup: async () => { lookups++; if (quiet === 'FAIL') throw new Error('db down'); return quiet as never; } });
+  const NIGHT = Date.parse('2026-11-09T18:00:00Z'), DAY = Date.parse('2026-11-09T09:00:00Z');
+  const m = (kind: string, at: number, ch = { push: true, email: false }) => ({ rule: { id: '11111111-1111-1111-1111-111111111111', user_id: 'u1', symbol: 'ABC', kind: kind as never, threshold: 100, cooldown_min: 10, channels: ch, enabled: true, last_triggered_at: null }, price: 101, pct: 1, message: 'ABC moved', tickTime: at - 300, matchedAt: at });
+  let d = mk();
+  let r = await d.dispatch(m('price_above', NIGHT));
+  assert.equal(r.outcome, 'held'); assert.equal(pushed.length, 0); assert.equal(rows.length, 1); assert.equal(rows[0].status, 'skipped'); assert.equal(rows[0].channel, 'push'); assert.ok(String(rows[0].detail).startsWith('held: quiet hours 22:00–07:00 Asia/Kolkata')); assert.equal(d.stats().held, 1);
+  rows.length = 0; r = await d.dispatch(m('volume_surge', NIGHT, { push: true, email: true })); assert.equal(r.outcome, 'held'); assert.deepEqual(rows.map((x) => x.channel).sort(), ['email', 'push']); assert.ok(rows.every((x) => x.status === 'skipped'));
+  rows.length = 0; r = await d.dispatch(m('order_imbalance_above', NIGHT, { push: false, email: false })); assert.equal(r.outcome, 'held'); assert.equal(rows[0].channel, 'inapp');
+  const before = lookups; rows.length = 0; r = await d.dispatch(m('circuit_proximity', NIGHT)); assert.equal(r.outcome, 'delivered'); assert.equal(pushed.length, 1); assert.ok(String(rows[0].detail).includes('quiet-hours override')); assert.equal(lookups, before); assert.equal(d.stats().overridden, 1);
+  rows.length = 0; pushed.length = 0; r = await d.dispatch(m('price_above', DAY)); assert.equal(r.outcome, 'delivered'); assert.ok(!String(rows[0].detail).includes('override'));
+  d = mk(); lookups = 0; for (let i = 0; i < 5; i++) await d.dispatch(m('price_above', NIGHT)); assert.equal(lookups, 1);
+  for (const q of [{ ...win, enabled: false }, null, 'FAIL']) { quiet = q; d = mk(); pushed.length = 0; r = await d.dispatch(m('price_above', NIGHT)); assert.equal(r.outcome, 'delivered', `quiet=${JSON.stringify(q)}`); assert.equal(pushed.length, 1); }
+  quiet = win; d = mk(); pushed.length = 0; assert.equal((await d.sendTest('33333333-3333-3333-3333-333333333333')).ok, true);
+});
+
 void Promise.all(pending).then(() => {
   console.log(`\n${passed} checks passed${process.exitCode ? ' — WITH FAILURES' : ''}`);
   process.exit(process.exitCode ?? 0); // some modules keep timers alive
