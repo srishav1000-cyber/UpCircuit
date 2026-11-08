@@ -261,4 +261,26 @@ select t.ok(t.try('select count(*) from public.volume_baselines', null, 'anon') 
 select t.ok(t.try('insert into public.volume_baselines(symbol, median_volume, sessions, status) values (''BAD'', -5, 3, ''ok'')', :alice, 'service_role') <> '', 'negative baselines rejected');
 select t.ok(t.try('insert into public.volume_baselines(symbol, median_volume, sessions, status) values (''UPS'', 10, 3, ''ok'') on conflict (symbol) do update set sessions = 9', :alice, 'service_role') = '', 'the daemon can upsert baselines');
 
+-- Turn 44: quiet hours + heuristic depth flags
+select t.become(:alice); insert into public.user_quiet_hours(user_id, enabled, start_min, end_min, tz) values (:alice, true, 1320, 420, 'Asia/Kolkata'); select t.back();
+select t.ok((select count(*) from public.user_quiet_hours where user_id = :alice) = 1, 'a user can save their own quiet hours');
+select t.become(:bob); select t.ok((select count(*) from public.user_quiet_hours) = 0, 'other users cannot read someone else''s quiet hours'); select t.back();
+select t.ok(t.try('insert into public.user_quiet_hours(user_id, enabled, start_min, end_min, tz) values (''' || :alice || ''', true, 1, 2, ''Asia/Kolkata'')', :bob) <> '', 'a user cannot write another user''s quiet hours');
+select t.ok(t.try('update public.user_quiet_hours set tz = ''Asia/Tokyo'' where user_id = ''' || :alice || '''', :bob) = '' and (select tz from public.user_quiet_hours where user_id = :alice) = 'Asia/Kolkata', 'a user cannot update another user''s quiet hours');
+select t.ok(t.try('update public.user_quiet_hours set start_min = 5, end_min = 5 where user_id = ''' || :alice || '''', :alice) <> '', 'a 24-hour window (start = end while enabled) is rejected');
+select t.ok(t.try('update public.user_quiet_hours set start_min = 1500 where user_id = ''' || :alice || '''', :alice) <> '', 'minutes outside 0-1439 are rejected');
+select t.ok(t.try('update public.user_quiet_hours set tz = ''Mars/Base'' where user_id = ''' || :alice || '''', :alice) <> '', 'unknown time zones are rejected');
+select t.ok(t.try('select count(*) from public.user_quiet_hours', null, 'anon') <> '', 'anon cannot read quiet hours');
+select t.ok(t.try('select count(*) from public.user_quiet_hours', :alice, 'service_role') = '' and (select count(*) from public.user_quiet_hours) = 1, 'the daemon (service role) can read quiet hours');
+insert into public.depth_flags(symbol, kind, side, severity, price, qty, detail) values ('ABC', 'wall', 'bid', 'elevated', 99.8, 9000, 'Bid wall');
+select t.become(:alice); select t.ok((select count(*) from public.depth_flags) = 1 and (select label from public.depth_flags limit 1) = 'Heuristic Flag / Possible Manipulation Pattern', 'signed-in users can read flags and every flag carries the heuristic label'); select t.back();
+select t.ok(t.try('insert into public.depth_flags(symbol, kind, side, severity, detail) values (''HAX'', ''wall'', ''bid'', ''watch'', ''x'')', :alice) <> '', 'users cannot write flags');
+select t.ok(t.try('delete from public.depth_flags', :alice) <> '' and (select count(*) from public.depth_flags) = 1, 'users cannot delete flags');
+select t.ok(t.try('select count(*) from public.depth_flags', null, 'anon') <> '', 'anon cannot read flags');
+select t.ok(t.try('insert into public.depth_flags(symbol, kind, side, severity, detail, label) values (''ABC'', ''wall'', ''bid'', ''watch'', ''x'', ''Confirmed manipulation'')', :alice, 'service_role') <> '', 'a flag cannot be labelled as anything but a heuristic');
+select t.ok(t.try('insert into public.depth_flags(symbol, kind, side, severity, detail) values (''ABC'', ''spoof_proof'', ''bid'', ''watch'', ''x'')', :alice, 'service_role') <> '', 'unknown flag kinds rejected');
+select t.ok(t.try('insert into public.depth_flags(symbol, kind, side, severity, detail) values (''abc lower'', ''wall'', ''bid'', ''watch'', ''x'')', :alice, 'service_role') <> '', 'bad symbols rejected');
+select t.ok(t.try('insert into public.depth_flags(symbol, kind, side, severity, price, qty, detail) values (''ABC'', ''add_cancel'', ''ask'', ''watch'', null, 3, ''3 cycles'')', :alice, 'service_role') = '', 'the daemon can write flags');
+select t.ok(t.try('delete from public.depth_flags where flagged_at < now() - interval ''2 days''', :alice, 'service_role') = '', 'the daemon can prune old flags');
+
 select count(*) || ' assertions passed' as result from t.log;

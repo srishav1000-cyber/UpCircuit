@@ -1,0 +1,88 @@
+{
+  "config": {
+    "rules": 600,
+    "symbols": 50,
+    "ticksPerSecondTarget": 2000,
+    "seconds": 10,
+    "devicesPerUser": 1,
+    "seed": 1,
+    "node": "v22.23.4",
+    "platform": "linux-x64"
+  },
+  "run": {
+    "ticksSent": 20000,
+    "ticksProcessed": 20000,
+    "achievedTicksPerSecond": 2000,
+    "wallMs": 10001,
+    "maxSchedulerStallMs": 36.23,
+    "ticksWithMatches": 237,
+    "alertsFired": 252,
+    "claims": 252,
+    "pushesAccepted": 252,
+    "deliveryRowsWritten": 252,
+    "acksVerified": 252,
+    "acksRejected": 0,
+    "dispatcher": {
+      "enqueued": 252,
+      "delivered": 252,
+      "duplicates": 0,
+      "held": 0,
+      "overridden": 0,
+      "noDevices": 0,
+      "failed": 0,
+      "errors": 0,
+      "queued": 0,
+      "inFlight": 0,
+      "lastMatchToPushMs": 12
+    }
+  },
+  "stagesMs": {
+    "feedIngest": {
+      "n": 20000,
+      "p50": 0.22793400000000474,
+      "p95": 1.0995459999994637,
+      "p99": 15.313001999999983,
+      "max": 31.21769200000017
+    },
+    "matchEvaluation": {
+      "n": 20000,
+      "p50": 0.13799500000004628,
+      "p95": 0.35558799999853363,
+      "p99": 0.49911400000019057,
+      "max": 15.406993999999997
+    },
+    "pushDispatch": {
+      "n": 252,
+      "p50": 4.802846999999929,
+      "p95": 136.75581300000005,
+      "p99": 202.38192499999997,
+      "max": 221.076891
+    },
+    "clientAck": {
+      "n": 252,
+      "p50": 1.2668099999991682,
+      "p95": 6.990252000000055,
+      "p99": 13.553397000000018,
+      "max": 29.38479400000051
+    },
+    "endToEndTickToPush": {
+      "n": 252,
+      "p50": 5.2850939999998445,
+      "p95": 148.77477400000004,
+      "p99": 215.21295800000001,
+      "max": 235.912527
+    },
+    "endToEndTickToAck": {
+      "n": 252,
+      "p50": 6.562725000000228,
+      "p95": 155.916716,
+      "p99": 222.11580699999996,
+      "max": 239.68922100000003
+    }
+  },
+  "notes": [
+    "Loopback only: feed, Supabase, push service and device are local stand-ins in one process. Real network, push-service and device time are NOT included.",
+    "feedIngest = generator send → parsed by the consumer (socket + JSON.parse + event-loop wait). matchEvaluation = one RuleIndex.onTick call per tick. pushDispatch = enqueue → push service accepted (claim, device lookup, quiet-hours lookup, send). clientAck = push accepted → ACK received and HMAC-verified.",
+    "Cooldown is 1 minute, so each rule fires at most once per run; percentiles over alerts use that many samples (see n)."
+  ]
+}

@@ -48,3 +48,13 @@ Limits (by design):
 - Rule API: `POST /api/alerts/rules?dry_run=1` validates without saving; PATCH edits threshold/cooldown/channels/enabled (symbol and kind are immutable).
 
 Feed health: the browser pill/banner uses its own tick age (Live ≤5 s, Delayed, Down >60 s). The daemon heartbeat (every 5 s, DB clock) drives "Closed-app alerts are paused" when a previously seen daemon is stale (≥20 s) or offline (≥120 s).
+
+---
+
+## Turn 44 — surveillance desk, heuristic flags, quiet hours
+
+**Migration:** apply `docs/WEEK9_TURN44_SCHEMA.sql` after the Turn 43 one, then redeploy the daemon (it now writes `depth_flags`, reads `user_quiet_hours`, and beats with `version: turn44`).
+
+* **Quiet Hours** — Settings → Alerts. Routine alerts inside the window are held (a `skipped` row "held: quiet hours …", not replayed); `circuit_proximity` always bypasses; a failed preference lookup delivers. The daemon caches each user's window for 60 s.
+* **Heuristic depth flags** — walls and rapid add/cancel patterns on top-5 depth, written to `depth_flags` (pruned after 2 days) and shown on the Surveillance desk as "Heuristic Flag / Possible Manipulation Pattern". Not proof; never an alert rule. `/healthz` reports `depthFlags`.
+* **Benchmark** — `npm run bench` (loopback software pipeline only; see `docs/WEEK9_SUBMISSION_SUMMARY.md` §5 for what it does and does not measure).

@@ -1,5 +1,6 @@
 // Cloud persistence over Supabase PostgREST (plain fetch, no SDK). Every call carries the user's access token, so Row Level Security
 // (docs/PERSISTENCE_SCHEMA.sql) confines it to that user's rows. Saves are UPSERT-then-delete: a failed save never loses the previous data.
+import { sanitizeQuiet, validateQuiet, type QuietHours } from './quietHours';
 import type { Holding } from './types';
 import type { WatchlistState } from './watchlist';
 import { coerceAppRole, type AppRole } from './rbac';
@@ -98,6 +99,7 @@ export interface AlertDelivery { id: string; fired_at: string; symbol: string; k
 
 export interface AiSignoff { id: string; kind: string; symbol: string | null; model: string; prompt_version: string; data_used: string[]; output_hash: string; decision: 'approved' | 'rejected'; note: string | null; signer_role: string; signed_at: string }
 
+export interface DepthFlagRow { id: number; symbol: string; kind: 'wall' | 'add_cancel'; side: 'bid' | 'ask'; severity: 'watch' | 'elevated'; price: number | null; qty: number | null; detail: string; label: string; flagged_at: string }
 export interface VolumeBaselineRow { symbol: string; median_volume: number | null; sessions: number; status: 'ok' | 'insufficient' | 'unavailable'; computed_at: string }
 export type CloudClient = ReturnType<typeof createCloud>;
 const DELIVERY_COLS = 'id,fired_at,symbol,kind,price,channel,status,detail';
@@ -248,6 +250,21 @@ export function createCloud(cfg: CloudConfig) {
     async daemonHealth(): Promise<DaemonBeat | null> {
       const r = await call('rpc/daemon_health', { method: 'POST', body: {} }).catch(() => null);
       return Array.isArray(r) && r[0] ? (r[0] as DaemonBeat) : null;
+    },
+    /** the user's Quiet Hours (null = none saved, or the migration is not applied) */
+    async getQuietHours(): Promise<QuietHours | null> {
+      const r = await call('user_quiet_hours?select=enabled,start_min,end_min,tz&limit=1').catch(() => null);
+      return Array.isArray(r) && r[0] ? sanitizeQuiet(r[0]) : null;
+    },
+    async setQuietHours(userId: string, q: QuietHours): Promise<void> {
+      const errs = validateQuiet(q);
+      if (errs.length) throw new Error(errs.join(' '));
+      await call('user_quiet_hours?on_conflict=user_id', { method: 'POST', body: [{ user_id: userId, enabled: q.enabled, start_min: q.start, end_min: q.end, tz: q.tz }], prefer: 'resolution=merge-duplicates,return=minimal' });
+    },
+    /** recent heuristic depth flags written by the daemon ([] before docs/WEEK9_TURN44_SCHEMA.sql) */
+    async listDepthFlags(limit = 30): Promise<DepthFlagRow[]> {
+      const r = await call(`depth_flags?select=id,symbol,kind,side,severity,price,qty,detail,label,flagged_at&order=flagged_at.desc&limit=${Math.min(100, Math.max(1, limit))}`).catch(() => []);
+      return Array.isArray(r) ? (r as DepthFlagRow[]) : [];
     },
     async setRuleEnabled(id: string, enabled: boolean): Promise<void> {
       await call(`alert_rules?id=eq.${encodeURIComponent(id)}`, { method: 'PATCH', body: { enabled }, prefer: 'return=minimal' });

@@ -13,7 +13,8 @@
     "test": "tsx scripts/verify.ts && tsx scripts/verify-auth.ts",
     "postinstall": "node scripts/copy-ocr-assets.mjs",
     "daemon": "tsx daemon/index.ts",
-    "daemon:smoke": "bash scripts/daemon-smoke.sh"
+    "daemon:smoke": "bash scripts/daemon-smoke.sh",
+    "bench": "tsx scripts/benchmark-latency.ts --out docs/benchmark-results.json"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.45.4",
