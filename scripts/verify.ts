@@ -1871,6 +1871,199 @@ t('service worker: push shows the banner then ACKs with the local display time; 
   const d = await run({ title: '▲ UPPER CIRCUIT · ABC', body: 'b' }, [200]); assert.equal(d.shown.length, 1); assert.equal(d.fetched.length, 0, 'circuit pushes without delivery_id send no ACK');
 });
 
+
+/* ───────────── Turn 43: volume surge, top-5 imbalance, feed health ───────────── */
+t('rule vocabulary: new kinds validate with per-kind bounds; API body normalisation collects every error', async () => {
+  const { RULE_KINDS: K, validateRule: v, validateRuleInput: vi, fmtThreshold, KIND_META: M } = await import('../lib/alertTypes');
+  assert.ok(['volume_surge', 'order_imbalance_above', 'order_imbalance_below'].every((k) => (K as readonly string[]).includes(k)) && K.length === 8);
+  const ok = (kind: string, threshold: number, cooldown_min = 60) => v({ symbol: 'TCS', kind, threshold, cooldown_min });
+  assert.equal(ok('volume_surge', 1.5), null); assert.ok(ok('volume_surge', 0.4)?.includes('Volume multiple')); assert.ok(ok('volume_surge', 51)); assert.ok(ok('volume_surge', 0));
+  assert.equal(ok('order_imbalance_above', 0.6), null); assert.ok(ok('order_imbalance_above', 1.2)?.includes('Imbalance threshold')); assert.ok(ok('order_imbalance_below', 0.05)); assert.equal(ok('order_imbalance_below', 1), null);
+  assert.equal(ok('price_above', 1500), null); assert.ok(ok('pct_up', 101)?.includes('100')); assert.ok(ok('nope', 1)); assert.ok(ok('price_above', 5, 4)?.includes('Cooldown'));
+  const good = vi({ symbol: ' tcs ', kind: 'volume_surge', threshold: '2.5', cooldown_min: 30 });
+  assert.ok(good.ok && good.value.symbol === 'TCS' && good.value.threshold === 2.5 && good.value.channels.push === true && good.value.channels.email === false); assert.ok(good.ok && good.warnings.length === 2, 'daemon-only + baseline warnings');
+  assert.ok(vi({ symbol: 'TCS', kind: 'price_above', threshold: 1 }).ok && (vi({ symbol: 'TCS', kind: 'price_above', threshold: 1 }) as { warnings: string[] }).warnings.length === 0, 'cron-capable kinds carry no warnings');
+  const bad = vi({ symbol: '!!', kind: 'x', threshold: 'abc', cooldown_min: 7.5, channels: [] }); assert.ok(!bad.ok && bad.errors.length >= 4, JSON.stringify(bad));
+  assert.ok(!vi(null).ok && !vi([]).ok && !vi('x').ok);
+  assert.deepEqual([fmtThreshold('volume_surge', 2), fmtThreshold('order_imbalance_below', 0.6), fmtThreshold('order_imbalance_above', 0.6), fmtThreshold('pct_up', 3), fmtThreshold('price_above', 99)], ['2×', '−0.6', '+0.6', '3%', '₹99']);
+  assert.equal(M.volume_surge.engine, 'daemon'); assert.equal(M.price_above.engine, 'cron+daemon');
+});
+
+t('depth imbalance: exact top-5 formula, sorting, thin / empty books are N/A (never 0)', async () => {
+  const { topFiveImbalance: top, imbalanceLabel: lab, MIN_DEPTH_QTY } = await import('../lib/depthImbalance');
+  const L = (price: number, qty: number) => ({ price, qty, orders: 1 });
+  const bids = [L(99, 1000), L(100, 3000), L(98, 500), L(97, 400), L(96, 300), L(95, 99999)];   // unsorted + a 6th level that must be ignored
+  const asks = [L(101, 800), L(102, 700), L(103, 600), L(104, 500), L(105, 400), L(106, 99999)];
+  const r = top(bids, asks)!;
+  assert.deepEqual(r.bids, [3000, 1000, 500, 400, 300]); assert.deepEqual(r.asks, [800, 700, 600, 500, 400]);
+  assert.equal(r.bidQty, 5200); assert.equal(r.askQty, 3000); assert.ok(Math.abs(r.value - (5200 - 3000) / (5200 + 3000)) < 1e-12); assert.equal(r.levels.length, 5);
+  assert.equal(top([], []), null); assert.equal(top([L(100, 100)], [L(101, 100)]), null, `total < ${MIN_DEPTH_QTY} → N/A`); assert.equal(top([L(0, 5000)], [L(0, 5000)]), null, 'empty slots (price 0) are dropped');
+  assert.equal(top([L(100, 1000)], [])!.value, 1, 'a one-sided (e.g. circuit-locked) book is a real +1'); assert.equal(top([], [L(100, 1000)])!.value, -1);
+  assert.equal(top([L(100, NaN)], [L(101, 900)])!.value, -1);
+  assert.deepEqual([lab(0.7).label, lab(0.3).label, lab(0).label, lab(-0.3).label, lab(-0.9).label, lab(0.7).tone, lab(-0.3).tone], ['Strongly bid-heavy', 'Bid-heavy', 'Balanced book', 'Ask-heavy', 'Strongly ask-heavy', 'up', 'down']);
+});
+
+t('volume baseline: median of the last ≤ 20 COMPLETED sessions, N/A when history is short, today excluded', async () => {
+  const { computeBaseline: cb, istDayOf, volumeMultiple } = await import('../lib/volumeBaseline');
+  const now = Date.UTC(2026, 10, 9, 8, 0);                                   // Mon 9 Nov 2026 13:30 IST
+  const today = istDayOf(now);
+  const bar = (daysAgo: number, volume: number) => ({ time: (today - daysAgo) * 86400, volume });
+  const hist = Array.from({ length: 25 }, (_, i) => bar(i + 1, 1000 + i * 10));            // 25 completed sessions
+  const withToday = [...hist, bar(0, 9_999_999)];
+  const r = cb(withToday, now); assert.equal(r.status, 'ok'); assert.equal(r.sessions, 20); assert.ok(r.medianVolume! < 2000, 'today’s partial 9.99M session is excluded');
+  assert.equal(cb(hist.slice(0, 9), now).status, 'insufficient'); assert.equal(cb(hist.slice(0, 9), now).medianVolume, null); assert.equal(cb(hist.slice(0, 10), now).status, 'ok');
+  assert.equal(cb([], now).status, 'unavailable'); assert.equal(cb(null, now).status, 'unavailable');
+  assert.equal(cb([...hist.slice(0, 10).map((b) => ({ ...b, volume: 0 }))], now).status, 'insufficient', 'zero-volume rows are not sessions');
+  assert.equal(cb([bar(1, 100), bar(2, 300), ...Array.from({ length: 8 }, (_, i) => bar(i + 3, 200))], now).medianVolume, 200); assert.equal(cb(Array.from({ length: 10 }, (_, i) => bar(i + 1, i % 2 ? 100 : 300)), now).medianVolume, 200, 'even count → mean of the middle two');
+  assert.equal(volumeMultiple(300, 100), 3); assert.equal(volumeMultiple(300, null), null); assert.equal(volumeMultiple(300, 0), null);
+});
+
+t('baseline store: loads only wanted symbols, caches, retries failures later, publishes, bounded concurrency', async () => {
+  const { BaselineStore } = await import('../daemon/baselines');
+  let clock = Date.UTC(2026, 10, 9, 8, 0); const today = Math.floor((clock / 1000 + 19800) / 86400);
+  const full = Array.from({ length: 12 }, (_, i) => ({ time: (today - i - 1) * 86400, volume: 1000 }));
+  const calls: string[] = []; let peak = 0, cur = 0; const published: string[] = [];
+  const st = new BaselineStore({
+    now: () => clock, concurrency: 2,
+    fetchDaily: async (s) => { calls.push(s); cur++; peak = Math.max(peak, cur); await new Promise((r) => setTimeout(r, 5)); cur--; if (s === 'BOOM') throw new Error('x'); return s === 'SHORT' ? full.slice(0, 3) : full; },
+    onComputed: (rows) => { published.push(...rows.map((r) => `${r.symbol}:${r.status}`)); },
+  });
+  assert.equal(st.get('AAA'), null, 'not loaded yet = N/A');
+  st.want(['aaa', 'BBB', 'SHORT', 'BOOM', 'CCC']); await st.idle();
+  assert.equal(st.get('AAA'), 1000); assert.equal(st.get('SHORT'), null); assert.equal(st.get('BOOM'), null); assert.ok(peak <= 2, `peak ${peak}`);
+  assert.deepEqual(published.sort(), ['AAA:ok', 'BBB:ok', 'BOOM:unavailable', 'CCC:ok', 'SHORT:insufficient']); assert.equal(st.info('SHORT')!.sessions, 3);
+  calls.length = 0; st.want(['AAA', 'BBB']); await st.idle(); assert.equal(calls.length, 0, 'fresh baselines are reused');
+  clock += 31 * 60_000; st.want(['AAA', 'BOOM', 'SHORT']); await st.idle(); assert.deepEqual(calls.sort(), ['BOOM', 'SHORT'], 'failures / short history retried after 30 min, good ones kept');
+  clock += 24 * 3600_000; calls.length = 0; st.want(['AAA']); await st.idle(); assert.deepEqual(calls, ['AAA'], 'recomputed when the IST day changes (yesterday’s session joins the window)');
+  const s = st.stats(); assert.ok(s.ok >= 1 && s.loading === 0);
+});
+
+t('rule evaluation: volume_surge + order_imbalance kinds, N/A never fires, hysteresis, cron backstop cannot evaluate them', async () => {
+  const { evaluateRule: ev, canEvaluate: ce, IMBALANCE_HYSTERESIS: H } = await import('../lib/alertRules');
+  const R = (kind: string, threshold: number) => ({ id: 'r', user_id: 'u', symbol: 'ABC', kind: kind as never, threshold, cooldown_min: 60, channels: { push: true }, enabled: true, last_triggered_at: null });
+  const q = (o: Record<string, unknown> = {}) => ({ symbol: 'ABC', ltp: 100, prevClose: 99, ...o });
+  // volume
+  assert.equal(ev(R('volume_surge', 2), q({ volume: 1_900_000, baselineVolume: 1_000_000 })), null); const h = ev(R('volume_surge', 2), q({ volume: 2_100_000, baselineVolume: 1_000_000 }))!;
+  assert.ok(h && /2\.10×/.test(h.message) && /rule ≥ 2×/.test(h.message), h?.message);
+  for (const bad of [{ volume: 5e6 }, { volume: 5e6, baselineVolume: null }, { volume: 5e6, baselineVolume: 0 }, { baselineVolume: 1e6 }, { volume: NaN, baselineVolume: 1e6 }]) assert.equal(ce('volume_surge', q(bad)), false, JSON.stringify(bad));
+  assert.equal(ev(R('volume_surge', 1), q({ volume: 5e6 })), null, 'no baseline → N/A, not a hit');
+  // imbalance
+  assert.ok(ev(R('order_imbalance_above', 0.6), q({ imbalance: 0.61 }))!.message.includes('buy-heavy')); assert.equal(ev(R('order_imbalance_above', 0.6), q({ imbalance: 0.59 })), null); assert.equal(ev(R('order_imbalance_above', 0.6), q({ imbalance: -0.9 })), null);
+  assert.ok(ev(R('order_imbalance_below', 0.6), q({ imbalance: -0.61 }))!.message.includes('sell-heavy')); assert.equal(ev(R('order_imbalance_below', 0.6), q({ imbalance: -0.3 })), null); assert.equal(ev(R('order_imbalance_below', 0.6), q({ imbalance: 0.9 })), null);
+  assert.equal(ev(R('order_imbalance_above', 0.6), q({ imbalance: 0.58 }), Date.now(), true)?.rule.id, 'r', 'held rule releases only below threshold − hysteresis'); assert.equal(ev(R('order_imbalance_above', 0.6), q({ imbalance: 0.6 - H - 0.01 }), Date.now(), true), null);
+  assert.equal(ce('order_imbalance_above', q({ imbalance: null })), false); assert.equal(ce('order_imbalance_below', q()), false);
+  assert.equal(ev(R('volume_surge', 2), { symbol: 'ABC', ltp: 100, prevClose: 0, volume: 3e6, baselineVolume: 1e6 })!.pct, 0, 'no previous close is fine for volume rules (pct reported as 0)');
+  // what the cron backstop passes (price quote only) can never fire the new kinds
+  for (const k of ['volume_surge', 'order_imbalance_above', 'order_imbalance_below']) assert.equal(ev(R(k, 1), q()), null);
+});
+
+t('daemon engine: volume_surge + order_imbalance crossings, N/A skipping, hysteresis, daily reset', async () => {
+  const { RuleIndex } = await import('../daemon/engine');
+  const L = (price: number, qty: number) => ({ price, qty, orders: 1 });
+  const book = (bid: number, ask: number) => ({ bids: [L(99, bid), L(98, 10), L(97, 10), L(96, 10), L(95, 10)], asks: [L(101, ask), L(102, 10), L(103, 10), L(104, 10), L(105, 10)] });
+  const R = (kind: string, threshold: number, id = 'r1') => ({ id, user_id: 'u', symbol: 'ABC', kind: kind as never, threshold, cooldown_min: 5, channels: { push: true }, enabled: true, last_triggered_at: null });
+  const T = (volume: number, depth = book(1000, 1000), ts = 1) => ({ symbol: 'ABC', ltp: 100, prevClose: 99, ts, volume, depth });
+  // volume
+  const ix = new RuleIndex(); let base: number | null = null; ix.setBaselineLookup(() => base); ix.upsert(R('volume_surge', 2));
+  assert.equal(ix.volumeRulesNA(), 1); assert.deepEqual(ix.symbolsWithKind('volume_surge'), ['ABC']); assert.deepEqual(ix.symbolsWithKind('price_above'), []);
+  assert.equal(ix.onTick(T(9e6), 1e9).length, 0, 'baseline N/A → silent, no state change'); base = 1_000_000; assert.equal(ix.volumeRulesNA(), 0);
+  assert.equal(ix.onTick(T(1_500_000), 1e9 + 1000).length, 0, 'first evaluable tick seeds (below)'); const m = ix.onTick(T(2_050_000, undefined, 77), 1e9 + 2000); assert.equal(m.length, 1); assert.equal(m[0].tickTime, 77); assert.match(m[0].message, /2\.05×/);
+  assert.equal(ix.onTick(T(2_500_000), 1e9 + 3000).length, 0, 'stays above → no repeat'); assert.equal(ix.onTick(T(300_000), 1e9 + 4000).length, 0, 'next session resets cumulative volume → re-arms'); assert.equal(ix.onTick(T(2_100_000), 1e9 + 400_000).length, 1, 'fires again on the next crossing after the cooldown');
+  const seed = new RuleIndex(); seed.setBaselineLookup(() => 1_000_000); seed.upsert(R('volume_surge', 2)); assert.equal(seed.onTick(T(5e6), 1e9).length, 0, 'a rule created while already above only seeds');
+  // imbalance above: crossing + thin book N/A + hysteresis
+  const a = new RuleIndex(); a.upsert(R('order_imbalance_above', 0.5)); const bal = book(1000, 1000), heavy = book(5000, 500), thin = { bids: [L(99, 5)], asks: [L(101, 1)] };
+  assert.equal(a.onTick(T(1, bal), 1e9).length, 0); assert.equal(a.onTick(T(1, thin), 1e9 + 1).length, 0, 'thin book = N/A, state untouched'); const f = a.onTick(T(1, heavy), 1e9 + 2); assert.equal(f.length, 1); assert.match(f[0].message, /buy-heavy/);
+  assert.equal(a.onTick(T(1, undefined as never), 1e9 + 3).length, 0, 'no depth = N/A'); assert.equal(a.onTick(T(1, heavy), 1e9 + 4).length, 0);
+  // hysteresis: imbalance (heavy)=(5040-540)/(5040+540)=0.806; drop to ~0.47 (inside the 0.05 band below 0.5) must stay "held"; then fall well below and re-cross after cooldown
+  const iv = (b: { bids: { qty: number }[]; asks: { qty: number }[] }) => { const x = b.bids.reduce((s, y) => s + y.qty, 0), y = b.asks.reduce((s, z) => s + z.qty, 0); return (x - y) / (x + y); };
+  const h = new RuleIndex(); h.upsert({ ...R('order_imbalance_above', 0.5), cooldown_min: 5 }); h.onTick(T(1, bal), 0); assert.equal(h.onTick(T(1, heavy), 1000).length, 1);
+  const edge = book(2840, 1000); assert.ok(iv(edge) >= 0.45 && iv(edge) < 0.5, String(iv(edge))); h.onTick(T(1, edge), 2000); assert.equal(h.onTick(T(1, heavy), 400_000).length, 0, 'drift inside the hysteresis band does not re-arm');
+  h.onTick(T(1, bal), 500_000); assert.equal(h.onTick(T(1, heavy), 900_000).length, 1, 'a real release then re-cross fires again');
+  // imbalance below (sell-heavy)
+  const b = new RuleIndex(); b.upsert(R('order_imbalance_below', 0.5)); b.onTick(T(1, bal), 0); const s = b.onTick(T(1, book(500, 5000)), 1000); assert.equal(s.length, 1); assert.match(s[0].message, /sell-heavy/); assert.equal(b.onTick(T(1, heavy), 2000).length, 0);
+  // both kinds on one symbol, evaluated once per tick
+  const both = new RuleIndex(); both.setBaselineLookup(() => 1000); both.upsert(R('volume_surge', 2, 'v')); both.upsert(R('order_imbalance_above', 0.5, 'i')); both.onTick(T(1000, bal), 0);
+  assert.deepEqual(both.onTick(T(2500, heavy), 1000).map((x) => x.rule.id).sort(), ['i', 'v']);
+  // existing price rules still work alongside, and still ignore volume
+  const pr = new RuleIndex(); pr.upsert(R('price_above', 100)); pr.onTick({ symbol: 'ABC', ltp: 99, prevClose: 98, ts: 1 }, 0); assert.equal(pr.onTick({ symbol: 'ABC', ltp: 101, prevClose: 98, ts: 2 }, 1000).length, 1);
+});
+
+t('feed health: state machine (live / delayed / reconnecting / down / closed) and daemon heartbeat ages', async () => {
+  const { feedState: fs, daemonState: ds, fmtLag, LIVE_MAX_MS, STALE_DOWN_MS } = await import('../lib/feedHealth');
+  const now = 1_000_000_000_000; const f = (o: Record<string, unknown>) => fs({ conn: 'open', marketOpen: true, lastTickAt: now - 500, now, ...o } as never);
+  assert.equal(f({}).state, 'live'); assert.equal(f({}).lagMs, 500); assert.equal(f({ lastTickAt: now - LIVE_MAX_MS }).state, 'live'); assert.equal(f({ lastTickAt: now - LIVE_MAX_MS - 1 }).state, 'delayed');
+  assert.equal(f({ lastTickAt: now - STALE_DOWN_MS }).state, 'delayed'); assert.equal(f({ lastTickAt: now - STALE_DOWN_MS - 1 }).state, 'down');
+  assert.equal(f({ lastTickAt: 0 }).state, 'delayed'); assert.equal(f({ lastTickAt: 0 }).lagMs, null);
+  assert.equal(f({ conn: 'connecting' }).state, 'reconnecting'); assert.equal(f({ conn: 'closed' }).state, 'reconnecting'); assert.equal(f({ conn: 'idle' }).state, 'reconnecting');
+  for (const reason of ['no_key', 'unauthorized', 'not_configured', 'login_failed', 'stream_failed']) assert.equal(f({ conn: 'closed', reason }).state, 'down', reason);
+  assert.equal(f({ conn: 'closed', reason: 'unreachable' }).state, 'reconnecting'); assert.equal(f({ marketOpen: false, conn: 'closed' }).state, 'closed'); assert.equal(f({ marketOpen: false, lastTickAt: now - 9e6 }).state, 'closed');
+  assert.deepEqual([fmtLag(null), fmtLag(250), fmtLag(1500), fmtLag(75_000)], ['—', '250 ms', '1.5 s', '1 min 15 s']);
+  const beat = (o: Record<string, unknown> = {}) => ({ id: 'alert-daemon', age_ms: 2000, last_tick_age_ms: 400, feed_status: 'open', reconnects: 1, started_at: '', version: 'x', ...o }) as never;
+  assert.equal(ds(null).state, 'not_seen'); assert.equal(ds(beat()).state, 'running'); assert.equal(ds(beat({ age_ms: 25_000 })).state, 'stale'); assert.equal(ds(beat({ age_ms: 130_000 })).state, 'offline');
+  assert.equal(ds(beat({ age_ms: 15_000 }), 6000).state, 'stale', 'time since the query counts'); assert.equal(ds(beat({ feed_status: 'connecting' })).state, 'degraded'); assert.equal(ds(beat({ last_tick_age_ms: null })).state, 'degraded');
+  assert.equal(ds(beat({ last_tick_age_ms: 70_000 })).state, 'degraded'); assert.equal(ds(beat({ feed_status: 'closed', last_tick_age_ms: null }), 0, false).state, 'running', 'closed market: a quiet feed is normal'); assert.equal(ds(beat({ last_tick_age_ms: 1000 }), 3000).tickAgeMs, 6000, 'tick age at beat + beat age (2 s) + time since the query (3 s)');
+});
+
+
+t('rules API: auth, per-kind validation, dry run with honest notes, create / edit / delete, DB error mapping', async () => {
+  const { NextRequest } = await import('next/server');
+  const route = await import('../app/api/alerts/rules/route');
+  const env = { NEXT_PUBLIC_SUPABASE_URL: 'http://sb.test', NEXT_PUBLIC_SUPABASE_ANON_KEY: 'anon' }; const saved = { ...process.env }; Object.assign(process.env, env);
+  const realFetch = globalThis.fetch; const sent: { url: string; method: string; body?: any; auth?: string }[] = [];
+  let mode: { dbError?: { code: string }; rows?: any[]; daemon?: any[] | null; baseline?: any[] } = {};
+  const RID = '11111111-2222-3333-4444-555555555555';
+  globalThis.fetch = (async (url: string, init: any = {}) => {
+    const u = String(url), body = init.body ? JSON.parse(init.body) : undefined; sent.push({ url: u, method: init.method ?? 'GET', body, auth: init.headers?.Authorization });
+    const json = (x: unknown, status = 200) => new Response(JSON.stringify(x), { status });
+    if (u.endsWith('/auth/v1/user')) return init.headers.Authorization === 'Bearer good' ? json({ id: 'u-1', email: 'a@b.co' }) : json({}, 401);
+    if (mode.dbError) return json({ code: mode.dbError.code, message: 'x' }, 400);
+    if (u.includes('rpc/daemon_health')) return mode.daemon === null ? json({}, 404) : json(mode.daemon ?? []);
+    if (u.includes('volume_baselines')) return json(mode.baseline ?? []);
+    if (u.includes('/rest/v1/alert_rules') && init.method === 'POST') return json([{ id: RID, ...body[0] }], 201);
+    if (u.includes('/rest/v1/alert_rules') && init.method === 'PATCH') return json(mode.rows?.length ? [{ ...mode.rows[0], ...body }] : []);
+    if (u.includes('/rest/v1/alert_rules') && init.method === 'DELETE') return json(mode.rows ?? []);
+    if (u.includes('/rest/v1/alert_rules')) return json(mode.rows ?? []);
+    return json({}, 404);
+  }) as never;
+  const rq = (method: string, path = '', body?: unknown, token: string | null = 'good') => new NextRequest(`http://x/api/alerts/rules${path}`, { method, headers: { ...(token ? { authorization: `Bearer ${token}` } : {}), 'content-type': 'application/json' }, ...(body !== undefined ? { body: JSON.stringify(body) } : {}) });
+  try {
+    assert.equal((await route.GET(rq('GET', '', undefined, null))).status, 401); assert.equal((await route.GET(rq('GET', '', undefined, 'bad'))).status, 401);
+    // validation
+    let r = await route.POST(rq('POST', '', { symbol: 'TCS', kind: 'volume_surge', threshold: 99 })); assert.equal(r.status, 422); assert.ok((await r.json()).errors[0].includes('Volume multiple'));
+    r = await route.POST(rq('POST', '', { symbol: 'TCS', kind: 'order_imbalance_above', threshold: 2 })); assert.equal(r.status, 422);
+    r = await route.POST(rq('POST', '', { kind: 'nope' })); assert.equal(r.status, 422); assert.ok((await r.json()).errors.length >= 2);
+    assert.equal(sent.filter((x) => x.method === 'POST' && x.url.includes('alert_rules')).length, 0, 'nothing reached the database');
+    // dry run: no insert, notes about daemon + baseline
+    mode = { daemon: [{ age_ms: 3000 }], baseline: [{ status: 'insufficient', sessions: 4, median_volume: null }] };
+    r = await route.POST(rq('POST', '?dry_run=1', { symbol: 'sht', kind: 'volume_surge', threshold: 2 })); let j = await r.json();
+    assert.equal(r.status, 200); assert.equal(j.valid, true); assert.equal(j.normalized.symbol, 'SHT'); assert.equal(j.notes.daemon, 'running'); assert.deepEqual(j.notes.baseline, { status: 'insufficient', sessions: 4, medianVolume: null }); assert.equal(j.warnings.length, 2);
+    assert.equal(sent.filter((x) => x.method === 'POST' && x.url.includes('/rest/v1/alert_rules')).length, 0, 'a dry run never inserts');
+    mode = { daemon: [] }; j = await (await route.POST(rq('POST', '?dry_run=1', { symbol: 'TCS', kind: 'order_imbalance_below', threshold: 0.6 }))).json(); assert.equal(j.notes.daemon, 'not_seen');
+    mode = { daemon: [{ age_ms: 90_000 }] }; j = await (await route.POST(rq('POST', '?dry_run=1', { symbol: 'TCS', kind: 'order_imbalance_below', threshold: 0.6 }))).json(); assert.equal(j.notes.daemon, 'not_responding');
+    mode = { daemon: null }; j = await (await route.POST(rq('POST', '?dry_run=1', { symbol: 'TCS', kind: 'order_imbalance_below', threshold: 0.6 }))).json(); assert.equal(j.notes.daemon, 'unknown', 'schema not applied → unknown, not an error');
+    mode = {}; j = await (await route.POST(rq('POST', '?dry_run=1', { symbol: 'TCS', kind: 'price_above', threshold: 100 }))).json(); assert.deepEqual(j.notes, {}, 'cron-capable kinds need no daemon notes');
+    // create acts AS THE USER and sets user_id from the verified token (never from the body)
+    mode = {}; r = await route.POST(rq('POST', '', { symbol: 'tcs', kind: 'order_imbalance_above', threshold: 0.6, cooldown_min: 30, channels: { push: true, email: true }, user_id: 'attacker' })); j = await r.json();
+    assert.equal(r.status, 201); assert.equal(j.rule.user_id, 'u-1'); assert.equal(j.rule.symbol, 'TCS'); assert.deepEqual(j.rule.channels, { push: true, email: true }); const ins = sent.filter((x) => x.method === 'POST' && x.url.includes('/rest/v1/alert_rules')).pop()!; assert.equal(ins.auth, 'Bearer good'); assert.equal(ins.body[0].user_id, 'u-1');
+    mode = { dbError: { code: '54000' } }; r = await route.POST(rq('POST', '', { symbol: 'TCS', kind: 'price_above', threshold: 5 })); assert.equal(r.status, 409); assert.ok((await r.json()).errors[0].includes('50'));
+    mode = { dbError: { code: '23514' } }; r = await route.POST(rq('POST', '', { symbol: 'TCS', kind: 'price_above', threshold: 5 })); assert.equal(r.status, 422); assert.ok((await r.json()).errors[0].includes('WEEK9_TURN43_SCHEMA'));
+    mode = { dbError: { code: '42501' } }; assert.equal((await route.POST(rq('POST', '', { symbol: 'TCS', kind: 'price_above', threshold: 5 }))).status, 403);
+    // edit
+    const row = { id: RID, symbol: 'ABC', kind: 'volume_surge', threshold: 2, cooldown_min: 60, channels: { push: true }, enabled: true };
+    mode = { rows: [row] };
+    r = await route.PATCH(rq('PATCH', '', { id: RID, threshold: 3 })); assert.equal(r.status, 200); assert.equal((await r.json()).rule.threshold, 3);
+    r = await route.PATCH(rq('PATCH', '', { id: RID, threshold: 80 })); assert.equal(r.status, 422, 'merged rule is validated against the stored kind'); assert.ok((await r.json()).errors[0].includes('Volume multiple'));
+    r = await route.PATCH(rq('PATCH', '', { id: RID, kind: 'price_above' })); assert.equal(r.status, 422); assert.ok((await r.json()).errors[0].includes('cannot be changed'));
+    assert.equal((await route.PATCH(rq('PATCH', '', { id: RID }))).status, 422); assert.equal((await route.PATCH(rq('PATCH', '', { id: 'nope', threshold: 3 }))).status, 422); assert.equal((await route.PATCH(rq('PATCH', '', { id: RID, enabled: 'yes' }))).status, 422);
+    assert.equal((await route.PATCH(rq('PATCH', '', { id: RID, cooldown_min: 2 }))).status, 422);
+    r = await route.PATCH(rq('PATCH', '', { id: RID, enabled: false, channels: { email: true } })); assert.equal(r.status, 200);
+    mode = { rows: [] }; assert.equal((await route.PATCH(rq('PATCH', '', { id: RID, threshold: 3 }))).status, 404);
+    // delete + list
+    assert.equal((await route.DELETE(rq('DELETE', '?id=bad'))).status, 422); mode = { rows: [] }; assert.equal((await route.DELETE(rq('DELETE', `?id=${RID}`))).status, 404); mode = { rows: [row] }; assert.equal((await route.DELETE(rq('DELETE', `?id=${RID}`))).status, 200);
+    mode = { rows: [row] }; j = await (await route.GET(rq('GET'))).json(); assert.equal(j.rules.length, 1);
+  } finally { globalThis.fetch = realFetch; for (const k of Object.keys(env)) { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]; } }
+});
+
 void Promise.all(pending).then(() => {
   console.log(`\n${passed} checks passed${process.exitCode ? ' — WITH FAILURES' : ''}`);
   process.exit(process.exitCode ?? 0); // some modules keep timers alive

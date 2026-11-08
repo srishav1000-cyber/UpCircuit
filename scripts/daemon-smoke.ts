@@ -16,7 +16,11 @@ const until = async (f: () => boolean, ms = 8000, what = 'condition') => { const
 
 (async () => {
   const USER = '11111111-1111-1111-1111-111111111111';
-  const rules: Record<string, unknown>[] = [{ id: 'aaaaaaaa-0000-0000-0000-000000000001', user_id: USER, symbol: 'ABC', kind: 'price_above', threshold: 100, cooldown_min: 5, channels: { push: true, email: false }, enabled: true, last_triggered_at: null }];
+  const rules: Record<string, unknown>[] = [{ id: 'aaaaaaaa-0000-0000-0000-000000000001', user_id: USER, symbol: 'ABC', kind: 'price_above', threshold: 100, cooldown_min: 5, channels: { push: true, email: false }, enabled: true, last_triggered_at: null },
+    { id: 'bbbbbbbb-0000-0000-0000-000000000001', user_id: USER, symbol: 'QQQ', kind: 'volume_surge', threshold: 2, cooldown_min: 5, channels: { push: true }, enabled: true, last_triggered_at: null },
+    { id: 'bbbbbbbb-0000-0000-0000-000000000002', user_id: USER, symbol: 'QQQ', kind: 'order_imbalance_above', threshold: 0.5, cooldown_min: 5, channels: { push: true }, enabled: true, last_triggered_at: null },
+    { id: 'bbbbbbbb-0000-0000-0000-000000000003', user_id: USER, symbol: 'SHT', kind: 'volume_surge', threshold: 2, cooldown_min: 5, channels: { push: true }, enabled: true, last_triggered_at: null }];
+  const beats: Record<string, unknown>[] = []; const baselinesPosted: Record<string, unknown>[] = [];
   const deliveries: Record<string, unknown>[] = []; const claims: string[] = []; const claimed = new Set<string>(); let subscribes: string[][] = [];
 
   // device keys exactly as a browser would produce them
@@ -29,11 +33,19 @@ const until = async (f: () => boolean, ms = 8000, what = 'condition') => { const
   const api = httpServer(async (req, res) => {
     const u = new URL(req.url!, 'http://x'); const b = await body(req); const json = (x: unknown, s = 200) => { res.writeHead(s, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(x)); };
     if (u.pathname === '/login') return json({ status: true, data: { feedToken: 'FEED', jwtToken: 'J' } });
-    if (u.pathname === '/scrip') return json([{ token: '1001', symbol: 'ABC-EQ', exch_seg: 'NSE', name: 'ABC' }, { token: '1002', symbol: 'XYZ-EQ', exch_seg: 'NSE', name: 'XYZ' }]);
+    if (u.pathname === '/scrip') return json([{ token: '1001', symbol: 'ABC-EQ', exch_seg: 'NSE', name: 'ABC' }, { token: '1002', symbol: 'XYZ-EQ', exch_seg: 'NSE', name: 'XYZ' }, { token: '1003', symbol: 'QQQ-EQ', exch_seg: 'NSE', name: 'QQQ' }, { token: '1004', symbol: 'SHT-EQ', exch_seg: 'NSE', name: 'SHT' }]);
     if (u.pathname === '/rest/v1/alert_rules') return json(rules.filter((r) => r.enabled));
     if (u.pathname === '/rest/v1/push_subscriptions') return json([{ endpoint: `https://localhost:${pushPort}/push/dev1`, keys: { p256dh: Buffer.from(ecdh.getPublicKey()).toString('base64url'), auth: randomBytes(16).toString('base64url') } }]);
     if (u.pathname === '/rest/v1/rpc/claim_alert_rule') { const j = JSON.parse(b); const k = `${j.p_rule}:${j.p_window_key}`; claims.push(k); const ok = !claimed.has(j.p_rule); claimed.add(j.p_rule); return json(ok); }
     if (u.pathname === '/rest/v1/rpc/audit_write') return json(null);
+    if (u.pathname === '/rest/v1/rpc/daemon_beat') { beats.push(JSON.parse(b)); return json(null); }
+    if (u.pathname === '/rest/v1/volume_baselines' && req.method === 'POST') { baselinesPosted.push(...JSON.parse(b)); res.writeHead(201).end(); return; }
+    if (u.pathname.startsWith('/yahoo/v8/finance/chart/')) {                       // daily bars for the baseline: QQQ has 30 sessions of ~1M, SHT only 4
+      const sym = u.pathname.split('/').pop()!.split('.')[0]; const n = sym === 'SHT' ? 4 : 30; const day = Math.floor(Date.now() / 86400000);
+      const ts = Array.from({ length: n }, (_, i) => (day - n + i) * 86400 + 3600);
+      const col = (f: (i: number) => number) => ts.map((_, i) => f(i));
+      return json({ chart: { result: [{ timestamp: ts, indicators: { quote: [{ open: col(() => 100), high: col(() => 102), low: col(() => 98), close: col(() => 101), volume: col((i) => 1_000_000 + i * 1000) }] } }] } });
+    }
     if (u.pathname === '/rest/v1/alert_deliveries' && req.method === 'POST') { deliveries.push(...JSON.parse(b)); res.writeHead(201).end(); return; }
     if (u.pathname === '/rest/v1/alert_deliveries' && req.method === 'PATCH') { const id = u.searchParams.get('id')!.slice(3); const row = deliveries.find((d) => d.id === id && !d.sw_ack_at); if (row) Object.assign(row, JSON.parse(b)); return json(row ? [{ id }] : []); }
     if (u.pathname === '/rest/v1/alert_deliveries') { const id = u.searchParams.get('id')!.slice(3); return json(deliveries.filter((d) => d.id === id)); }
@@ -58,7 +70,7 @@ const until = async (f: () => boolean, ms = 8000, what = 'condition') => { const
   Object.assign(process.env, {
     NEXT_PUBLIC_SUPABASE_URL: `http://127.0.0.1:${apiPort}`, SUPABASE_SERVICE_ROLE_KEY: 'svc-key', SMARTAPI_API_KEY: 'k', SMARTAPI_CLIENT_CODE: 'C1', SMARTAPI_PASSWORD: 'pw', SMARTAPI_TOTP_SECRET: 'JBSWY3DPEHPK3PXP',
     SMARTAPI_LOGIN_URL: `http://127.0.0.1:${apiPort}/login`, SMARTAPI_SCRIP_MASTER_URL: `http://127.0.0.1:${apiPort}/scrip`, SMARTAPI_STREAM_URL: `ws://127.0.0.1:${feedPort}`,
-    NEXT_PUBLIC_VAPID_PUBLIC_KEY: keys.publicKey, VAPID_PRIVATE_KEY: keys.privateKey, VAPID_SUBJECT: 'mailto:ops@example.test', PUSH_ENDPOINT_ALLOW: 'localhost', PORT: '0', DAEMON_RESYNC_MS: '3600000',
+    NEXT_PUBLIC_VAPID_PUBLIC_KEY: keys.publicKey, VAPID_PRIVATE_KEY: keys.privateKey, VAPID_SUBJECT: 'mailto:ops@example.test', PUSH_ENDPOINT_ALLOW: 'localhost', YAHOO_BASE: `http://127.0.0.1:${apiPort}/yahoo`, PORT: '0', DAEMON_RESYNC_MS: '3600000',
   });
   const { main, loadConfig } = await import('../daemon/index');
   const daemon = await main({ ...loadConfig(), port: 0 });
@@ -86,6 +98,21 @@ const until = async (f: () => boolean, ms = 8000, what = 'condition') => { const
   await fetch(`http://127.0.0.1:${apiPort}/__rt`, { method: 'POST', body: JSON.stringify({ type: 'INSERT', record: r3 }) }); await sleep(100);
   await fetch(`http://127.0.0.1:${apiPort}/__rt`, { method: 'POST', body: JSON.stringify({ type: 'DELETE', old: { id: r3.id } }) }); await sleep(100);
   tick('1002', 60); await sleep(100); tick('1002', 49); await sleep(400); assert.equal(claims.filter((c) => c.startsWith(r3.id)).length, 0); pass('Realtime DELETE removes the rule (it never reaches the claim step)');
+
+
+  // ───── Turn 43: volume surge + top-5 imbalance + baselines + heartbeat ─────
+  await until(() => feedWs !== null && subscribes.flat().includes('1003'), 8000, 'subscribe QQQ'); pass('volume / imbalance rules subscribed their symbols at startup');
+  await until(() => baselinesPosted.some((x) => x.symbol === 'QQQ') && baselinesPosted.some((x) => x.symbol === 'SHT'), 10000, 'baselines published');
+  const bq = baselinesPosted.find((x) => x.symbol === 'QQQ')!, bs = baselinesPosted.find((x) => x.symbol === 'SHT')!;
+  assert.equal(bq.status, 'ok'); assert.ok(Number(bq.median_volume) > 1_000_000 && Number(bq.median_volume) < 1_040_000, String(bq.median_volume)); assert.equal(bs.status, 'insufficient'); assert.equal(bs.median_volume, null); pass(`baselines computed from daily bars and published (QQQ median ≈ ${Math.round(Number(bq.median_volume)).toLocaleString('en-IN')}, SHT = insufficient with ${bs.sessions} sessions)`);
+  const lvl = (p: number, q: number) => ({ price: p, qty: q, orders: 1 });
+  const bookOf = (bid: number, ask: number) => ({ bids: [lvl(99, bid), lvl(98, 100), lvl(97, 100), lvl(96, 100), lvl(95, 100)], asks: [lvl(101, ask), lvl(102, 100), lvl(103, 100), lvl(104, 100), lvl(105, 100)] });
+  const qtick = (token: string, vol: number, b: ReturnType<typeof bookOf>) => feedWs!.send(encodeTick({ mode: 3, exchangeType: 1, token, seq: 1, exchangeTs: Date.now(), ltp: 100, close: 99, volume: vol, open: 99, high: 101, low: 98, bids: b.bids, asks: b.asks }));
+  qtick('1003', 1_100_000, bookOf(1000, 1000)); await sleep(200); assert.equal(deliveries.filter((d) => d.symbol === 'QQQ').length, 0); pass('balanced book + below-threshold volume seeds both rules without firing');
+  qtick('1003', 2_300_000, bookOf(9000, 500)); await until(() => deliveries.filter((d) => d.symbol === 'QQQ').length === 2, 8000, 'QQQ alerts');
+  const kinds = deliveries.filter((d) => d.symbol === 'QQQ').map((d) => d.kind).sort(); assert.deepEqual(kinds, ['order_imbalance_above', 'volume_surge']); pass('one tick crossing 2.2× typical volume AND +0.8 top-5 imbalance sent both alerts');
+  qtick('1004', 9_000_000_000, bookOf(1000, 1000)); await sleep(300); assert.equal(deliveries.filter((d) => d.symbol === 'SHT').length, 0); pass('volume rule with insufficient history stays N/A and never fires');
+  await until(() => beats.some((x) => x.p_feed_status === 'open' && Number(x.p_ticks) > 0), 12000, 'heartbeat with the feed open'); const hb = beats.filter((x) => x.p_feed_status === 'open').pop()!; assert.equal(hb.p_id, 'alert-daemon'); assert.equal(hb.p_feed_status, 'open'); assert.ok(Number(hb.p_rules) >= 5 && Number(hb.p_ticks) > 0); pass(`heartbeat reaches daemon_beat() (feed ${hb.p_feed_status}, ${hb.p_rules} rules, ${hb.p_ticks} ticks)`);
 
   // ACK route with the delivery's token (handler called directly against the mock REST)
   const { POST } = await import('../app/api/alerts/ack/route');

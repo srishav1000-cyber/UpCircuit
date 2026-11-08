@@ -1,7 +1,7 @@
 'use client';
 
 import { Card, Meter, Stat, ZONE } from '../ui';
-import { OrderFlowHeatmap } from '../OrderFlowHeatmap';
+import { OrderImbalanceGauge } from './OrderImbalanceGauge';
 import { CircuitPredictor } from '../CircuitPredictor';
 import { BandChart, BarChart, CARD_GRID, WIDE } from './charts';
 import { C, alpha } from '@/lib/theme';
@@ -105,7 +105,7 @@ export function DayTraderDashboard({ engine, quote, mode, favorites, onAskAI, on
         <Stat label="Volatility σ" value={vol === null ? '…' : vol.toFixed(1) + '%'} sub="Realised, annualised" hint={live ? 'Std-dev of 250 ms log-returns over the last 60 s, annualised' : 'Std-dev of 1-minute log-returns of the real session, annualised'} />
       </div>
 
-      <OrderFlowHeatmap engine={engine} symbol={quote.symbol} />
+      <OrderImbalanceGauge bids={engine.depth.bids} asks={engine.depth.asks} symbol={quote.symbol} live={engine.depthReal} />
       <CircuitPredictor engine={engine} onSelect={onSelect} />
       <OrbCard engine={engine} symbol={quote.symbol} />
       <SurgeMeter engine={engine} mode={mode} />

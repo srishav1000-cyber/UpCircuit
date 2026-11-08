@@ -9,7 +9,9 @@ import { smartApiLogin, type FeedSession } from '../lib/smartapiLogin';
 import { loadListings, type Listing } from '../lib/scripMaster';
 import { isStreamWindow } from '../lib/market';
 import { ackSecret } from '../lib/ackToken';
+import { fetchBars } from '../lib/yahooQuotes';
 import { RuleIndex, toRule } from './engine';
+import { BaselineStore } from './baselines';
 import { createDispatcher } from './dispatcher';
 
 /* ───────────── config ───────────── */
@@ -52,6 +54,22 @@ export async function main(cfg = loadConfig(), env: Env = process.env): Promise<
   const dispatcher = createDispatcher({
     supabaseUrl: cfg.supabaseUrl, serviceKey: cfg.serviceKey, vapid: cfg.vapid, ackSecret: ackSecret(env), pushEndpointAllow: env.PUSH_ENDPOINT_ALLOW, emailEnabled: !!env.RESEND_API_KEY, log,
   });
+  const sbHeaders = { apikey: cfg.serviceKey, Authorization: `Bearer ${cfg.serviceKey}`, 'Content-Type': 'application/json' };
+  const sbBase = cfg.supabaseUrl.replace(/\/+$/, '');
+  // volume baselines: real daily bars (Yahoo, the repo's existing historical source — the SmartAPI login deliberately never exposes a JWT for getCandleData)
+  const baselines = new BaselineStore({
+    fetchDaily: (symbol) => fetchBars({ symbol, exch: 'NSE' }, '1Y'),
+    onComputed: async (rows) => {
+      const r = await fetch(`${sbBase}/rest/v1/volume_baselines`, {
+        method: 'POST', headers: { ...sbHeaders, Prefer: 'resolution=merge-duplicates,return=minimal' }, signal: AbortSignal.timeout(8000),
+        body: JSON.stringify(rows.map((x) => ({ symbol: x.symbol, median_volume: x.medianVolume, sessions: x.sessions, status: x.status, computed_at: new Date(x.computedAt).toISOString() }))),
+      });
+      if (!r.ok) throw new Error(`volume_baselines ${r.status}`);
+    },
+    log,
+  });
+  index.setBaselineLookup((sym) => baselines.get(sym));
+  const wantBaselines = () => baselines.want(index.symbolsWithKind('volume_surge'));
   if (!dispatcher.configured) log('warn', 'web push is NOT configured (VAPID_* / ACK secret) — rules will be evaluated but nothing can be sent');
 
   const health = { startedAt: Date.now(), ticks: 0, lastTickAt: 0, lastTickLagMs: null as number | null, feed: 'idle' as string, reconnects: 0, logins: 0, resyncs: 0, lastResyncAt: 0, realtime: 'init' as string, unresolved: [] as string[] };
@@ -77,7 +95,7 @@ export async function main(cfg = loadConfig(), env: Env = process.env): Promise<
       const d = index.replaceAll(await fetchAllRules());
       health.resyncs++; health.lastResyncAt = Date.now();
       log('info', 'rules synced', { reason, rules: index.size, symbols: index.symbols().length, ...d });
-      subscribeNew();
+      subscribeNew(); wantBaselines();
     } catch (e) {
       log('error', 'rule resync failed', { reason, error: e instanceof Error ? e.message : String(e) });
     }
@@ -91,7 +109,7 @@ export async function main(cfg = loadConfig(), env: Env = process.env): Promise<
       if (rule) index.upsert(rule);
       else log('warn', 'ignored unusable rule row from Realtime');
     }
-    subscribeNew();
+    subscribeNew(); wantBaselines();
   }
   const sb = createClient(cfg.supabaseUrl, cfg.serviceKey, { auth: { persistSession: false, autoRefreshToken: false }, realtime: { params: { eventsPerSecond: 50 } } });
   const channel: RealtimeChannel = sb
@@ -104,6 +122,7 @@ export async function main(cfg = loadConfig(), env: Env = process.env): Promise<
     });
   await resync('startup');
   const resyncTimer = setInterval(() => void resync('periodic safety net'), cfg.resyncMs);
+  const baselineTimer = setInterval(wantBaselines, 10 * 60_000);   // cheap: only stale symbols are reloaded (6 h TTL, IST day rollover)
 
   /* ───── feed ───── */
   function subscribeNew(): void {
@@ -123,7 +142,7 @@ export async function main(cfg = loadConfig(), env: Env = process.env): Promise<
     const now = Date.now();
     health.ticks++; health.lastTickAt = now;
     health.lastTickLagMs = m.timestamp > 0 ? Math.max(0, now - m.timestamp) : null;
-    for (const hit of index.onTick({ symbol: m.symbol, ltp: m.lastPrice, prevClose: m.prevClose, ts: m.timestamp }, now)) {
+    for (const hit of index.onTick({ symbol: m.symbol, ltp: m.lastPrice, prevClose: m.prevClose, ts: m.timestamp, volume: m.volume, depth: m.depth }, now)) {
       log('info', 'rule matched', { symbol: hit.rule.symbol, kind: hit.rule.kind, rule: hit.rule.id, price: hit.price, tickToMatchMs: hit.matchedAt - hit.tickTime });
       dispatcher.enqueue(hit);
     }
@@ -174,13 +193,30 @@ export async function main(cfg = loadConfig(), env: Env = process.env): Promise<
   const stopHooks: (() => void)[] = [];
   void runFeed();
 
+  /* ───── heartbeat → public.daemon_health() (UI: FeedHealthStatus) ───── */
+  let beatFailLogged = 0;
+  const beat = async () => {
+    const now = Date.now();
+    try {
+      const r = await fetch(`${sbBase}/rest/v1/rpc/daemon_beat`, {
+        method: 'POST', headers: sbHeaders, signal: AbortSignal.timeout(4000),
+        body: JSON.stringify({ p_id: 'alert-daemon', p_feed_status: health.feed, p_last_tick_age_ms: health.lastTickAt ? now - health.lastTickAt : null, p_ticks: health.ticks, p_reconnects: health.reconnects, p_rules: index.size, p_symbols: index.symbols().length, p_started_at: new Date(health.startedAt).toISOString(), p_version: 'turn43' }),
+      });
+      if (!r.ok) throw new Error(`daemon_beat ${r.status}`);
+    } catch (e) {
+      if (now - beatFailLogged > 60_000) { beatFailLogged = now; log('warn', 'heartbeat failed (is docs/WEEK9_TURN43_SCHEMA.sql applied?)', { error: e instanceof Error ? e.message : String(e) }); }
+    }
+  };
+  const beatTimer = setInterval(() => void beat(), 5000);
+  void beat();
+
   /* ───── health endpoint (host health check / manual curl) ───── */
   const http = createServer((req, res) => {
     if (req.url !== '/healthz') { res.writeHead(404).end(); return; }
     const age = health.lastTickAt ? Date.now() - health.lastTickAt : null;
     const stalled = isStreamWindow(Date.now()) && (age === null ? Date.now() - health.startedAt > 60_000 : age > 60_000);
     res.writeHead(stalled ? 503 : 200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
-    res.end(JSON.stringify({ ok: !stalled, uptimeS: Math.round((Date.now() - health.startedAt) / 1000), feed: health.feed, ticks: health.ticks, lastTickAgeMs: age, lastTickLagMs: health.lastTickLagMs, reconnects: health.reconnects, logins: health.logins, rules: index.size, symbols: index.symbols().length, unresolvedSymbols: health.unresolved.length, realtime: health.realtime, resyncs: health.resyncs, dispatch: dispatcher.stats(), pushConfigured: dispatcher.configured }));
+    res.end(JSON.stringify({ ok: !stalled, uptimeS: Math.round((Date.now() - health.startedAt) / 1000), feed: health.feed, ticks: health.ticks, lastTickAgeMs: age, lastTickLagMs: health.lastTickLagMs, reconnects: health.reconnects, logins: health.logins, rules: index.size, symbols: index.symbols().length, unresolvedSymbols: health.unresolved.length, realtime: health.realtime, resyncs: health.resyncs, dispatch: dispatcher.stats(), baselines: baselines.stats(), volumeRulesNA: index.volumeRulesNA(), pushConfigured: dispatcher.configured }));
   });
   http.listen(cfg.port, () => log('info', 'daemon up', { port: cfg.port, rules: index.size }));
 
@@ -188,7 +224,7 @@ export async function main(cfg = loadConfig(), env: Env = process.env): Promise<
     if (stopping) return;
     stopping = true;
     log('info', 'shutting down');
-    clearInterval(resyncTimer);
+    clearInterval(resyncTimer); clearInterval(baselineTimer); clearInterval(beatTimer);
     stopHooks.splice(0).forEach((h) => h());
     await dispatcher.drain(5000);
     await sb.removeChannel(channel).catch(() => undefined);

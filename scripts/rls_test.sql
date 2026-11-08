@@ -233,4 +233,32 @@ update public.alert_rules set enabled = true where id = (select id from w9);
 select t.ok(t.try('select public.claim_alert_rule((select id from w9), '''')', :alice, 'service_role') <> '', 'empty window key rejected');
 select t.ok((select count(*) from public.alert_claims) = 2, 'one claim row per successful window');
 
+/* ── Week 9 / Turn 43: new rule kinds, per-kind bounds, daemon heartbeat, volume baselines ── */
+select t.ok(t.try('insert into public.alert_rules(user_id, symbol, kind, threshold, cooldown_min) values (''' || :alice || ''', ''ABC'', ''volume_surge'', 2, 30)', :alice, 'service_role') = '', 'volume_surge is an accepted kind');
+select t.ok(t.try('insert into public.alert_rules(user_id, symbol, kind, threshold, cooldown_min) values (''' || :alice || ''', ''ABC'', ''order_imbalance_above'', 0.6, 30)', :alice, 'service_role') = '', 'order_imbalance_above is an accepted kind');
+select t.ok(t.try('insert into public.alert_rules(user_id, symbol, kind, threshold, cooldown_min) values (''' || :alice || ''', ''ABC'', ''order_imbalance_below'', 0.6, 30)', :alice, 'service_role') = '', 'order_imbalance_below is an accepted kind');
+select t.ok(t.try('insert into public.alert_rules(user_id, symbol, kind, threshold, cooldown_min) values (''' || :alice || ''', ''ABC'', ''moon_phase'', 1, 30)', :alice, 'service_role') <> '', 'unknown kinds are still rejected');
+select t.ok(t.try('insert into public.alert_rules(user_id, symbol, kind, threshold, cooldown_min) values (''' || :alice || ''', ''ABC'', ''volume_surge'', 0.4, 30)', :alice, 'service_role') <> '', 'volume multiple below 0.5× rejected');
+select t.ok(t.try('insert into public.alert_rules(user_id, symbol, kind, threshold, cooldown_min) values (''' || :alice || ''', ''ABC'', ''volume_surge'', 51, 30)', :alice, 'service_role') <> '', 'volume multiple above 50× rejected');
+select t.ok(t.try('insert into public.alert_rules(user_id, symbol, kind, threshold, cooldown_min) values (''' || :alice || ''', ''ABC'', ''order_imbalance_above'', 1.5, 30)', :alice, 'service_role') <> '', 'imbalance above 1 rejected');
+select t.ok(t.try('insert into public.alert_rules(user_id, symbol, kind, threshold, cooldown_min) values (''' || :alice || ''', ''ABC'', ''order_imbalance_below'', 0.05, 30)', :alice, 'service_role') <> '', 'imbalance below 0.1 rejected');
+select t.ok(t.try('insert into public.alert_rules(user_id, symbol, kind, threshold, cooldown_min) values (''' || :alice || ''', ''ABC'', ''price_above'', 5000, 30)', :alice, 'service_role') = '', 'price rules keep their wide range');
+-- heartbeat
+select t.ok(t.try('select public.daemon_beat(''alert-daemon'', ''open'', 100, 5, 0, 3, 2, now(), ''t'')', :alice) <> '', 'users cannot write a heartbeat');
+select t.ok(t.try('select public.daemon_beat(''alert-daemon'', ''open'', 100, 5, 0, 3, 2, now(), ''t'')', null, 'anon') <> '', 'anon cannot write a heartbeat');
+select t.ok(t.try('select public.daemon_beat(''alert-daemon'', ''open'', 100, 5, 0, 3, 2, now(), ''t'')', :alice, 'service_role') = '', 'the daemon (service role) can beat');
+select t.ok(t.try('select public.daemon_beat(''Bad Id!'', ''open'', 100, 5, 0, 3, 2, now(), ''t'')', :alice, 'service_role') <> '', 'bad heartbeat ids rejected');
+select t.become(:alice); select t.ok((select count(*) from public.daemon_health()) = 1 and (select age_ms from public.daemon_health()) between 0 and 5000 and (select feed_status from public.daemon_health()) = 'open', 'signed-in users read the heartbeat with a database-clock age'); select t.back();
+select t.ok(t.try('select count(*) from public.daemon_heartbeat', :alice) <> '', 'the raw heartbeat table is not readable by users');
+select t.ok(t.try('select count(*) from public.daemon_health()', null, 'anon') <> '', 'anon cannot read daemon_health');
+select pg_sleep(0.3); select t.ok(public.daemon_health() is not null, 'daemon_health callable'); 
+-- baselines
+insert into public.volume_baselines(symbol, median_volume, sessions, status) values ('ABC', 1200000, 20, 'ok'), ('XYZ', null, 4, 'insufficient');
+select t.become(:alice); select t.ok((select count(*) from public.volume_baselines) = 2, 'signed-in users can read baselines'); select t.back();
+select t.ok(t.try('insert into public.volume_baselines(symbol, status) values (''HAX'', ''ok'')', :alice) <> '', 'users cannot write baselines');
+select t.ok(t.try('update public.volume_baselines set median_volume = 1', :alice) <> '' and (select median_volume from public.volume_baselines where symbol = 'ABC') = 1200000, 'users cannot update baselines');
+select t.ok(t.try('select count(*) from public.volume_baselines', null, 'anon') <> '', 'anon cannot read baselines');
+select t.ok(t.try('insert into public.volume_baselines(symbol, median_volume, sessions, status) values (''BAD'', -5, 3, ''ok'')', :alice, 'service_role') <> '', 'negative baselines rejected');
+select t.ok(t.try('insert into public.volume_baselines(symbol, median_volume, sessions, status) values (''UPS'', 10, 3, ''ok'') on conflict (symbol) do update set sessions = 9', :alice, 'service_role') = '', 'the daemon can upsert baselines');
+
 select count(*) || ' assertions passed' as result from t.log;

@@ -428,5 +428,7 @@ export function useMarket(universe: Instrument[], selected: string, watch: strin
     void fetchQuotes([selRef.current, ...INDEX_IDS]).then((ok) => setState(ok || engine.ready ? 'ok' : 'error'));
   }, [engine, fetchQuotes]);
 
-  return { engine, version, mode, conn, liveReason, state, retry };
+  /** newest tick time on the browser socket (0 = none) — a getter so consumers can poll it without re-rendering the page */
+  const getLastTickAt = useCallback(() => feedRef.current?.lastTickAt ?? 0, []);
+  return { engine, version, mode, conn, liveReason, state, retry, getLastTickAt };
 }

@@ -27,3 +27,24 @@ SmartAPI WS ─ticks─► daemon (RuleIndex: Map<SYMBOL, AlertRule[]>) ─risin
 ## Verifying
 `npm test` (unit: engine, dispatcher, latency maths, service-worker ACK) · `bash scripts/rls-test.sh` (real PostgreSQL: claim function, columns, Realtime publication) · `npm run daemon:smoke` (daemon vs local mock feed / Supabase / HTTPS push service with real VAPID encryption).
 None of these measure real SmartAPI or FCM latency — run the daemon in market hours and read the Delivery log summary for that.
+
+---
+
+## Turn 43 — feed health, volume surge, depth imbalance
+
+**Migration order:** `ENTERPRISE_SCHEMA.sql` → `WEEK9_SCHEMA.sql` → `WEEK9_TURN43_SCHEMA.sql`.
+Redeploy the daemon after migrating (it now calls `rpc/daemon_beat` and writes `volume_baselines`).
+
+| Kind | Threshold | Fires when |
+|---|---|---|
+| `volume_surge` | multiple 0.5–50 of typical full-day volume | today's cumulative volume ≥ multiple × median of last ≤20 completed sessions (needs ≥10, else **N/A**) |
+| `order_imbalance_above` | 0.1–1 | (Σbid−Σask)/(Σbid+Σask) over top-5 depth crosses up through +x |
+| `order_imbalance_below` | 0.1–1 | same ratio crosses down through −x |
+
+Limits (by design):
+- Both kinds are **daemon-only**; the cron backstop cannot evaluate them.
+- Volume baseline is full-day, **not time-of-day adjusted**; early-session surges need a low multiple.
+- Imbalance is a heuristic of resting orders (can be cancelled). Books under 500 shares across the top 5 levels are N/A. 0.05 hysteresis applies once a crossing is held.
+- Rule API: `POST /api/alerts/rules?dry_run=1` validates without saving; PATCH edits threshold/cooldown/channels/enabled (symbol and kind are immutable).
+
+Feed health: the browser pill/banner uses its own tick age (Live ≤5 s, Delayed, Down >60 s). The daemon heartbeat (every 5 s, DB clock) drives "Closed-app alerts are paused" when a previously seen daemon is stale (≥20 s) or offline (≥120 s).

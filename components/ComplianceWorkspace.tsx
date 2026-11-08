@@ -5,6 +5,7 @@ import type { CloudClient } from '@/lib/cloud';
 import { ROLE_INFO, can, opsTabs, type AppRole, type OpsTab } from '@/lib/rbac';
 import { SurveillanceRegister } from './SurveillanceRegister';
 import { AlertDeliveryLog } from './dashboards/AlertDeliveryLog';
+import { FeedHealthStatus, type FeedHealthStatusProps } from './dashboards/FeedHealthStatus';
 import { AlertRuleManager } from './AlertRuleManager';
 import { AuditTrail } from './AuditTrail';
 import { UserAdmin } from './UserAdmin';
@@ -13,7 +14,7 @@ import { PredictionBacktest } from './PredictionBacktest';
 
 const LABEL: Record<OpsTab, string> = { register: '🛡 Surveillance register', rules: '⏰ Alert rules', audit: '🔗 Audit trail', ai: '🤖 AI sign-offs', backtest: '📈 Prediction back-test', users: '👥 Users & roles' };
 
-export function ComplianceWorkspace({ cloud, userId, role, onOpenStock, backtestSymbols = [] }: { cloud: CloudClient | null; userId: string | null; role: AppRole | null; onOpenStock: (s: string) => void; backtestSymbols?: string[] }) {
+export function ComplianceWorkspace({ cloud, userId, role, onOpenStock, backtestSymbols = [], feed }: { feed?: Omit<FeedHealthStatusProps, 'cloud' | 'variant' | 'className'>; cloud: CloudClient | null; userId: string | null; role: AppRole | null; onOpenStock: (s: string) => void; backtestSymbols?: string[] }) {
   const tabs = opsTabs(role);
   const [tab, setTab] = useState<OpsTab>(tabs[0] ?? 'rules');
   const active = tabs.includes(tab) ? tab : tabs[0];
@@ -26,6 +27,7 @@ export function ComplianceWorkspace({ cloud, userId, role, onOpenStock, backtest
         </div>
         {role && <span data-testid="role-badge" title={ROLE_INFO[role].blurb} className="ml-auto rounded-full border border-accent/50 bg-accent/10 px-3 py-1 text-[11px] font-bold text-accent">Role: {ROLE_INFO[role].label}</span>}
       </header>
+      {feed && <FeedHealthStatus {...feed} cloud={cloud} variant="panel" className="mb-4" />}
       {!cloud || !userId || !role ? (
         <div data-testid="compliance-unavailable" className="rounded-lg border border-line bg-panel p-6 text-center text-[13px] text-muted">The governance workspace needs a Supabase account (roles, the shared register and the audit log live in the database). Demo / local accounts run without it.</div>
       ) : (

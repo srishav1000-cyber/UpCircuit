@@ -23,6 +23,7 @@ import { useCloud } from '@/hooks/useCloud';
 import { useAuditSession, useRole } from '@/hooks/useRole';
 import { LegalFooter } from '@/components/ConsentBanner';
 import { ComplianceWorkspace } from '@/components/ComplianceWorkspace';
+import { FeedHealthStatus } from '@/components/dashboards/FeedHealthStatus';
 import { useNotifySync } from '@/hooks/useNotify';
 import { mergeHolding } from '@/lib/holdingsStore';
 import { HomePage } from '@/components/HomePage';
@@ -159,7 +160,7 @@ function Terminal() {
   const alertSymbols = useMemo(() => priceAlerts.alerts.filter((a) => !a.triggeredAt).map((a) => a.symbol), [priceAlerts.alerts]);
   const focusCandidates = useMemo(() => [...new Set([...allWatched, ...rawHoldings.map((h) => h.symbol)])], [allWatched, rawHoldings]);
   const watch = useMemo(() => [...allWatched, ...rawHoldings.map((h) => h.symbol), ...alertSymbols], [allWatched, rawHoldings, alertSymbols]);
-  const { engine, version, mode, conn, liveReason, state: dataState, retry: retryData } = useMarket(instruments, symbol, watch, focus);
+  const { engine, version, mode, conn, liveReason, state: dataState, retry: retryData, getLastTickAt } = useMarket(instruments, symbol, watch, focus);
 
   useNotifySync();
   const { cloud, userId: cloudUser } = useCloud();
@@ -430,8 +431,10 @@ function Terminal() {
         {layoutMsg && <div role="status" data-testid="layout-toast" className="fixed bottom-14 left-1/2 z-[95] -translate-x-1/2 rounded-md border border-line bg-panel px-3 py-2 text-[12px] font-semibold text-ink shadow-xl">{layoutMsg}</div>}
       </div>
 
+      <FeedHealthStatus variant="banner" conn={conn} mode={mode} reason={liveReason} getLastTickAt={getLastTickAt} cloud={cloud} />
+
       {view === 'compliance' ? (
-        <ComplianceWorkspace cloud={cloud} userId={cloudUser} role={appRole} onOpenStock={openStock} backtestSymbols={circuitSymbols.slice(0, 20)} />
+        <ComplianceWorkspace feed={{ conn, mode, reason: liveReason, getLastTickAt }} cloud={cloud} userId={cloudUser} role={appRole} onOpenStock={openStock} backtestSymbols={circuitSymbols.slice(0, 20)} />
       ) : view === 'home' ? (
         <main className="flex-1">
           <HomePage engine={engine} news={news} newsError={newsError} onOpenStock={openStock} instruments={instruments} onOpenChart={openChart} />

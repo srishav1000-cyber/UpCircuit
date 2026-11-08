@@ -2,7 +2,8 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import type { AlertDelivery, AlertRuleRow, CloudClient } from '@/lib/cloud';
-import { RULE_KINDS, RULE_LABEL, validateRule, type RuleKind } from '@/lib/alertRules';
+import { KIND_META, RULE_KINDS, RULE_LABEL, fmtThreshold, validateRule, type RuleKind } from '@/lib/alertRules';
+import type { VolumeBaselineRow } from '@/lib/cloud';
 import { audit } from '@/lib/auditBus';
 
 const ago = (iso: string | null) => (iso ? new Date(iso).toLocaleString('en-GB', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false }) : '—');
@@ -10,10 +11,12 @@ const ago = (iso: string | null) => (iso ? new Date(iso).toLocaleString('en-GB',
 export function AlertRuleManager({ cloud, userId }: { cloud: CloudClient; userId: string }) {
   const [rules, setRules] = useState<AlertRuleRow[] | null>(null);
   const [deliveries, setDeliveries] = useState<AlertDelivery[]>([]);
+  const [baselines, setBaselines] = useState<Record<string, VolumeBaselineRow>>({});
+  const [editing, setEditing] = useState<{ id: string; value: string } | null>(null);
   const [err, setErr] = useState('');
   const [f, setF] = useState({ symbol: '', kind: 'price_above' as RuleKind, threshold: '', cooldown: '60', push: true, email: false });
   const load = useCallback(async () => {
-    try { const [r, d] = await Promise.all([cloud.listRules(), cloud.listDeliveries(30)]); setRules(r); setDeliveries(d); } catch (e) { setErr(e instanceof Error ? e.message : 'Could not load rules'); }
+    try { const [r, d] = await Promise.all([cloud.listRules(), cloud.listDeliveries(30)]); setRules(r); setDeliveries(d); const vs = r.filter((x) => x.kind === 'volume_surge').map((x) => x.symbol); if (vs.length) setBaselines(Object.fromEntries((await cloud.listBaselines(vs)).map((b) => [b.symbol, b]))); } catch (e) { setErr(e instanceof Error ? e.message : 'Could not load rules'); }
   }, [cloud]);
   useEffect(() => { void load(); const t = setInterval(() => void load(), 60_000); return () => clearInterval(t); }, [load]);
 
@@ -34,12 +37,13 @@ export function AlertRuleManager({ cloud, userId }: { cloud: CloudClient; userId
       <form onSubmit={add} className="mb-3 grid gap-2 rounded-lg border border-line bg-panel p-3 sm:grid-cols-[1fr_1.6fr_1fr_1fr_auto] sm:items-end">
         <label className="text-[11px] text-muted">Symbol<input data-testid="rule-symbol" value={f.symbol} onChange={(e) => setF({ ...f, symbol: e.target.value })} placeholder="RELIANCE" className={`${input} mt-1 w-full uppercase`} /></label>
         <label className="text-[11px] text-muted">Condition<select data-testid="rule-kind" value={f.kind} onChange={(e) => setF({ ...f, kind: e.target.value as RuleKind })} className={`${input} mt-1 w-full`}>{RULE_KINDS.map((k) => <option key={k} value={k} className="bg-panel">{RULE_LABEL[k]}</option>)}</select></label>
-        <label className="text-[11px] text-muted">Threshold<input data-testid="rule-threshold" inputMode="decimal" value={f.threshold} onChange={(e) => setF({ ...f, threshold: e.target.value })} placeholder="1500" className={`${input} mt-1 w-full`} /></label>
+        <label className="text-[11px] text-muted">Threshold<input data-testid="rule-threshold" inputMode="decimal" aria-label={`Threshold (${KIND_META[f.kind].unit})`} value={f.threshold} onChange={(e) => setF({ ...f, threshold: e.target.value })} placeholder={KIND_META[f.kind].placeholder} title={KIND_META[f.kind].help} aria-describedby="rule-kind-help" className={`${input} mt-1 w-full`} /></label>
         <label className="text-[11px] text-muted">Cooldown (min)<input data-testid="rule-cooldown" inputMode="numeric" value={f.cooldown} onChange={(e) => setF({ ...f, cooldown: e.target.value })} className={`${input} mt-1 w-full`} /></label>
         <button data-testid="rule-add" className="h-9 rounded-md bg-accent px-4 text-[13px] font-bold text-white hover:brightness-110">Add rule</button>
         <div className="flex gap-4 text-[12px] text-ink sm:col-span-5">
           <label className="flex items-center gap-1.5"><input type="checkbox" checked={f.push} onChange={(e) => setF({ ...f, push: e.target.checked })} /> Web push</label>
           <label className="flex items-center gap-1.5"><input type="checkbox" checked={f.email} onChange={(e) => setF({ ...f, email: e.target.checked })} /> E-mail</label>
+          <span id="rule-kind-help" data-testid="rule-kind-help" className="basis-full text-muted">{KIND_META[f.kind].help}{KIND_META[f.kind].engine === 'daemon' && ' Needs the live alert daemon — the 5-minute cron backstop cannot evaluate it.'}</span>
           <span className="text-muted">Rules run on the server even with the app closed: instantly when the live alert daemon is deployed, otherwise on the 5-minute cron backstop (delayed quotes).</span>
         </div>
       </form>
@@ -52,7 +56,21 @@ export function AlertRuleManager({ cloud, userId }: { cloud: CloudClient; userId
             {(rules ?? []).map((r) => (
               <tr key={r.id} data-testid="rule-row" className="border-t border-line">
                 <td className="px-3 py-2 font-bold text-ink">{r.symbol}</td>
-                <td className="px-3 py-2">{RULE_LABEL[r.kind]} <span className="num font-semibold">{r.threshold}</span></td>
+                <td className="px-3 py-2">{RULE_LABEL[r.kind]}{' '}
+                  {editing?.id === r.id ? (
+                    <input data-testid="rule-edit-input" aria-label={`New threshold for ${r.symbol}`} autoFocus inputMode="decimal" value={editing.value} onChange={(e) => setEditing({ id: r.id, value: e.target.value })}
+                      onKeyDown={async (e) => {
+                        if (e.key === 'Escape') return setEditing(null);
+                        if (e.key !== 'Enter') return;
+                        const t = Number(editing.value); const bad = validateRule({ symbol: r.symbol, kind: r.kind, threshold: t, cooldown_min: r.cooldown_min });
+                        if (bad) return setErr(bad);
+                        try { await cloud.updateRule(r.id, { threshold: t }); setErr(''); setEditing(null); await load(); } catch (x) { setErr(x instanceof Error ? x.message.replace(/^cloud \d+: /, '') : 'Could not update'); }
+                      }} onBlur={() => setEditing(null)} className={`${input} h-7 w-20`} />
+                  ) : (
+                    <button type="button" data-testid="rule-threshold-cell" title="Click to edit the threshold" onClick={() => setEditing({ id: r.id, value: String(r.threshold) })} className="num rounded px-1 font-semibold underline decoration-dotted underline-offset-2 hover:bg-line">{fmtThreshold(r.kind, r.threshold)}</button>
+                  )}
+                  {r.kind === 'volume_surge' && (() => { const b = baselines[r.symbol]; return b?.status === 'ok' ? <span data-testid="rule-baseline" className="block text-[10px] text-muted">typical day ≈ {Math.round(b.median_volume ?? 0).toLocaleString('en-IN')} sh ({b.sessions} sessions)</span> : <span data-testid="rule-baseline-na" className="block text-[10px] text-warn">N/A — {b ? (b.status === 'insufficient' ? `only ${b.sessions} sessions of history (need 10)` : 'no daily history found') : 'baseline not computed yet'}; will not fire</span>; })()}
+                </td>
                 <td className="px-3 py-2 text-muted">{r.cooldown_min} min</td>
                 <td className="px-3 py-2 text-muted">{[r.channels.push && 'push', r.channels.email && 'e-mail'].filter(Boolean).join(' · ') || 'in-app only'}</td>
                 <td className="px-3 py-2 text-muted">{ago(r.last_triggered_at)}</td>

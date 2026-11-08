@@ -4,6 +4,7 @@ import type { Holding } from './types';
 import type { WatchlistState } from './watchlist';
 import { coerceAppRole, type AppRole } from './rbac';
 import type { RuleKind } from './alertRules';
+import type { DaemonBeat } from './feedHealth';
 
 export interface CloudConfig {
   url: string;
@@ -97,6 +98,7 @@ export interface AlertDelivery { id: string; fired_at: string; symbol: string; k
 
 export interface AiSignoff { id: string; kind: string; symbol: string | null; model: string; prompt_version: string; data_used: string[]; output_hash: string; decision: 'approved' | 'rejected'; note: string | null; signer_role: string; signed_at: string }
 
+export interface VolumeBaselineRow { symbol: string; median_volume: number | null; sessions: number; status: 'ok' | 'insufficient' | 'unavailable'; computed_at: string }
 export type CloudClient = ReturnType<typeof createCloud>;
 const DELIVERY_COLS = 'id,fired_at,symbol,kind,price,channel,status,detail';
 const DELIVERY_LATENCY_COLS = 'tick_time,daemon_matched_at,push_sent_at,sw_ack_at,displayed_at';
@@ -214,8 +216,38 @@ export function createCloud(cfg: CloudConfig) {
       const r = await call('alert_rules?select=id,symbol,kind,threshold,cooldown_min,channels,enabled,last_triggered_at,created_at&order=created_at.desc');
       return Array.isArray(r) ? (r as AlertRuleRow[]) : [];
     },
+    /** Creates a rule through /api/alerts/rules (server-side per-kind validation + readable errors). Only when that route is not deployed / unreachable does it fall back to PostgREST directly (RLS and the CHECK constraints still apply). */
     async addRule(userId: string, r: { symbol: string; kind: RuleKind; threshold: number; cooldown_min: number; channels: { push: boolean; email: boolean } }): Promise<void> {
+      const t = await cfg.getToken();
+      if (t && typeof window !== 'undefined') {
+        let res: Response | null = null;
+        try { res = await f('/api/alerts/rules', { method: 'POST', headers: { Authorization: `Bearer ${t}`, 'Content-Type': 'application/json' }, body: JSON.stringify(r) }); } catch { res = null; }
+        if (res && res.ok) return;
+        if (res && ![404, 501, 502, 503].includes(res.status)) {
+          const j = (await res.json().catch(() => ({}))) as { errors?: string[] };
+          throw new Error(`cloud ${res.status}: ${(j.errors ?? ['Could not save the rule.']).join(' ')}`);
+        }
+      }
       await call('alert_rules', { method: 'POST', body: [{ user_id: userId, symbol: r.symbol.toUpperCase(), kind: r.kind, threshold: r.threshold, cooldown_min: r.cooldown_min, channels: r.channels }], prefer: 'return=minimal' });
+    },
+    /** edit threshold / cooldown / channels / enabled (symbol and kind are fixed) */
+    async updateRule(id: string, patch: { threshold?: number; cooldown_min?: number; channels?: { push: boolean; email: boolean }; enabled?: boolean }): Promise<void> {
+      const t = await cfg.getToken();
+      if (!t) throw new Error('not signed in');
+      const res = await f('/api/alerts/rules', { method: 'PATCH', headers: { Authorization: `Bearer ${t}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ id, ...patch }) });
+      if (!res.ok) { const j = (await res.json().catch(() => ({}))) as { errors?: string[] }; throw new Error(`cloud ${res.status}: ${(j.errors ?? ['Could not update the rule.']).join(' ')}`); }
+    },
+    /** volume baselines the daemon computed (N/A reasons for volume_surge rules); [] before docs/WEEK9_TURN43_SCHEMA.sql */
+    async listBaselines(symbols: string[]): Promise<VolumeBaselineRow[]> {
+      const list = [...new Set(symbols.map((x) => x.toUpperCase()))].filter((x) => /^[A-Z0-9&._-]{1,24}$/.test(x));
+      if (!list.length) return [];
+      const r = await call(`volume_baselines?symbol=in.${enc(inList(list))}&select=symbol,median_volume,sessions,status,computed_at`).catch(() => []);
+      return Array.isArray(r) ? (r as VolumeBaselineRow[]) : [];
+    },
+    /** heartbeat of the closed-app alert daemon (null = none seen, or the migration is not applied) */
+    async daemonHealth(): Promise<DaemonBeat | null> {
+      const r = await call('rpc/daemon_health', { method: 'POST', body: {} }).catch(() => null);
+      return Array.isArray(r) && r[0] ? (r[0] as DaemonBeat) : null;
     },
     async setRuleEnabled(id: string, enabled: boolean): Promise<void> {
       await call(`alert_rules?id=eq.${encodeURIComponent(id)}`, { method: 'PATCH', body: { enabled }, prefer: 'return=minimal' });
