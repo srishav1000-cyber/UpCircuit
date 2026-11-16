@@ -1,4 +1,4 @@
-import { adminHeaders } from '@/lib/supabaseAdmin';
+import { adminHeaders, cleanEnv, cleanUrl } from '@/lib/supabaseAdmin';
 import { NextRequest } from 'next/server';
 import webpush from 'web-push';
 import { runAlertWorker, ruleEmail, type WorkerDeps } from '@/lib/alertWorker';
@@ -20,7 +20,7 @@ export const maxDuration = 60;
  * Quotes come from the same server-side delayed source as /api/quotes (the SmartAPI stream is browser-side, so a server worker has no socket).
  */
 async function handle(req: NextRequest) {
-  const secret = process.env.CRON_SECRET, url = process.env.NEXT_PUBLIC_SUPABASE_URL, key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const secret = process.env.CRON_SECRET, url = cleanUrl(process.env.NEXT_PUBLIC_SUPABASE_URL), key = cleanEnv(process.env.SUPABASE_SERVICE_ROLE_KEY);
   if (!secret || !url || !key) return Response.json({ ok: false, error: 'Worker is not configured (CRON_SECRET, SUPABASE_SERVICE_ROLE_KEY).' }, { status: 501 });
   const given = /^Bearer (.+)$/i.exec(req.headers.get('authorization') ?? '')?.[1] ?? '';
   if (given.length !== secret.length || !timingSafe(given, secret)) return Response.json({ ok: false, error: 'Unauthorized.' }, { status: 401 });

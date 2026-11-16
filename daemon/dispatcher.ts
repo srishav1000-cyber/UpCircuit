@@ -2,7 +2,7 @@
 // All I/O is injectable (fetch, push sender, clock) so it is unit-testable; the Next.js test-push route reuses it.
 import { randomUUID } from 'node:crypto';
 import webpush from 'web-push';
-import { adminHeaders } from '../lib/supabaseAdmin';
+import { adminHeaders, cleanUrl, sbFailure, sbFailureText } from '../lib/supabaseAdmin';
 import type { PushSub } from '../lib/cloud';
 import { fanOut, isB64Url, isPushEndpoint, type SendFn } from '../lib/pushSender';
 import { ackToken } from '../lib/ackToken';
@@ -48,7 +48,7 @@ const isUuid = (x: unknown): x is string => typeof x === 'string' && /^[0-9a-f-]
 export function createDispatcher(cfg: DispatcherConfig) {
   const f = cfg.fetchImpl ?? fetch;
   const now = cfg.now ?? Date.now;
-  const base = cfg.supabaseUrl.replace(/\/+$/, '');
+  const base = cleanUrl(cfg.supabaseUrl);
   const log = cfg.log ?? (() => undefined);
   const concurrency = cfg.concurrency ?? 16;
   const subsTtl = cfg.subsTtlMs ?? 60_000;
@@ -69,7 +69,7 @@ export function createDispatcher(cfg: DispatcherConfig) {
     const hit = subsCache.get(userId);
     if (!fresh && hit && now() - hit.at < subsTtl) return hit.subs;
     const r = await rest(`push_subscriptions?user_id=eq.${encodeURIComponent(userId)}&select=endpoint,keys`);
-    if (!r.ok) throw new Error(`push_subscriptions ${r.status}`);
+    if (!r.ok) throw new Error(`push_subscriptions ${sbFailureText(await sbFailure(r))}`);
     const rows = (await r.json()) as { endpoint?: unknown; keys?: { p256dh?: unknown; auth?: unknown } }[];
     const seen = new Set<string>();
     const subs: PushSub[] = [];
@@ -241,7 +241,7 @@ export function createDispatcher(cfg: DispatcherConfig) {
     if (!configured) return { ok: false, error: 'Web push is not configured on the server (VAPID keys / ACK secret).', ...none };
     if (!isUuid(userId)) return { ok: false, error: 'Bad user id.', ...none };
     let subs: PushSub[];
-    try { subs = await loadSubs(userId, true); } catch { return { ok: false, error: 'Could not read your devices.', ...none }; }
+    try { subs = await loadSubs(userId, true); } catch (e) { return { ok: false, error: `Could not read your devices — ${e instanceof Error ? e.message : 'unknown error'}`, ...none }; }
     if (!subs.length) return { ok: false, error: 'No device is registered yet — switch on Web Push Notifications on this device first.', ...none };
     const id = randomUUID();
     const t0 = now();

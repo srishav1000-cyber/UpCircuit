@@ -2,7 +2,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { adminHeaders, isOpaqueKey } from '../lib/supabaseAdmin';
+import { adminHeaders, cleanEnv, cleanUrl, isOpaqueKey, keyKind, privilegedKeyProblem, sbFailure, sbFailureText } from '../lib/supabaseAdmin';
+import { loadConfig } from '../daemon/index';
 import { DISCLOSURE_POINTS, disclosureKey, readAck, writeAck } from '../lib/disclosure';
 import { GET, PUT } from '../app/api/alerts/push/route';
 
@@ -74,8 +75,8 @@ test('GET reports a specific reason when the key is rejected or the table is mis
   }) as never;
   try {
     await withEnv({ NEXT_PUBLIC_SUPABASE_URL: 'https://p.supabase.co', NEXT_PUBLIC_SUPABASE_ANON_KEY: 'k', SUPABASE_SERVICE_ROLE_KEY: 'sb_secret_q' }, async () => {
-      let r = await GET(req('GET')); let j = await r.json(); assert.equal(r.status, 502); assert.match(j.error, /key was rejected/);
-      restStatus = 404; j = await (await GET(req('GET'))).json(); assert.match(j.error, /table is missing/);
+      let r = await GET(req('GET')); let j = await r.json(); assert.equal(r.status, 502); assert.match(j.error, /Supabase rejected the server key \(401/); assert.deepEqual(j.supabase.map((x: { via: string }) => x.via), ['service', 'user']); assert.equal(j.supabase[0].status, 401);
+      restStatus = 404; j = await (await GET(req('GET'))).json(); assert.match(j.error, /Supabase rejected|table is missing/);
       restStatus = 200;
       const good = { endpoint: 'https://fcm.googleapis.com/fcm/send/xyz', keys: { p256dh: B64(87), auth: B64(22) } };
       r = await PUT(req('PUT', { subscription: good })); j = await r.json(); assert.equal(r.status, 200); assert.equal(j.registered, true);
@@ -84,4 +85,62 @@ test('GET reports a specific reason when the key is rejected or the table is mis
       assert.equal((await PUT(req('PUT', {}))).status, 400);
     });
   } finally { globalThis.fetch = realFetch; }
+});
+
+const jwt = (role: string) => `eyJhbGciOiJIUzI1NiJ9.${Buffer.from(JSON.stringify({ role })).toString('base64url')}.sig`;
+
+test('env cleaning: newline, spaces and wrapping quotes are removed; URL loses slashes and /rest/v1', () => {
+  assert.equal(cleanEnv('  sb_secret_abc\n'), 'sb_secret_abc'); assert.equal(cleanEnv('"sb_secret_abc"'), 'sb_secret_abc'); assert.equal(cleanEnv("'ey J.a.b '"), 'eyJ.a.b'); assert.equal(cleanEnv(undefined), '');
+  assert.equal(cleanUrl('https://p.supabase.co/\n'), 'https://p.supabase.co'); assert.equal(cleanUrl('"https://p.supabase.co/rest/v1/"'), 'https://p.supabase.co');
+  assert.deepEqual(adminHeaders('sb_secret_abc\n'), { apikey: 'sb_secret_abc' });
+  assert.equal(adminHeaders(` ${jwt('service_role')}\n`).Authorization, `Bearer ${jwt('service_role')}`);
+});
+
+test('key kind detection: a publishable / anon key in the server slot is named, not blamed on Supabase', () => {
+  assert.equal(keyKind('sb_secret_x'), 'sb_secret'); assert.equal(keyKind('sb_publishable_x'), 'sb_publishable'); assert.equal(keyKind(jwt('service_role')), 'jwt_service_role'); assert.equal(keyKind(jwt('anon')), 'jwt_anon'); assert.equal(keyKind(''), 'empty'); assert.equal(keyKind('garbage'), 'unrecognised');
+  assert.equal(privilegedKeyProblem('sb_secret_x'), null); assert.equal(privilegedKeyProblem(jwt('service_role')), null);
+  assert.match(privilegedKeyProblem(jwt('anon'))!, /anon key/); assert.match(privilegedKeyProblem('sb_publishable_x')!, /publishable/); assert.match(privilegedKeyProblem(undefined)!, /not set/); assert.equal(privilegedKeyProblem('svc-self-hosted'), null);
+});
+
+test('sbFailure keeps the exact PostgREST status, code and message', async () => {
+  const f = await sbFailure(new Response(JSON.stringify({ code: '42501', message: 'permission denied for table push_subscriptions', hint: 'grant it' }), { status: 403 }));
+  assert.deepEqual([f.status, f.code, f.message, f.hint], [403, '42501', 'permission denied for table push_subscriptions', 'grant it']);
+  assert.equal(sbFailureText(f), '403 42501: permission denied for table push_subscriptions (grant it)');
+  assert.equal((await sbFailure(new Response('Invalid API key', { status: 401 }))).message, 'Invalid API key');
+  assert.deepEqual(await sbFailure(null, new Error('ECONNREFUSED')), { status: null, message: 'ECONNREFUSED' });
+});
+
+test('push route: a rejected server key falls back to the user token (RLS) and still lists devices; the exact Supabase message is surfaced when both fail', async () => {
+  const sub = { endpoint: 'https://fcm.googleapis.com/fcm/send/abc123', keys: { p256dh: B64(87), auth: B64(22) } };
+  const seen: Record<string, string>[] = [];
+  globalThis.fetch = (async (url: string, init?: RequestInit) => {
+    const h = (init?.headers ?? {}) as Record<string, string>;
+    if (String(url).includes('/auth/v1/user')) return new Response(JSON.stringify({ id: 'u1', email: 'a@b.co' }));
+    seen.push(h);
+    return h.apikey === 'sb_secret_bad' ? new Response(JSON.stringify({ message: 'Invalid API key' }), { status: 401 }) : new Response(JSON.stringify([sub]));
+  }) as never;
+  try {
+    await withEnv({ NEXT_PUBLIC_SUPABASE_URL: ' https://p.supabase.co/\n', NEXT_PUBLIC_SUPABASE_ANON_KEY: 'anonk\n', SUPABASE_SERVICE_ROLE_KEY: '"sb_secret_bad"\n' }, async () => {
+      const j = await (await GET(req('GET'))).json();
+      assert.equal(j.ok, true); assert.equal(j.devices, 1); assert.equal(j.readVia, 'user');
+      assert.equal(seen[0].apikey, 'sb_secret_bad'); assert.equal(seen[0].Authorization, undefined);          // trimmed + no Bearer of the opaque key
+      assert.equal(seen[1].apikey, 'anonk'); assert.equal(seen[1].Authorization, 'Bearer tok');
+    });
+    globalThis.fetch = (async (url: string) => String(url).includes('/auth/v1/user') ? new Response(JSON.stringify({ id: 'u1', email: 'a@b.co' })) : new Response(JSON.stringify({ code: '42501', message: 'permission denied for table push_subscriptions' }), { status: 403 })) as never;
+    await withEnv({ NEXT_PUBLIC_SUPABASE_URL: 'https://p.supabase.co', NEXT_PUBLIC_SUPABASE_ANON_KEY: 'k', SUPABASE_SERVICE_ROLE_KEY: 'sb_secret_x' }, async () => {
+      const r = await GET(req('GET')); const j = await r.json(); assert.equal(r.status, 502);
+      assert.match(j.error, /Supabase rejected the server key \(403 42501: permission denied for table push_subscriptions\)/);
+      assert.equal(j.supabase.length, 2); assert.equal(j.keyKind, 'sb_secret'); assert.ok(!JSON.stringify(j).includes('sb_secret_x'));
+    });
+    await withEnv({ NEXT_PUBLIC_SUPABASE_URL: 'https://p.supabase.co', NEXT_PUBLIC_SUPABASE_ANON_KEY: 'k', SUPABASE_SERVICE_ROLE_KEY: jwt('anon') }, async () => {
+      const j = await (await GET(req('GET'))).json(); assert.match(j.error, /holds the anon key/); assert.equal(j.supabase.length, 1); assert.equal(j.supabase[0].via, 'user');   // never even tries the wrong key
+    });
+  } finally { globalThis.fetch = realFetch; }
+});
+
+test('daemon config: same helper — trims the key/URL, accepts sb_secret_ and legacy JWTs, refuses an anon key at startup', () => {
+  const base = { NEXT_PUBLIC_SUPABASE_URL: 'https://p.supabase.co/\n', SMARTAPI_API_KEY: 'a', SMARTAPI_CLIENT_CODE: 'c', SMARTAPI_PASSWORD: 'p', SMARTAPI_TOTP_SECRET: 't' };
+  const c = loadConfig({ ...base, SUPABASE_SERVICE_ROLE_KEY: ' sb_secret_k\n' }); assert.equal(c.serviceKey, 'sb_secret_k'); assert.equal(c.supabaseUrl, 'https://p.supabase.co');
+  assert.equal(loadConfig({ ...base, SUPABASE_SERVICE_ROLE_KEY: jwt('service_role') }).serviceKey, jwt('service_role'));
+  assert.throws(() => loadConfig({ ...base, SUPABASE_SERVICE_ROLE_KEY: jwt('anon') }), /anon key/);
 });

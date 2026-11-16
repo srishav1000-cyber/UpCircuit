@@ -1,3 +1,4 @@
+import { adminHeaders, cleanEnv, cleanUrl } from '@/lib/supabaseAdmin';
 import { NextRequest } from 'next/server';
 import { allowAsync } from '@/lib/ttlCache';
 import { ackSecret, verifyAckToken } from '@/lib/ackToken';
@@ -12,7 +13,7 @@ export const dynamic = 'force-dynamic';
  * Writes sw_ack_at (server clock, first ACK wins) and displayed_at (device clock) on that alert_deliveries row. 404 = row not inserted yet (the SW retries).
  */
 export async function POST(req: NextRequest) {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL, key = process.env.SUPABASE_SERVICE_ROLE_KEY, secret = ackSecret();
+  const url = cleanUrl(process.env.NEXT_PUBLIC_SUPABASE_URL), key = cleanEnv(process.env.SUPABASE_SERVICE_ROLE_KEY), secret = ackSecret();
   if (!url || !key || !secret) return Response.json({ ok: false, error: 'Delivery ACKs are not configured.' }, { status: 501 });
   const ip = (req.headers.get('x-forwarded-for') ?? '').split(',')[0].trim() || 'unknown';
   if (!(await allowAsync(`ack:${ip}`, 240, 60_000))) return Response.json({ ok: false, error: 'Too many requests.' }, { status: 429 });
@@ -28,7 +29,7 @@ export async function POST(req: NextRequest) {
   const displayedAt = Number.isFinite(t) && Math.abs(t - Date.now()) < 86_400_000 ? new Date(t).toISOString() : null;
 
   const base = url.replace(/\/+$/, '');
-  const h = { apikey: key, Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' };
+  const h = adminHeaders(key, true);
   const sig = AbortSignal.timeout(6000);
   const r = await fetch(`${base}/rest/v1/alert_deliveries?id=eq.${id}&sw_ack_at=is.null&select=id`, {
     method: 'PATCH', headers: { ...h, Prefer: 'return=representation' }, signal: sig,

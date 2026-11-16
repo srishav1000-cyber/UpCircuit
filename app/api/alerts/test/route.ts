@@ -3,6 +3,7 @@ import { allowAsync } from '@/lib/ttlCache';
 import { bearer, supabaseConfigured, whoami } from '@/lib/serverAuth';
 import { ackSecret } from '@/lib/ackToken';
 import { createDispatcher } from '@/daemon/dispatcher';
+import { cleanEnv, cleanUrl, privilegedKeyProblem } from '@/lib/supabaseAdmin';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -14,9 +15,11 @@ export const dynamic = 'force-dynamic';
  * Env: SUPABASE_SERVICE_ROLE_KEY, NEXT_PUBLIC_VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY, VAPID_SUBJECT (+ optional ALERT_ACK_SECRET).
  */
 export async function POST(req: NextRequest) {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL, key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const url = cleanUrl(process.env.NEXT_PUBLIC_SUPABASE_URL), key = cleanEnv(process.env.SUPABASE_SERVICE_ROLE_KEY);
   const pub = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY, priv = process.env.VAPID_PRIVATE_KEY, subject = process.env.VAPID_SUBJECT;
   if (!supabaseConfigured() || !url || !key || !pub || !priv || !subject) return Response.json({ ok: false, error: 'Web push is not configured on the server (Supabase service key + VAPID keys).' }, { status: 501 });
+  const keyProblem = privilegedKeyProblem(key);
+  if (keyProblem) return Response.json({ ok: false, error: keyProblem + '.' }, { status: 501 });
   const token = bearer(req);
   if (!token) return Response.json({ ok: false, error: 'Sign in first.' }, { status: 401 });
   const user = await whoami(token);

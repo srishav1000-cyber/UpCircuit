@@ -1,3 +1,4 @@
+import { adminHeaders, cleanEnv, cleanUrl } from './supabaseAdmin';
 // Server-only: Supabase (PostgREST) access to `market_ticks` with the SERVICE-ROLE key. The table has RLS enabled and no policies,
 // so the browser (anon key) can never read or write it directly — everything goes through /api/market/* after verifying the user.
 import { bearer, supabaseConfigured, whoami } from './serverAuth';
@@ -5,10 +6,10 @@ import { allow } from './ttlCache';
 import type { TickRow } from './offmarketSimulation';
 import { tradingDateOf } from './offmarketSimulation';
 
-const base = () => (process.env.NEXT_PUBLIC_SUPABASE_URL ?? '').replace(/\/+$/, '');
-const svc = () => process.env.SUPABASE_SERVICE_ROLE_KEY ?? '';
+const base = () => cleanUrl(process.env.NEXT_PUBLIC_SUPABASE_URL);
+const svc = () => cleanEnv(process.env.SUPABASE_SERVICE_ROLE_KEY);
 export const storeConfigured = (): boolean => Boolean(base() && svc());
-const H = (extra: Record<string, string> = {}) => ({ apikey: svc(), Authorization: `Bearer ${svc()}`, 'content-type': 'application/json', ...extra });
+const H = (extra: Record<string, string> = {}) => ({ ...adminHeaders(svc()), 'content-type': 'application/json', ...extra });
 
 /** Same rule as /api/smartapi/session: a verified Supabase user, or SMARTAPI_SESSION_PUBLIC=1 on a private non-Supabase deployment. */
 export async function authorize(req: Request, bucket: string, limit: number): Promise<{ ok: true; id: string } | { ok: false; status: number; reason: string }> {

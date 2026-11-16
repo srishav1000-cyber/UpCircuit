@@ -1,7 +1,7 @@
 // UpCircuit alert daemon — a long-running process (NOT a Vercel function) that holds the SmartAPI socket, keeps every enabled alert rule in memory,
 // evaluates each live tick against the rules for its symbol, and sends Web Push through the dispatcher the moment a rule crosses.
 // Run:  npm run daemon      (Node ≥ 20, e.g. Fly.io / Railway / Render / a VM — see docs/WEEK9_DAEMON.md)
-import { adminHeaders } from '../lib/supabaseAdmin';
+import { adminHeaders, cleanEnv, cleanUrl, keyKind, privilegedKeyProblem, sbFailure, sbFailureText } from '../lib/supabaseAdmin';
 import { createServer } from 'node:http';
 import { createClient, type RealtimeChannel } from '@supabase/supabase-js';
 import { WebSocket as NodeWebSocket } from 'ws';
@@ -25,12 +25,14 @@ export interface DaemonConfig {
   port: number; resyncMs: number; stallMs: number; maxBackoffMs: number;
 }
 export function loadConfig(env: Env = process.env): DaemonConfig {
-  const supabaseUrl = env.NEXT_PUBLIC_SUPABASE_URL || env.SUPABASE_URL;
-  const serviceKey = env.SUPABASE_SERVICE_ROLE_KEY;
+  const supabaseUrl = cleanUrl(env.NEXT_PUBLIC_SUPABASE_URL || env.SUPABASE_URL);
+  const serviceKey = cleanEnv(env.SUPABASE_SERVICE_ROLE_KEY);
   const apiKey = env.SMARTAPI_API_KEY ?? env.NEXT_PUBLIC_SMARTAPI_API_KEY;
   const missing = [!supabaseUrl && 'NEXT_PUBLIC_SUPABASE_URL', !serviceKey && 'SUPABASE_SERVICE_ROLE_KEY', !apiKey && 'SMARTAPI_API_KEY',
     ...['SMARTAPI_CLIENT_CODE', 'SMARTAPI_PASSWORD', 'SMARTAPI_TOTP_SECRET'].filter((k) => !env[k])].filter(Boolean);
   if (missing.length) throw new Error(`Missing environment: ${missing.join(', ')}`);
+  const keyProblem = privilegedKeyProblem(serviceKey);
+  if (keyProblem) throw new Error(keyProblem);
   const pub = env.NEXT_PUBLIC_VAPID_PUBLIC_KEY, priv = env.VAPID_PRIVATE_KEY, subject = env.VAPID_SUBJECT;
   return {
     supabaseUrl: supabaseUrl!, serviceKey: serviceKey!, apiKey: apiKey!,
@@ -58,7 +60,7 @@ export async function main(cfg = loadConfig(), env: Env = process.env): Promise<
     supabaseUrl: cfg.supabaseUrl, serviceKey: cfg.serviceKey, vapid: cfg.vapid, ackSecret: ackSecret(env), pushEndpointAllow: env.PUSH_ENDPOINT_ALLOW, emailEnabled: !!env.RESEND_API_KEY, log,
   });
   const sbHeaders = adminHeaders(cfg.serviceKey, true);
-  const sbBase = cfg.supabaseUrl.replace(/\/+$/, '');
+  const sbBase = cleanUrl(cfg.supabaseUrl);
   // volume baselines: real daily bars (Yahoo, the repo's existing historical source — the SmartAPI login deliberately never exposes a JWT for getCandleData)
   const baselines = new BaselineStore({
     fetchDaily: (symbol) => fetchBars({ symbol, exch: 'NSE' }, '1Y'),
@@ -133,8 +135,8 @@ export async function main(cfg = loadConfig(), env: Env = process.env): Promise<
   async function fetchAllRules() {
     const out = [];
     for (let offset = 0; ; offset += 1000) {
-      const r = await fetch(`${cfg.supabaseUrl.replace(/\/+$/, '')}/rest/v1/alert_rules?enabled=eq.true&select=id,user_id,symbol,kind,threshold,cooldown_min,channels,enabled,last_triggered_at&order=id&limit=1000&offset=${offset}`, { headers: restHeaders, signal: AbortSignal.timeout(15_000) });
-      if (!r.ok) throw new Error(`alert_rules ${r.status}`);
+      const r = await fetch(`${cleanUrl(cfg.supabaseUrl)}/rest/v1/alert_rules?enabled=eq.true&select=id,user_id,symbol,kind,threshold,cooldown_min,channels,enabled,last_triggered_at&order=id&limit=1000&offset=${offset}`, { headers: restHeaders, signal: AbortSignal.timeout(15_000) });
+      if (!r.ok) throw new Error(`alert_rules ${sbFailureText(await sbFailure(r))}`);
       const rows = (await r.json()) as unknown[];
       for (const x of rows) { const rule = toRule(x); if (rule) out.push(rule); }
       if (rows.length < 1000) return out;
@@ -147,7 +149,7 @@ export async function main(cfg = loadConfig(), env: Env = process.env): Promise<
       log('info', 'rules synced', { reason, rules: index.size, symbols: index.symbols().length, ...d });
       subscribeNew(); wantBaselines();
     } catch (e) {
-      log('error', 'rule resync failed', { reason, error: e instanceof Error ? e.message : String(e) });
+      log('error', 'rule resync failed', { reason, error: e instanceof Error ? e.message : String(e), serviceKey: keyKind(cfg.serviceKey), hint: /\b(401|403)\b/.test(String(e)) ? 'Supabase rejected the server key: check SUPABASE_SERVICE_ROLE_KEY is this project’s secret/service_role key with no stray spaces or quotes' : undefined });
     }
   }
   function applyChange(p: { eventType: string; new: unknown; old: unknown }): void {
@@ -275,7 +277,7 @@ export async function main(cfg = loadConfig(), env: Env = process.env): Promise<
     const li = lease.info();
     res.end(JSON.stringify({ ok: !stalled, ha: { role: leader ? 'leader' : 'standby', instance: holderId, leader: li.holder, epoch: li.epoch, expiresAt: li.expiresAt, enabled: !haOff && !haMissing }, uptimeS: Math.round((Date.now() - health.startedAt) / 1000), feed: health.feed, ticks: health.ticks, lastTickAgeMs: age, lastTickLagMs: health.lastTickLagMs, reconnects: health.reconnects, logins: health.logins, rules: index.size, symbols: index.symbols().length, unresolvedSymbols: health.unresolved.length, realtime: health.realtime, resyncs: health.resyncs, dispatch: dispatcher.stats(), baselines: baselines.stats(), volumeRulesNA: index.volumeRulesNA(), depthFlags: { ...index.flagStats(), buffered: flagBuf.length }, pushConfigured: dispatcher.configured }));
   });
-  http.listen(cfg.port, () => log('info', 'daemon up', { port: cfg.port, rules: index.size }));
+  http.listen(cfg.port, () => log('info', 'daemon up', { port: cfg.port, rules: index.size, serviceKey: keyKind(cfg.serviceKey) }));
 
   async function stop(): Promise<void> {
     if (stopping) return;

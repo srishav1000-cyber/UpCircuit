@@ -1,3 +1,4 @@
+import { adminHeaders, cleanEnv, cleanUrl } from '@/lib/supabaseAdmin';
 import { NextRequest } from 'next/server';
 import { allowAsync } from '@/lib/ttlCache';
 import { bearer, supabaseConfigured, whoami } from '@/lib/serverAuth';
@@ -12,7 +13,7 @@ export const dynamic = 'force-dynamic';
  * 2) the auth user is then removed with the service key (browser can't). Needs SUPABASE_SERVICE_ROLE_KEY.
  */
 export async function POST(req: NextRequest) {
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const key = cleanEnv(process.env.SUPABASE_SERVICE_ROLE_KEY);
   if (!supabaseConfigured() || !key) return Response.json({ ok: false, error: 'Account deletion is not configured on this server.' }, { status: 501 });
   const token = bearer(req);
   const user = token ? await whoami(token) : null;
@@ -27,7 +28,7 @@ export async function POST(req: NextRequest) {
     const msg = erase ? ((await erase.json().catch(() => ({}))) as { message?: string }).message : undefined;
     return Response.json({ ok: false, error: msg ?? 'Could not erase your data.' }, { status: erase?.status === 400 || erase?.status === 403 ? 409 : 502 });
   }
-  const del = await fetch(`${base}/auth/v1/admin/users/${encodeURIComponent(user.id)}`, { method: 'DELETE', headers: { apikey: key, Authorization: `Bearer ${key}` }, signal: AbortSignal.timeout(10_000) }).catch(() => null);
+  const del = await fetch(`${base}/auth/v1/admin/users/${encodeURIComponent(user.id)}`, { method: 'DELETE', headers: adminHeaders(key), signal: AbortSignal.timeout(10_000) }).catch(() => null);
   log('info', 'account deleted', { user: user.id, authRemoved: !!del?.ok });
   return Response.json({ ok: true, authRemoved: !!del?.ok });
 }

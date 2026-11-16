@@ -1,3 +1,4 @@
+import { adminHeaders, cleanEnv, cleanUrl } from '@/lib/supabaseAdmin';
 import { NextRequest } from 'next/server';
 import { buildRiskReport } from '@/lib/riskReport';
 import { ENTITLEMENTS, coercePlan } from '@/lib/entitlements';
@@ -11,12 +12,12 @@ export const maxDuration = 60;
 
 /** GET|POST /api/worker/risk-report — e-mails the daily risk report to users who switched it on (Full Access plan). Same auth as /api/worker/alerts (CRON_SECRET). */
 const handle = withLog('worker/risk-report', async (req: Request) => {
-  const secret = process.env.CRON_SECRET, url = process.env.NEXT_PUBLIC_SUPABASE_URL, key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const secret = process.env.CRON_SECRET, url = cleanUrl(process.env.NEXT_PUBLIC_SUPABASE_URL), key = cleanEnv(process.env.SUPABASE_SERVICE_ROLE_KEY);
   if (!secret || !url || !key) return Response.json({ ok: false, error: 'Worker is not configured.' }, { status: 501 });
   const given = /^Bearer (.+)$/i.exec(req.headers.get('authorization') ?? '')?.[1] ?? '';
   let d = given.length ^ secret.length; for (let i = 0; i < Math.min(given.length, secret.length); i++) d |= given.charCodeAt(i) ^ secret.charCodeAt(i);
   if (d !== 0) return Response.json({ ok: false, error: 'Unauthorized.' }, { status: 401 });
-  const base = url.replace(/\/+$/, ''), h = { apikey: key, Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' };
+  const base = url.replace(/\/+$/, ''), h = adminHeaders(key, true);
   const rest = (p: string, init: RequestInit = {}) => fetch(`${base}/rest/v1/${p}`, { ...init, headers: { ...h, ...(init.headers as Record<string, string> | undefined) }, signal: AbortSignal.timeout(8000) });
 
   const prefs = (await (await rest('preferences?risk_report=eq.true&select=user_id,risk_limits&limit=500')).json().catch(() => [])) as { user_id: string; risk_limits: unknown }[];
