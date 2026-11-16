@@ -10,11 +10,13 @@
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
     "sync:instruments": "node scripts/sync-instruments.mjs --force",
-    "test": "tsx scripts/verify.ts && tsx scripts/verify-auth.ts",
+    "test": "tsx scripts/verify.ts && tsx scripts/verify-auth.ts && tsx --test tests/week10.test.ts",
     "postinstall": "node scripts/copy-ocr-assets.mjs",
     "daemon": "tsx daemon/index.ts",
     "daemon:smoke": "bash scripts/daemon-smoke.sh",
-    "bench": "tsx scripts/benchmark-latency.ts --out docs/benchmark-results.json"
+    "bench": "tsx scripts/benchmark-latency.ts --out docs/benchmark-results.json",
+    "test:week10": "tsx --test tests/week10.test.ts",
+    "backtest": "tsx scripts/backtest-heuristics.ts --out public/backtest-heuristics.json"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.45.4",

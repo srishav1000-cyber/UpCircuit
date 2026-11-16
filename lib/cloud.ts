@@ -100,7 +100,7 @@ export interface AlertDelivery { id: string; fired_at: string; symbol: string; k
 export interface AiSignoff { id: string; kind: string; symbol: string | null; model: string; prompt_version: string; data_used: string[]; output_hash: string; decision: 'approved' | 'rejected'; note: string | null; signer_role: string; signed_at: string }
 
 export interface DepthFlagRow { id: number; symbol: string; kind: 'wall' | 'add_cancel'; side: 'bid' | 'ask'; severity: 'watch' | 'elevated'; price: number | null; qty: number | null; detail: string; label: string; flagged_at: string }
-export interface VolumeBaselineRow { symbol: string; median_volume: number | null; sessions: number; status: 'ok' | 'insufficient' | 'unavailable'; computed_at: string }
+export interface VolumeBaselineRow { symbol: string; median_volume: number | null; sessions: number; status: 'ok' | 'insufficient' | 'unavailable'; computed_at: string; /** Week 10: median cumulative volume at the end of each 15-minute bucket (25 values); null/absent = flat full-day baseline */ profile?: { cum: number[]; sessions: number } | null }
 export type CloudClient = ReturnType<typeof createCloud>;
 const DELIVERY_COLS = 'id,fired_at,symbol,kind,price,channel,status,detail';
 const DELIVERY_LATENCY_COLS = 'tick_time,daemon_matched_at,push_sent_at,sw_ack_at,displayed_at';
@@ -243,7 +243,7 @@ export function createCloud(cfg: CloudConfig) {
     async listBaselines(symbols: string[]): Promise<VolumeBaselineRow[]> {
       const list = [...new Set(symbols.map((x) => x.toUpperCase()))].filter((x) => /^[A-Z0-9&._-]{1,24}$/.test(x));
       if (!list.length) return [];
-      const r = await call(`volume_baselines?symbol=in.${enc(inList(list))}&select=symbol,median_volume,sessions,status,computed_at`).catch(() => []);
+      const r = await call(`volume_baselines?symbol=in.${enc(inList(list))}&select=symbol,median_volume,sessions,status,computed_at,profile`).catch(async () => (await call(`volume_baselines?symbol=in.${enc(inList(list))}&select=symbol,median_volume,sessions,status,computed_at`).catch(() => [])));   // before WEEK10_SCHEMA.sql the profile column does not exist
       return Array.isArray(r) ? (r as VolumeBaselineRow[]) : [];
     },
     /** heartbeat of the closed-app alert daemon (null = none seen, or the migration is not applied) */

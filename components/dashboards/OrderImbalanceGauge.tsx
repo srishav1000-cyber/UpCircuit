@@ -1,9 +1,11 @@
 'use client';
 
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Card } from '../ui';
 import type { DepthLevel } from '@/lib/types';
-import { imbalanceLabel, MIN_DEPTH_QTY, topFiveImbalance } from '@/lib/depthImbalance';
+import { imbalanceLabel, LEVEL_WEIGHTS, MIN_DEPTH_QTY, obiValue, topFiveImbalance, type ObiMode } from '@/lib/depthImbalance';
+
+const MODE_KEY = 'upcircuit.obiMode';
 
 const TONE = { up: 'text-up', down: 'text-down', muted: 'text-muted' } as const;
 const fmtQty = (n: number) => n.toLocaleString('en-IN');
@@ -36,11 +38,16 @@ export interface OrderImbalanceGaugeProps {
  */
 export function OrderImbalanceGauge({ bids, asks, symbol, live, thresholds, className = '' }: OrderImbalanceGaugeProps) {
   const imb = useMemo(() => (live ? topFiveImbalance(bids, asks) : null), [live, bids, asks]);
-  const lab = imb ? imbalanceLabel(imb.value) : null;
+  // Raw (equal-weighted) vs Weighted (w_i = exp(−0.5·(i−1))) — a per-viewer display choice, remembered when storage allows
+  const [mode, setMode] = useState<ObiMode>('raw');
+  useEffect(() => { try { const m = localStorage.getItem(MODE_KEY); if (m === 'raw' || m === 'weighted') setMode(m); } catch { /* storage unavailable: keep default */ } }, []);
+  const pick = (m: ObiMode) => { setMode(m); try { localStorage.setItem(MODE_KEY, m); } catch { /* ignore */ } };
+  const shown = imb ? obiValue(imb, mode) : 0;
+  const lab = imb ? imbalanceLabel(shown) : null;
   const max = imb ? Math.max(1, ...imb.bids, ...imb.asks) : 1;
   const rows = imb ? Array.from({ length: Math.max(imb.bids.length, imb.asks.length) }, (_, i) => ({ bid: imb.bids[i] ?? 0, ask: imb.asks[i] ?? 0 })) : [];
   const W = 220, CX = 110, CY = 100, R = 82;
-  const [nx, ny] = imb ? pt(imb.value, R - 8, CX, CY) : [CX, CY];
+  const [nx, ny] = imb ? pt(shown, R - 8, CX, CY) : [CX, CY];
 
   return (
     <Card
@@ -49,20 +56,20 @@ export function OrderImbalanceGauge({ bids, asks, symbol, live, thresholds, clas
       className={className}
       right={<span data-testid="imb-tag" className="rounded-full border border-accent/50 bg-accent/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-accent">Top-5 Depth Heuristic Indicator</span>}
     >
-      <div data-testid="imb-gauge" data-imbalance={imb ? imb.value.toFixed(3) : 'na'}>
+      <div data-testid="imb-gauge" data-imbalance={imb ? shown.toFixed(3) : 'na'} data-mode={mode} data-raw={imb ? imb.value.toFixed(3) : 'na'} data-weighted={imb ? imb.weightedValue.toFixed(3) : 'na'}>
         {!imb ? (
           <p className="py-4 text-center text-[12px] text-muted" data-testid="imb-na">
             {live ? `N/A — the order book is empty or too thin (under ${fmtQty(MIN_DEPTH_QTY)} shares across the top 5 levels) for a meaningful ratio.` : 'N/A — order-book depth is streamed by SmartAPI only while the market is live.'}
           </p>
         ) : (
           <>
-            <div className="mx-auto w-full max-w-[260px]" role="meter" aria-label={`Net order imbalance for ${symbol}`} aria-valuemin={-1} aria-valuemax={1} aria-valuenow={Number(imb.value.toFixed(2))} aria-valuetext={`${signed(imb.value)}, ${lab?.label}`}>
+            <div className="mx-auto w-full max-w-[260px]" role="meter" aria-label={`Net order imbalance for ${symbol}`} aria-valuemin={-1} aria-valuemax={1} aria-valuenow={Number(shown.toFixed(2))} aria-valuetext={`${signed(shown)}, ${lab?.label}, ${mode === 'weighted' ? 'distance-weighted' : 'raw'}`}>
               <svg viewBox={`0 0 ${W} 112`} className="w-full" aria-hidden focusable="false">
                 <path d={arc(-1, -0.2, R, CX, CY)} fill="none" stroke="rgb(var(--c-down) / 0.6)" strokeWidth="12" strokeLinecap="butt" />
                 <path d={arc(-0.2, 0.2, R, CX, CY)} fill="none" stroke="rgb(var(--c-muted) / 0.35)" strokeWidth="12" />
                 <path d={arc(0.2, 1, R, CX, CY)} fill="none" stroke="rgb(var(--c-up) / 0.6)" strokeWidth="12" />
-                {thresholds?.above ? <line {...tick(thresholds.above, R, CX, CY)} stroke="currentColor" className="text-ink" strokeWidth="2" /> : null}
-                {thresholds?.below ? <line {...tick(-thresholds.below, R, CX, CY)} stroke="currentColor" className="text-ink" strokeWidth="2" /> : null}
+                {mode === 'raw' && thresholds?.above ? <line {...tick(thresholds.above, R, CX, CY)} stroke="currentColor" className="text-ink" strokeWidth="2" /> : null}
+                {mode === 'raw' && thresholds?.below ? <line {...tick(-thresholds.below, R, CX, CY)} stroke="currentColor" className="text-ink" strokeWidth="2" /> : null}
                 <line x1={CX} y1={CY} x2={nx} y2={ny} stroke="currentColor" className="text-ink" strokeWidth="3" strokeLinecap="round" />
                 <circle cx={CX} cy={CY} r="5" fill="currentColor" className="text-ink" />
                 <text x="14" y="110" className="fill-muted" fontSize="9">−1 asks</text>
@@ -71,10 +78,20 @@ export function OrderImbalanceGauge({ bids, asks, symbol, live, thresholds, clas
               </svg>
             </div>
             <div className="-mt-1 text-center">
-              <div className={`num text-2xl font-semibold ${TONE[lab!.tone]}`} data-testid="imb-value">{signed(imb.value)}</div>
+              <div className={`num text-2xl font-semibold ${TONE[lab!.tone]}`} data-testid="imb-value">{signed(shown)}</div>
               <div className={`text-[12px] font-semibold ${TONE[lab!.tone]}`} data-testid="imb-label">{lab!.label}</div>
-              <div className="mt-0.5 text-[10px] text-muted">(Σbid − Σask) ÷ (Σbid + Σask), best 5 levels</div>
+              <div className="mt-0.5 text-[10px] text-muted" data-testid="imb-formula">{mode === 'weighted' ? '(Σwᵢ·bidᵢ − Σwᵢ·askᵢ) ÷ (Σwᵢ·bidᵢ + Σwᵢ·askᵢ), wᵢ = e^(−0.5·(i−1))' : '(Σbid − Σask) ÷ (Σbid + Σask), best 5 levels'}</div>
             </div>
+
+            <div className="mt-2 flex items-center justify-center gap-2" data-testid="imb-mode">
+              <div role="radiogroup" aria-label="Imbalance weighting" className="inline-flex overflow-hidden rounded-md border border-line text-[10px] font-semibold">
+                {(['raw', 'weighted'] as const).map((m) => (
+                  <button key={m} type="button" role="radio" aria-checked={mode === m} data-testid={`imb-mode-${m}`} onClick={() => pick(m)} className={`px-2 py-0.5 ${mode === m ? 'bg-accent/20 text-ink' : 'text-muted hover:text-ink'}`}>{m === 'raw' ? 'Raw OBI' : 'Weighted OBI'}</button>
+                ))}
+              </div>
+              <span className="num text-[10px] text-muted" data-testid="imb-readout" title={`Level weights: ${LEVEL_WEIGHTS.map((w) => w.toFixed(2)).join(', ')}`}>Raw <b className={mode === 'raw' ? 'text-ink' : ''}>{signed(imb.value)}</b> · Weighted <b className={mode === 'weighted' ? 'text-ink' : ''}>{signed(imb.weightedValue)}</b></span>
+            </div>
+            {mode === 'weighted' && <p className="mt-1 text-center text-[10px] text-muted" data-testid="imb-weighted-note">Alert rules use the raw ratio; the weighted view is for reading the book.</p>}
 
             <div className="mt-3" data-testid="imb-levels" aria-label="Quantity by level, bids left, asks right">
               <div className="mb-1 flex justify-between text-[9px] font-semibold uppercase tracking-wider text-muted"><span>Bid qty</span><span>Level</span><span>Ask qty</span></div>

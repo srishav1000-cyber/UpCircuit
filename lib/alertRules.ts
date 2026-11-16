@@ -49,7 +49,8 @@ export function evaluateRule(rule: AlertRule, q: RuleQuote | undefined, now = Da
     }
     case 'volume_surge': {
       const ratio = (q.volume as number) / (q.baselineVolume as number);
-      return ratio >= rule.threshold ? hit(`${rule.symbol} volume ${fmt(q.volume as number)} is ${ratio.toFixed(2)}× its typical daily volume (${fmt(q.baselineVolume as number)}) — rule ≥ ${rule.threshold}×${dayTxt}`) : null;
+      const tod = q.baselineBasis === 'time-of-day';
+      return ratio >= rule.threshold ? hit(`${rule.symbol} volume ${fmt(q.volume as number)} is ${ratio.toFixed(2)}× ${tod ? 'the volume typical by this time of day' : 'its typical daily volume'} (${fmt(q.baselineVolume as number)}) — rule ≥ ${rule.threshold}×${dayTxt}`) : null;
     }
     case 'order_imbalance_above': {
       const v = q.imbalance as number, th = rule.threshold - (hold ? IMBALANCE_HYSTERESIS : 0);
