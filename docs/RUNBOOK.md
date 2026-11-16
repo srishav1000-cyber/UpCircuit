@@ -28,3 +28,24 @@ Vercel → Deployments → promote previous build. Schema migrations are additiv
 
 ## Release checklist
 `npm test` · `npx tsc --noEmit` · `npx next lint` · `./scripts/rls-test.sh` · `./scripts/backup-drill.sh` · `node scripts/a11y.cjs` · build.
+
+## Week 10 additions
+
+**Migration order:** … → `WEEK9_TURN44_SCHEMA` → `WEEK10_SCHEMA` (re-runnable). Adds `daemon_leases`, `acquire_daemon_lease()` / `release_daemon_lease()` (service role only) and `volume_baselines.profile`.
+
+**High availability (leader lease).** Run 2+ daemon instances; one holds the `alert-daemon` lease and does SmartAPI/feed/dispatch, the rest stand by with a warm rule index. Lease renews every 10 s, TTL 30 s (crash failover ≤ ~30 s; graceful stop releases at once). The leader stops acting 3 s before its lease can expire. `/healthz` → `ha.{role,leader,epoch,expiresAt}`.
+
+| Env | Default | Meaning |
+|---|---|---|
+| `DAEMON_HA` | on | `0` = single instance, no lease |
+| `DAEMON_LEASE_NAME` | `alert-daemon` | lease key |
+| `DAEMON_LEASE_TTL_S` | 30 | must be ≥ 2 × renew |
+| `DAEMON_LEASE_RENEW_MS` | 10000 | renew/poll interval |
+
+If `WEEK10_SCHEMA` is not applied (RPC 404) the daemon logs loudly and runs as sole leader.
+
+**volume_surge semantics changed:** the baseline is now the median *cumulative* volume by the current 15-min bucket (last ≤ 20 sessions, ≥ 10 required); it falls back to the full-day median outside 09:15–15:30 IST or without a profile. Alert text states which basis was used.
+
+**Order imbalance:** gauge has Raw / Weighted (w = e^(−0.5·(i−1))). Alert rules still use Raw.
+
+**Backtest:** `npm run backtest` (synthetic, labels come from the generator — precision reflects agreement with that definition and the assumed noise, not real manipulation).

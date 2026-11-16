@@ -1,0 +1,78 @@
+{
+  "config": {
+    "source": "synthetic",
+    "symbols": 4,
+    "days": 3,
+    "stepMs": 500,
+    "seed": 1,
+    "noise": 0.45
+  },
+  "data": {
+    "snapshots": 539972,
+    "symbols": 4,
+    "labelled": true,
+    "episodes": {
+      "benign_fill_wall": 32,
+      "spoof_wall": 37,
+      "flicker": 21,
+      "benign_displacement": 5
+    }
+  },
+  "flags": {
+    "total": 427,
+    "byKind": {
+      "add_cancel": 20,
+      "wall": 407
+    },
+    "bySeverity": {
+      "watch": 366,
+      "elevated": 61
+    },
+    "per1000Snapshots": 0.791
+  },
+  "precision": 0.133,
+  "truePositives": 57,
+  "falsePositives": 370,
+  "falsePositiveCauses": {
+    "background_noise_wall": 320,
+    "benign_fill_wall": 38,
+    "wrong_side_or_kind_near_episode": 12
+  },
+  "recall": {
+    "spoof_wall": {
+      "episodes": 37,
+      "detected": 37,
+      "rate": 1,
+      "medianDelayMs": 0
+    },
+    "flicker": {
+      "episodes": 21,
+      "detected": 20,
+      "rate": 0.952,
+      "medianDelayMs": 11750
+    }
+  },
+  "params": {
+    "TOP_N": 5,
+    "WALL_MIN_LEVELS": 3,
+    "WALL_MIN_QTY": 1000,
+    "WALL_MULT": 4,
+    "WALL_MIN_SHARE": 0.45,
+    "WALL_MULT_HIGH": 8,
+    "WALL_SHARE_HIGH": 0.6,
+    "LEVEL_MIN_QTY": 500,
+    "LEVEL_MIN_SHARE": 0.2,
+    "GONE_FRACTION": 0.8,
+    "FLICKER_MS": 5000,
+    "WINDOW_MS": 30000,
+    "CYCLES_WATCH": 3,
+    "CYCLES_HIGH": 5,
+    "COOLDOWN_MS": 60000,
+    "IDLE_MS": 600000
+  },
+  "notes": [
+    "Labels define \"pattern\" the same way the generator does: results show agreement with that definition, not how often real markets are manipulated, and nothing about intent.",
+    "benign_fill_wall: a large order that rests and is then FILLED still looks like a wall while it rests — counted as a false positive, because a wall alone cannot tell liquidity from a spoof.",
+    "precision = flags matching a labelled pattern ÷ all flags; recall = labelled episodes with ≥ 1 matching flag ÷ labelled episodes."
+  ]
+}

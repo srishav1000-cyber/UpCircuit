@@ -5,7 +5,7 @@ import { Activity, Flame, ShieldAlert, Waves } from 'lucide-react';
 import type { CloudClient, AlertRuleRow, DepthFlagRow, VolumeBaselineRow } from '@/lib/cloud';
 import type { MarketEngine } from '@/lib/market';
 import { circuitWatchlist, NEAR_PCT } from '@/lib/analytics/proximity';
-import { volumeMultiple, MIN_BASELINE_SESSIONS } from '@/lib/volumeBaseline';
+import { volumeMultipleAt, expectedVolume, bucketLabel, bucketIndex, istMinuteOf, BUCKETS, MIN_BASELINE_SESSIONS, type IntradayProfile } from '@/lib/volumeBaseline';
 import { DepthFlagTracker, FLAG_DISCLAIMER, FLAG_LABEL, type DepthFlag } from '@/lib/heuristicFlags';
 import { FeedHealthStatus, type FeedHealthStatusProps } from './FeedHealthStatus';
 import { OrderImbalanceGauge } from './OrderImbalanceGauge';
@@ -30,6 +30,73 @@ function PaneHead({ icon, title, right, testid }: { icon: React.ReactNode; title
       <h3 className="text-[11px] font-semibold uppercase tracking-wider text-muted">{title}</h3>
       <div className="ml-auto text-[11px] text-muted">{right}</div>
     </header>
+  );
+}
+
+interface BacktestFile {
+  config?: Record<string, unknown>;
+  data?: { snapshots: number; symbols: number; labelled: boolean; episodes: Record<string, number> };
+  flags?: { total: number; per1000Snapshots: number; byKind: Record<string, number> };
+  precision?: number | null;
+  recall?: Record<string, { episodes: number; detected: number; rate: number | null; medianDelayMs: number | null }> | null;
+}
+const pctTxt = (x: number | null | undefined) => (x === null || x === undefined ? 'N/A' : `${(x * 100).toFixed(0)}%`);
+
+/** Compact status card: the intraday volume curve the volume_surge rule compares against, plus the offline heuristic-flag backtest and this session's flag tally. */
+function BacktestCurveCard({ symbol, profile, volume, sessionFlags }: { symbol: string; profile: IntradayProfile | null; volume: number | null; sessionFlags: { wall: number; add_cancel: number } }) {
+  const [bt, setBt] = useState<BacktestFile | null | 'none'>(null);
+  useEffect(() => {
+    let on = true;
+    fetch('/backtest-heuristics.json', { cache: 'no-store' }).then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status))))).then((j) => on && setBt(j as BacktestFile)).catch(() => on && setBt('none'));
+    return () => { on = false; };
+  }, []);
+  const W = 220, H = 64, PAD = 4;
+  const cum = profile?.cum.length === BUCKETS ? profile.cum : null;
+  const top = cum ? cum[BUCKETS - 1] : 0;
+  const x = (k: number) => PAD + (k / (BUCKETS - 1)) * (W - 2 * PAD);
+  const y = (v: number) => H - PAD - (v / (top || 1)) * (H - 2 * PAD);
+  const nowK = bucketIndex(istMinuteOf(Date.now()));
+  const exp = cum ? expectedVolume(profile, null, Date.now()) : null;
+  const synth = bt && bt !== 'none' && bt.config && (bt.config as { source?: string }).source === 'synthetic';
+  return (
+    <section className={pane} data-testid="desk-backtest" aria-label="Session backtest and intraday curve">
+      <PaneHead icon={<Activity size={14} />} title="Session backtest & intraday curve" right={symbol} />
+      <div className="grid gap-3 p-3 sm:grid-cols-2">
+        <div data-testid="desk-curve">
+          <div className="mb-1 text-[11px] font-semibold text-muted">Typical cumulative volume, 09:15 → 15:30 IST</div>
+          {!cum ? (
+            <p data-testid="desk-curve-na" className="py-4 text-[12px] text-muted">N/A — no intraday profile for {symbol} yet (needs ≥ {MIN_BASELINE_SESSIONS} sessions of 15-minute history and a volume-surge rule so the daemon computes it). Volume rules use the typical full day meanwhile.</p>
+          ) : (
+            <>
+              <svg viewBox={`0 0 ${W} ${H}`} className="w-full" role="img" aria-label={`Median cumulative volume by 15-minute bucket for ${symbol}`}>
+                <polyline fill="none" stroke={TEAL} strokeWidth="2" points={cum.map((v, k) => `${x(k).toFixed(1)},${y(v).toFixed(1)}`).join(' ')} />
+                {nowK !== null && exp ? <circle cx={x(nowK)} cy={y(exp.expected)} r="3.5" fill={GOLD} /> : null}
+                {volume !== null && nowK !== null ? <circle cx={x(nowK)} cy={Math.max(PAD, y(Math.min(volume, top * 1.2)))} r="3" fill="none" stroke={GOLD} strokeWidth="1.5" /> : null}
+              </svg>
+              <div className="num flex justify-between text-[10px] text-muted"><span>09:15</span><span>12:20</span><span>15:30</span></div>
+              <div className="num text-[11px] text-muted" data-testid="desk-curve-readout">
+                {exp && nowK !== null ? <>expected by now {fmtN(Math.round(exp.expected))} ({((exp.expected / top) * 100).toFixed(0)}% of the day)</> : 'market closed — curve shows the typical session'} · {profile!.sessions} sessions
+              </div>
+            </>
+          )}
+        </div>
+        <div data-testid="desk-bt">
+          <div className="mb-1 text-[11px] font-semibold text-muted">Heuristic flag backtest</div>
+          {bt === null ? <p className="py-4 text-[12px] text-muted">Loading…</p>
+            : bt === 'none' || !bt.data ? <p data-testid="desk-bt-na" className="py-3 text-[12px] text-muted">N/A — no backtest result published. Run <code className="text-ink">npx tsx scripts/backtest-heuristics.ts --out public/backtest-heuristics.json</code>.</p>
+            : (
+              <ul className="space-y-0.5 text-[12px]" data-testid="desk-bt-rows">
+                <li className="flex justify-between"><span className="text-muted">Data</span><span className="num" data-testid="desk-bt-data">{fmtN(bt.data.snapshots)} snapshots · {bt.data.symbols} symbols{synth ? ' · synthetic' : ''}</span></li>
+                <li className="flex justify-between"><span className="text-muted">Precision</span><b className="num" data-testid="desk-bt-precision" style={{ color: GOLD }}>{pctTxt(bt.precision)}</b></li>
+                <li className="flex justify-between"><span className="text-muted">Recall wall / add-cancel</span><span className="num" data-testid="desk-bt-recall">{pctTxt(bt.recall?.spoof_wall?.rate)} / {pctTxt(bt.recall?.flicker?.rate)}</span></li>
+                <li className="flex justify-between"><span className="text-muted">Flags per 1 000 snapshots</span><span className="num">{bt.flags?.per1000Snapshots ?? 'N/A'}</span></li>
+              </ul>
+            )}
+          <div className="num mt-2 text-[11px] text-muted" data-testid="desk-session-flags">Recent flags: wall {sessionFlags.wall} · add/cancel {sessionFlags.add_cancel}</div>
+          {synth && <p className="mt-1 text-[10px] leading-snug text-muted" data-testid="desk-bt-caveat">Synthetic data: precision depends on the assumed book noise and describes agreement with the generator’s own pattern definition — not how often real markets are manipulated.</p>}
+        </div>
+      </div>
+    </section>
   );
 }
 
@@ -64,7 +131,7 @@ export function SurveillanceWorkspace({ engine, symbol, feed, cloud, onOpenStock
         const r = await cloud.listRules();
         if (!on) return;
         setRules(r);
-        const syms = r.filter((x) => x.kind === 'volume_surge').map((x) => x.symbol);
+        const syms = [...r.filter((x) => x.kind === 'volume_surge').map((x) => x.symbol), symbol];
         const b = await cloud.listBaselines(syms);
         if (on) setBaselines(Object.fromEntries(b.map((x) => [x.symbol.toUpperCase(), x])));
       } catch { /* the panels show their own empty states */ }
@@ -72,7 +139,7 @@ export function SurveillanceWorkspace({ engine, symbol, feed, cloud, onOpenStock
     void load();
     const t = setInterval(() => void load(), 30_000);
     return () => { on = false; clearInterval(t); };
-  }, [cloud]);
+  }, [cloud, symbol]);
 
   /* daemon-recorded heuristic flags (refreshed every 15 s) */
   useEffect(() => {
@@ -156,7 +223,7 @@ export function SurveillanceWorkspace({ engine, symbol, feed, cloud, onOpenStock
 
         {/* volume surge */}
         <section className={pane} data-testid="desk-volume" aria-label="Volume surge rules">
-          <PaneHead icon={<Flame size={14} />} title="Volume surge" right="× typical full-day volume" />
+          <PaneHead icon={<Flame size={14} />} title="Volume surge" right="× typical volume by this time of day" />
           <div className="p-3">
             {!cloud ? (
               <p className="py-3 text-center text-[12px] text-muted">Sign in with a Supabase account to see your volume-surge rules.</p>
@@ -168,27 +235,29 @@ export function SurveillanceWorkspace({ engine, symbol, feed, cloud, onOpenStock
                   const b = baselines[r.symbol.toUpperCase()];
                   const q = engine.quotes.get(r.symbol);
                   const base = b?.status === 'ok' ? b.median_volume : null;
-                  const m = q ? volumeMultiple(q.volume, base) : null;
-                  const na = base === null || m === null;
-                  const hit = !na && m >= r.threshold;
+                  const prof: IntradayProfile | null = b?.profile && b.profile.cum.length === BUCKETS ? { cum: b.profile.cum, sessions: b.profile.sessions, status: 'ok' } : null;
+                  const vm = q ? volumeMultipleAt(q.volume, prof, base, Date.now()) : null;
+                  const m = vm ? vm.multiple : null;
+                  const na = vm === null;
+                  const hit = !na && m !== null && m >= r.threshold;
                   const why = !b ? 'baseline not computed yet' : b.status === 'insufficient' ? `only ${b.sessions} of ${MIN_BASELINE_SESSIONS} sessions of history` : b.status === 'unavailable' ? 'history unavailable' : !q ? 'no live quote' : '';
                   return (
                     <li key={r.id} data-testid="desk-volume-row" data-state={na ? 'na' : hit ? 'surge' : 'normal'} className="py-1.5 text-[12px]">
                       <div className="flex items-center gap-3">
                         <button type="button" onClick={() => onSel(r.symbol)} className="w-24 truncate text-left font-bold text-ink hover:underline">{r.symbol}</button>
                         <span className="text-muted">alert at {fmtMult(r.threshold)}</span>
-                        <span className="num ml-auto font-semibold" style={{ color: na ? undefined : hit ? GOLD : TEAL }} data-testid="desk-volume-mult">{na ? 'N/A' : fmtMult(m)}</span>
+                        <span className="num ml-auto font-semibold" style={{ color: na ? undefined : hit ? GOLD : TEAL }} data-testid="desk-volume-mult">{na ? 'N/A' : fmtMult(m as number)}</span>
                       </div>
                       <div className="mt-1 h-1.5 overflow-hidden rounded bg-white/10" aria-hidden>
-                        <div className="h-full rounded" style={{ width: `${na ? 0 : Math.min(100, (m / r.threshold) * 100)}%`, background: hit ? GOLD : TEAL }} />
+                        <div className="h-full rounded" style={{ width: `${na ? 0 : Math.min(100, ((m as number) / r.threshold) * 100)}%`, background: hit ? GOLD : TEAL }} />
                       </div>
-                      <div className="num mt-0.5 text-[11px] text-muted">{na ? `N/A — ${why}` : `today ${fmtN(q!.volume)} · typical day ${fmtN(Math.round(base))} (${b!.sessions} sessions)${hit ? ' · above your multiple' : ''}`}</div>
+                      <div className="num mt-0.5 text-[11px] text-muted">{na ? `N/A — ${why}` : `today ${fmtN(q!.volume)} · ${vm!.basis === 'time-of-day' ? `typical by ${bucketLabel(vm!.bucket as number)}+ ${fmtN(Math.round(vm!.expected))}` : `typical full day ${fmtN(Math.round(vm!.expected))} (no intraday profile)`} (${b!.sessions} sessions)${hit ? ' · above your multiple' : ''}`}</div>
                     </li>
                   );
                 })}
               </ul>
             )}
-            <p className="mt-2 text-[11px] text-muted">Compared with a full-day baseline, not time-of-day adjusted — early in the session a low multiple is the realistic setting.</p>
+            <p className="mt-2 text-[11px] text-muted" data-testid="desk-volume-note">Compared with the median volume the stock traded by the same 15-minute mark over its last ≤ 20 sessions; when that intraday history is missing it falls back to the typical full day.</p>
           </div>
         </section>
 
@@ -223,6 +292,15 @@ export function SurveillanceWorkspace({ engine, symbol, feed, cloud, onOpenStock
             <p className="mt-2 text-[11px] text-muted" data-testid="desk-flags-disclaimer">{FLAG_DISCLAIMER}</p>
           </div>
         </section>
+      </div>
+
+      <div className="mt-3">
+        <BacktestCurveCard
+          symbol={symbol}
+          profile={(() => { const b = baselines[symbol.toUpperCase()]; return b?.status === 'ok' && b.profile && b.profile.cum.length === BUCKETS ? { cum: b.profile.cum, sessions: b.profile.sessions, status: 'ok' as const } : null; })()}
+          volume={engine.quotes.get(symbol)?.volume ?? null}
+          sessionFlags={{ wall: flags.filter((f) => f.kind === 'wall').length, add_cancel: flags.filter((f) => f.kind === 'add_cancel').length }}
+        />
       </div>
 
       {cloud && (

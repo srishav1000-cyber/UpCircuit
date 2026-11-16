@@ -283,4 +283,31 @@ select t.ok(t.try('insert into public.depth_flags(symbol, kind, side, severity, 
 select t.ok(t.try('insert into public.depth_flags(symbol, kind, side, severity, price, qty, detail) values (''ABC'', ''add_cancel'', ''ask'', ''watch'', null, 3, ''3 cycles'')', :alice, 'service_role') = '', 'the daemon can write flags');
 select t.ok(t.try('delete from public.depth_flags where flagged_at < now() - interval ''2 days''', :alice, 'service_role') = '', 'the daemon can prune old flags');
 
+-- Week 10: daemon lease election + intraday profile column
+select t.ok(t.try('select public.acquire_daemon_lease(''alert-daemon'', ''A'', 30)', null, 'service_role') = '', 'service role can call acquire_daemon_lease');
+select t.ok((select holder_id from public.daemon_leases where lease_name = 'alert-daemon') = 'A' and (select epoch from public.daemon_leases where lease_name = 'alert-daemon') = 1, 'first acquire creates the lease at epoch 1');
+select t.become(null, 'service_role');
+select t.ok((select acquired from public.acquire_daemon_lease('alert-daemon', 'B', 30)) = false, 'a rival is refused while the lease is live');
+select t.ok((select holder_id from public.acquire_daemon_lease('alert-daemon', 'B', 30)) = 'A', 'the refusal names the current holder');
+select t.ok((select acquired and epoch = 1 from public.acquire_daemon_lease('alert-daemon', 'A', 30)), 'renewal by the holder keeps the epoch');
+select t.back();
+update public.daemon_leases set expires_at = now() - interval '1 second' where lease_name = 'alert-daemon';
+select t.become(null, 'service_role');
+select t.ok((select acquired and holder_id = 'B' and epoch = 2 from public.acquire_daemon_lease('alert-daemon', 'B', 30)), 'takeover after expiry bumps the fencing epoch');
+select t.ok((select acquired = false from public.acquire_daemon_lease('alert-daemon', 'A', 30)), 'the old leader cannot steal it back');
+select t.ok(public.release_daemon_lease('alert-daemon', 'A') = false, 'a non-holder cannot release');
+select t.ok(public.release_daemon_lease('alert-daemon', 'B') = true, 'the holder can release');
+select t.ok((select acquired and holder_id = 'A' and epoch = 3 from public.acquire_daemon_lease('alert-daemon', 'A', 30)), 'after release the next instance acquires at once (epoch 3)');
+select t.back();
+select t.ok(t.try('select public.acquire_daemon_lease(''alert-daemon'', ''A'', 1)', null, 'service_role') <> '', 'ttl below 5 s rejected');
+select t.ok(t.try('select public.acquire_daemon_lease(''alert-daemon'', ''A'', 9999)', null, 'service_role') <> '', 'ttl above 300 s rejected');
+select t.ok(t.try('select public.acquire_daemon_lease('''', ''A'', 30)', null, 'service_role') <> '', 'empty lease name rejected');
+select t.ok(t.try('select public.acquire_daemon_lease(''alert-daemon'', '''', 30)', null, 'service_role') <> '', 'empty holder rejected');
+select t.ok(t.try('select public.acquire_daemon_lease(''alert-daemon'', ''X'', 30)', :alice) <> '', 'signed-in users cannot call acquire_daemon_lease');
+select t.ok(t.try('select public.acquire_daemon_lease(''alert-daemon'', ''X'', 30)', null, 'anon') <> '', 'anon cannot call acquire_daemon_lease');
+select t.ok(t.try('select public.release_daemon_lease(''alert-daemon'', ''A'')', :alice) <> '', 'signed-in users cannot release');
+select t.ok(t.try('select count(*) from public.daemon_leases', :alice) <> '', 'users cannot read daemon_leases');
+select t.ok(t.try('update public.volume_baselines set profile = ''{"cum":[1,2]}'' where symbol = ''ABC''', :alice, 'service_role') <> '', 'a profile whose cum array is not 25 long is rejected');
+select t.ok(t.try('update public.volume_baselines set profile = (select jsonb_build_object(''cum'', (select jsonb_agg(g) from generate_series(1,25) g), ''sessions'', 12)), profile_sessions = 12 where symbol = ''ABC''', :alice, 'service_role') = '', 'a 25-bucket profile is accepted');
+
 select count(*) || ' assertions passed' as result from t.log;

@@ -1,13 +1,15 @@
 // Volume baselines for volume_surge rules: typical full-day volume per symbol, computed from real daily bars (lib/volumeBaseline.computeBaseline).
 // Loaded lazily for exactly the symbols that have a volume rule, cached for hours, retried sooner after a failure, and published to
 // public.volume_baselines so the rule manager can show "N/A — only 4 sessions of history" instead of a rule that silently never fires.
-import { computeBaseline, istDayOf, type BaselineResult } from '../lib/volumeBaseline';
+import { computeBaseline, computeIntradayProfile, expectedVolume, istDayOf, NO_PROFILE, type BaselineResult, type ExpectedVolume, type IntradayProfile } from '../lib/volumeBaseline';
 
 export interface DailyBar { time: number; volume: number }
-export interface BaselineRecord extends BaselineResult { symbol: string; computedAt: number }
+export interface BaselineRecord extends BaselineResult { symbol: string; computedAt: number; /** Week 10: median cumulative volume per 15-minute bucket (status !== 'ok' → flat fallback) */ profile: IntradayProfile }
 export interface BaselineStoreOptions {
   /** daily bars for a symbol (≥ 1 year back is plenty); throw or return [] when unavailable */
   fetchDaily: (symbol: string) => Promise<DailyBar[]>;
+  /** 15-minute bars for the last ~month (Week 10). Optional: without it, or when it fails, volume rules use the flat full-day baseline. */
+  fetchIntraday?: (symbol: string) => Promise<DailyBar[]>;
   /** called with every freshly computed batch (persist / publish) — failures are logged, never thrown into the loader */
   onComputed?: (rows: BaselineRecord[]) => void | Promise<void>;
   now?: () => number;
@@ -41,10 +43,15 @@ export class BaselineStore {
     const r = this.rows.get(symbol.toUpperCase());
     return r && r.status === 'ok' ? r.medianVolume : null;
   }
+  /** what a typical session has traded by `nowMs` (time-of-day profile), or the typical full-day volume (fallback), or null (N/A) */
+  expected(symbol: string, nowMs: number): ExpectedVolume | null {
+    const r = this.rows.get(symbol.toUpperCase());
+    return r && r.status === 'ok' ? expectedVolume(r.profile, r.medianVolume, nowMs) : null;
+  }
   info(symbol: string): BaselineRecord | undefined { return this.rows.get(symbol.toUpperCase()); }
-  stats(): { symbols: number; ok: number; insufficient: number; unavailable: number; loading: number } {
+  stats(): { symbols: number; ok: number; insufficient: number; unavailable: number; loading: number; withProfile: number } {
     const all = [...this.rows.values()];
-    return { symbols: all.length, ok: all.filter((r) => r.status === 'ok').length, insufficient: all.filter((r) => r.status === 'insufficient').length, unavailable: all.filter((r) => r.status === 'unavailable').length, loading: this.loading.size + this.queue.length };
+    return { symbols: all.length, ok: all.filter((r) => r.status === 'ok').length, insufficient: all.filter((r) => r.status === 'insufficient').length, unavailable: all.filter((r) => r.status === 'unavailable').length, loading: this.loading.size + this.queue.length, withProfile: all.filter((r) => r.profile.status === 'ok').length };
   }
 
   private fresh(r: BaselineRecord | undefined): boolean {
@@ -79,10 +86,16 @@ export class BaselineStore {
     let rec: BaselineRecord;
     try {
       const bars = await this.o.fetchDaily(symbol);
-      rec = { symbol, computedAt: this.now(), ...computeBaseline(bars, this.now()) };
+      const base = computeBaseline(bars, this.now());
+      let profile: IntradayProfile = NO_PROFILE;
+      if (base.status === 'ok' && this.o.fetchIntraday) {
+        try { profile = computeIntradayProfile(await this.o.fetchIntraday(symbol), this.now()); }
+        catch (e) { this.o.log?.('warn', 'intraday profile fetch failed — using the full-day baseline', { symbol, error: e instanceof Error ? e.message : String(e) }); }
+      }
+      rec = { symbol, computedAt: this.now(), ...base, profile };
     } catch (e) {
       this.o.log?.('warn', 'baseline fetch failed', { symbol, error: e instanceof Error ? e.message : String(e) });
-      rec = { symbol, computedAt: this.now(), medianVolume: null, sessions: 0, status: 'unavailable' };
+      rec = { symbol, computedAt: this.now(), medianVolume: null, sessions: 0, status: 'unavailable', profile: NO_PROFILE };
     }
     this.rows.set(symbol, rec);
     try { await this.o.onComputed?.([rec]); } catch (e) { this.o.log?.('warn', 'baseline publish failed', { symbol, error: e instanceof Error ? e.message : String(e) }); }

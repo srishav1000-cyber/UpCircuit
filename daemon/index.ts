@@ -14,6 +14,7 @@ import { RuleIndex, toRule } from './engine';
 import { BaselineStore } from './baselines';
 import { createDispatcher } from './dispatcher';
 import type { DepthFlag } from '../lib/heuristicFlags';
+import { createLease, newHolderId, type LeaseRow } from './lease';
 
 /* ───────────── config ───────────── */
 type Env = Record<string, string | undefined>;
@@ -60,16 +61,17 @@ export async function main(cfg = loadConfig(), env: Env = process.env): Promise<
   // volume baselines: real daily bars (Yahoo, the repo's existing historical source — the SmartAPI login deliberately never exposes a JWT for getCandleData)
   const baselines = new BaselineStore({
     fetchDaily: (symbol) => fetchBars({ symbol, exch: 'NSE' }, '1Y'),
+    fetchIntraday: (symbol) => fetchBars({ symbol, exch: 'NSE' }, '15m'),                 // ~1 month of 15-minute bars → the time-of-day profile
     onComputed: async (rows) => {
       const r = await fetch(`${sbBase}/rest/v1/volume_baselines`, {
         method: 'POST', headers: { ...sbHeaders, Prefer: 'resolution=merge-duplicates,return=minimal' }, signal: AbortSignal.timeout(8000),
-        body: JSON.stringify(rows.map((x) => ({ symbol: x.symbol, median_volume: x.medianVolume, sessions: x.sessions, status: x.status, computed_at: new Date(x.computedAt).toISOString() }))),
+        body: JSON.stringify(rows.map((x) => ({ symbol: x.symbol, median_volume: x.medianVolume, sessions: x.sessions, status: x.status, computed_at: new Date(x.computedAt).toISOString(), profile: x.profile.status === 'ok' ? { cum: x.profile.cum, sessions: x.profile.sessions } : null, profile_sessions: x.profile.sessions }))),
       });
       if (!r.ok) throw new Error(`volume_baselines ${r.status}`);
     },
     log,
   });
-  index.setBaselineLookup((sym) => baselines.get(sym));
+  index.setBaselineLookup((sym, nowMs) => { const e = baselines.expected(sym, nowMs); return e ? { value: e.expected, basis: e.basis } : null; });
   // heuristic depth flags (walls, rapid add/cancel) → public.depth_flags: batched every 2 s, bounded buffer, rows older than 2 days pruned hourly.
   // They are screening hints for the Surveillance workspace, never alert rules and never proof of manipulation.
   const flagBuf: DepthFlag[] = [];
@@ -97,6 +99,30 @@ export async function main(cfg = loadConfig(), env: Env = process.env): Promise<
 
   const health = { startedAt: Date.now(), ticks: 0, lastTickAt: 0, lastTickLagMs: null as number | null, feed: 'idle' as string, reconnects: 0, logins: 0, resyncs: 0, lastResyncAt: 0, realtime: 'init' as string, unresolved: [] as string[] };
   let stopping = false;
+
+  /* ───── leader election (docs/WEEK10_SCHEMA.sql): only the lease holder opens the feed and dispatches; others stand by ───── */
+  const holderId = newHolderId();
+  const haOff = env.DAEMON_HA === '0';
+  let haMissing = false;
+  const lease = createLease({
+    name: env.DAEMON_LEASE_NAME || 'alert-daemon', holderId, log,
+    ttlSeconds: Number(env.DAEMON_LEASE_TTL_S ?? 30), renewMs: Number(env.DAEMON_LEASE_RENEW_MS ?? 10_000),
+    acquire: async (name, holder, ttlSeconds): Promise<LeaseRow> => {
+      if (haOff) return { acquired: true, holder_id: holder, expires_at: null, epoch: 0 };
+      const r = await fetch(`${sbBase}/rest/v1/rpc/acquire_daemon_lease`, { method: 'POST', headers: sbHeaders, signal: AbortSignal.timeout(5000), body: JSON.stringify({ p_lease_name: name, p_holder_id: holder, p_ttl_seconds: ttlSeconds }) });
+      if (r.status === 404) {
+        // migration not applied: fail OPEN as a sole leader (a second daemon would only duplicate work — claim_alert_rule still dedupes), but say so loudly
+        if (!haMissing) { haMissing = true; log('error', 'acquire_daemon_lease not found — running WITHOUT leader election; apply docs/WEEK10_SCHEMA.sql before starting a second instance'); }
+        return { acquired: true, holder_id: holder, expires_at: null, epoch: 0 };
+      }
+      if (!r.ok) throw new Error(`acquire_daemon_lease ${r.status}`);
+      const rows = (await r.json()) as LeaseRow[];
+      if (!rows[0]) throw new Error('acquire_daemon_lease returned no row');
+      return rows[0];
+    },
+    release: (name, holder) => (haOff || haMissing ? Promise.resolve() : fetch(`${sbBase}/rest/v1/rpc/release_daemon_lease`, { method: 'POST', headers: sbHeaders, signal: AbortSignal.timeout(3000), body: JSON.stringify({ p_lease_name: name, p_holder_id: holder }) })),
+    onChange: (info) => { if (info.role === 'standby') health.feed = 'standby'; },
+  });
   let stream: DaemonStream | null = null;
   let listings = new Map<string, Listing>();
   let subscribed = new Set<string>();
@@ -162,6 +188,7 @@ export async function main(cfg = loadConfig(), env: Env = process.env): Promise<
     if (unresolved.length) log('warn', 'symbols not found in the scrip master (rules on them cannot fire)', { symbols: unresolved.slice(0, 20), count: unresolved.length });
   }
   function onTick(m: MarketTick): void {
+    if (!lease.isLeader()) return;                                          // a ghost tick after losing the lease must not dispatch
     const now = Date.now();
     health.ticks++; health.lastTickAt = now;
     health.lastTickLagMs = m.timestamp > 0 ? Math.max(0, now - m.timestamp) : null;
@@ -174,6 +201,8 @@ export async function main(cfg = loadConfig(), env: Env = process.env): Promise<
   async function runFeed(): Promise<void> {
     let failures = 0;
     while (!stopping) {
+      // standby: no SmartAPI login, no feed, no dispatch — the rule index stays warm through Realtime so takeover is instant
+      if (!lease.isLeader()) { health.feed = 'standby'; await sleep(1000); continue; }
       let session: FeedSession;
       const login = await smartApiLogin(env);
       if (!login.ok) {
@@ -201,7 +230,8 @@ export async function main(cfg = loadConfig(), env: Env = process.env): Promise<
         // watchdog: connected but silent during market hours → recycle; also recycle before the feed token expires
         const watch = setInterval(() => {
           const quiet = Date.now() - Math.max(health.lastTickAt, openedAt);
-          if (stopping || Date.now() >= session.expiresAt) { log('info', 'recycling feed', { reason: stopping ? 'stopping' : 'session expiring' }); finish(); }
+          if (!lease.isLeader()) { log('warn', 'lost the leader lease — closing the feed'); finish(); }
+          else if (stopping || Date.now() >= session.expiresAt) { log('info', 'recycling feed', { reason: stopping ? 'stopping' : 'session expiring' }); finish(); }
           else if (s.status === 'open' && isStreamWindow(Date.now()) && quiet > cfg.stallMs) { log('warn', 'feed stalled — reconnecting', { quietMs: quiet }); finish(); }
         }, 2000);
         function finish() { clearInterval(watch); s.close(); if (stream === s) stream = null; done(); }
@@ -214,6 +244,7 @@ export async function main(cfg = loadConfig(), env: Env = process.env): Promise<
     }
   }
   const stopHooks: (() => void)[] = [];
+  await lease.start();
   void runFeed();
 
   /* ───── heartbeat → public.daemon_health() (UI: FeedHealthStatus) ───── */
@@ -223,7 +254,7 @@ export async function main(cfg = loadConfig(), env: Env = process.env): Promise<
     try {
       const r = await fetch(`${sbBase}/rest/v1/rpc/daemon_beat`, {
         method: 'POST', headers: sbHeaders, signal: AbortSignal.timeout(4000),
-        body: JSON.stringify({ p_id: 'alert-daemon', p_feed_status: health.feed, p_last_tick_age_ms: health.lastTickAt ? now - health.lastTickAt : null, p_ticks: health.ticks, p_reconnects: health.reconnects, p_rules: index.size, p_symbols: index.symbols().length, p_started_at: new Date(health.startedAt).toISOString(), p_version: 'turn44' }),
+        body: JSON.stringify({ p_id: lease.isLeader() ? 'alert-daemon' : 'alert-daemon-standby', p_feed_status: lease.isLeader() ? health.feed : 'standby', p_last_tick_age_ms: health.lastTickAt ? now - health.lastTickAt : null, p_ticks: health.ticks, p_reconnects: health.reconnects, p_rules: index.size, p_symbols: index.symbols().length, p_started_at: new Date(health.startedAt).toISOString(), p_version: 'week10' }),
       });
       if (!r.ok) throw new Error(`daemon_beat ${r.status}`);
     } catch (e) {
@@ -237,9 +268,11 @@ export async function main(cfg = loadConfig(), env: Env = process.env): Promise<
   const http = createServer((req, res) => {
     if (req.url !== '/healthz') { res.writeHead(404).end(); return; }
     const age = health.lastTickAt ? Date.now() - health.lastTickAt : null;
-    const stalled = isStreamWindow(Date.now()) && (age === null ? Date.now() - health.startedAt > 60_000 : age > 60_000);
+    const leader = lease.isLeader();
+    const stalled = leader && isStreamWindow(Date.now()) && (age === null ? Date.now() - health.startedAt > 60_000 : age > 60_000);
     res.writeHead(stalled ? 503 : 200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
-    res.end(JSON.stringify({ ok: !stalled, uptimeS: Math.round((Date.now() - health.startedAt) / 1000), feed: health.feed, ticks: health.ticks, lastTickAgeMs: age, lastTickLagMs: health.lastTickLagMs, reconnects: health.reconnects, logins: health.logins, rules: index.size, symbols: index.symbols().length, unresolvedSymbols: health.unresolved.length, realtime: health.realtime, resyncs: health.resyncs, dispatch: dispatcher.stats(), baselines: baselines.stats(), volumeRulesNA: index.volumeRulesNA(), depthFlags: { ...index.flagStats(), buffered: flagBuf.length }, pushConfigured: dispatcher.configured }));
+    const li = lease.info();
+    res.end(JSON.stringify({ ok: !stalled, ha: { role: leader ? 'leader' : 'standby', instance: holderId, leader: li.holder, epoch: li.epoch, expiresAt: li.expiresAt, enabled: !haOff && !haMissing }, uptimeS: Math.round((Date.now() - health.startedAt) / 1000), feed: health.feed, ticks: health.ticks, lastTickAgeMs: age, lastTickLagMs: health.lastTickLagMs, reconnects: health.reconnects, logins: health.logins, rules: index.size, symbols: index.symbols().length, unresolvedSymbols: health.unresolved.length, realtime: health.realtime, resyncs: health.resyncs, dispatch: dispatcher.stats(), baselines: baselines.stats(), volumeRulesNA: index.volumeRulesNA(), depthFlags: { ...index.flagStats(), buffered: flagBuf.length }, pushConfigured: dispatcher.configured }));
   });
   http.listen(cfg.port, () => log('info', 'daemon up', { port: cfg.port, rules: index.size }));
 
@@ -250,6 +283,7 @@ export async function main(cfg = loadConfig(), env: Env = process.env): Promise<
     clearInterval(resyncTimer); clearInterval(baselineTimer); clearInterval(beatTimer); clearInterval(flagTimer); clearInterval(flagPruneTimer); await flushFlags();
     stopHooks.splice(0).forEach((h) => h());
     await dispatcher.drain(5000);
+    await lease.stop();                                                  // release the lease so a standby takes over on its next poll
     await sb.removeChannel(channel).catch(() => undefined);
     await new Promise<void>((r) => http.close(() => r()));
   }

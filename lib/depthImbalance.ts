@@ -6,8 +6,22 @@ export const TOP_N = 5;
 /** below this much total quantity across the ten levels the ratio is noise (a lone 100-share order is "+1.00"), so it is reported as N/A */
 export const MIN_DEPTH_QTY = 500;
 
+/** Week 10: distance weights for levels i = 1..5 (best first): w_i = exp(−0.5·(i−1)) → 1, 0.607, 0.368, 0.223, 0.135 */
+export const LEVEL_WEIGHTS: readonly number[] = Array.from({ length: TOP_N }, (_, i) => Math.exp(-0.5 * i));
+export type ObiMode = 'raw' | 'weighted';
+
+/** (Σ w_i·bid_i − Σ w_i·ask_i) ÷ (Σ w_i·bid_i + Σ w_i·ask_i), level 1 = best price on each side; null when the weighted total is 0 */
+export function weightedObi(bids: readonly number[], asks: readonly number[], weights: readonly number[] = LEVEL_WEIGHTS): number | null {
+  let b = 0, a = 0;
+  for (let i = 0; i < weights.length; i++) { b += weights[i] * (bids[i] ?? 0); a += weights[i] * (asks[i] ?? 0); }
+  return b + a > 0 ? (b - a) / (b + a) : null;
+}
+
 export interface Imbalance {
+  /** equal-weighted ("raw") OBI — what the order_imbalance_* alert rules use */
   value: number;
+  /** distance-weighted OBI (LEVEL_WEIGHTS): near-touch quantity counts more than quantity four ticks away */
+  weightedValue: number;
   bidQty: number;
   askQty: number;
   /** quantity per level, best first (≤ 5 each) */
@@ -29,10 +43,13 @@ export function topFiveImbalance(bids: DepthLevel[], asks: DepthLevel[], minTota
   if (total <= 0 || total < minTotalQty) return null;
   const n = Math.min(b.length, a.length);
   return {
-    value: (bidQty - askQty) / total, bidQty, askQty, bids: b.map((x) => x.qty), asks: a.map((x) => x.qty),
+    value: (bidQty - askQty) / total, weightedValue: weightedObi(b.map((x) => x.qty), a.map((x) => x.qty)) ?? 0, bidQty, askQty, bids: b.map((x) => x.qty), asks: a.map((x) => x.qty),
     levels: Array.from({ length: n }, (_, i) => (b[i].qty - a[i].qty) / (b[i].qty + a[i].qty)),
   };
 }
+
+/** the reading for a display mode */
+export const obiValue = (i: Imbalance, mode: ObiMode): number => (mode === 'weighted' ? i.weightedValue : i.value);
 
 export function imbalanceLabel(v: number): { label: string; tone: 'up' | 'down' | 'muted' } {
   if (v >= 0.6) return { label: 'Strongly bid-heavy', tone: 'up' };

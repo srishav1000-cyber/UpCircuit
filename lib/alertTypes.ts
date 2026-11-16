@@ -13,8 +13,10 @@ export interface RuleQuote {
   symbol: string; ltp: number; prevClose: number;
   /** cumulative traded volume today */
   volume?: number;
-  /** typical full-day volume (median of recent completed sessions); null / undefined = N/A (history missing or too short) */
+  /** volume a typical session has traded BY NOW (median of recent completed sessions at this 15-minute bucket) or, when no intraday profile exists, the typical full-day volume; null / undefined = N/A */
   baselineVolume?: number | null;
+  /** which of the two baselineVolume is: 'time-of-day' (Week 10 profile) or 'full-day' (flat fallback) */
+  baselineBasis?: 'time-of-day' | 'full-day';
   /** top-5 depth imbalance in [-1, +1]; null / undefined = N/A (no depth, or a book too thin to mean anything) */
   imbalance?: number | null;
 }
@@ -26,7 +28,7 @@ export const RULE_LABEL: Record<RuleKind, string> = {
   pct_up: 'Day gain ≥ %',
   pct_down: 'Day loss ≥ %',
   circuit_proximity: 'Within … % of the circuit limit',
-  volume_surge: 'Day volume ≥ … × typical daily volume',
+  volume_surge: 'Volume so far ≥ … × typical for this time of day',
   order_imbalance_above: 'Top-5 depth buy-imbalance ≥',
   order_imbalance_below: 'Top-5 depth sell-imbalance ≥',
 };
@@ -44,7 +46,7 @@ export const KIND_META: Record<RuleKind, KindMeta> = {
   pct_up: { unit: '%', min: 0.01, max: 100, step: 0.1, placeholder: '3', engine: 'cron+daemon', help: 'Fires when the day gain reaches this percentage.' },
   pct_down: { unit: '%', min: 0.01, max: 100, step: 0.1, placeholder: '3', engine: 'cron+daemon', help: 'Fires when the day loss reaches this percentage.' },
   circuit_proximity: { unit: '%', min: 0.01, max: 100, step: 0.1, placeholder: '1', engine: 'cron+daemon', help: 'Fires when the day move gets within this many % of a 5 / 10 / 20 % circuit band.' },
-  volume_surge: { unit: '×', min: 0.5, max: 50, step: 0.1, placeholder: '1.5', engine: 'daemon', help: "Fires when today's cumulative volume reaches this multiple of the stock's typical full-day volume (median of its last ≤ 20 completed sessions). N/A until at least 10 sessions of history exist." },
+  volume_surge: { unit: '×', min: 0.5, max: 50, step: 0.1, placeholder: '1.5', engine: 'daemon', help: "Fires when today's cumulative volume reaches this multiple of what the stock has typically traded by this time of day (median of its last ≤ 20 sessions at the same 15-minute mark, 09:15–15:30 IST). Falls back to its typical full-day volume when no intraday history is available. N/A until at least 10 sessions of history exist." },
   order_imbalance_above: { unit: 'ratio', min: 0.1, max: 1, step: 0.05, placeholder: '0.6', engine: 'daemon', help: 'Fires when (Σ top-5 bid qty − Σ top-5 ask qty) ÷ (Σ bid + Σ ask) rises to +this value. A heuristic of resting orders, not a forecast.' },
   order_imbalance_below: { unit: 'ratio', min: 0.1, max: 1, step: 0.05, placeholder: '0.6', engine: 'daemon', help: 'Fires when the same ratio falls to −this value (ask-heavy book). A heuristic of resting orders, not a forecast.' },
 };
@@ -65,7 +67,7 @@ export function validateRule(r: { symbol: string; kind: string; threshold: numbe
   const m = KIND_META[r.kind];
   if (r.threshold < lo || r.threshold > hi) {
     if (r.kind === 'pct_up' || r.kind === 'pct_down' || r.kind === 'circuit_proximity') return 'A percentage threshold cannot exceed 100.';
-    if (r.kind === 'volume_surge') return `Volume multiple must be between ${lo}× and ${hi}× the typical daily volume.`;
+    if (r.kind === 'volume_surge') return `Volume multiple must be between ${lo}× and ${hi}× the typical volume for this time of day.`;
     if (r.kind === 'order_imbalance_above' || r.kind === 'order_imbalance_below') return `Imbalance threshold must be between ${lo} and ${hi} (0 = balanced, 1 = one-sided book).`;
     return `Threshold must be between ${lo} and ${hi} ${m.unit}.`;
   }

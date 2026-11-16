@@ -1,6 +1,7 @@
 // Pure rule engine for the alert daemon: in-memory index + edge-crossing evaluation. No I/O — unit-tested in scripts/verify.ts.
 // Rule kinds: price_above / price_below / pct_up / pct_down / circuit_proximity, plus (Turn 43)
-//   volume_surge            today's cumulative volume ≥ threshold × the stock's typical full-day volume (baseline lookup; N/A while the baseline is missing or short)
+//   volume_surge            today's cumulative volume ≥ threshold × the volume the stock typically has traded BY THIS TIME OF DAY (15-minute profile, Week 10),
+//                           or × its typical full-day volume when no intraday profile exists (baseline lookup; N/A while the baseline is missing or short)
 //   order_imbalance_above   top-5 depth (Σbid − Σask) ÷ (Σbid + Σask) ≥ +threshold   (a heuristic of resting orders)
 //   order_imbalance_below   the same ratio ≤ −threshold
 // Turn 44: every depth snapshot of a watched symbol also feeds a DepthFlagTracker (lib/heuristicFlags.ts) — large resting-order walls and rapid
@@ -21,8 +22,8 @@ export interface TickIn {
   volume?: number;
   depth?: { bids: DepthLevel[]; asks: DepthLevel[] };
 }
-/** typical full-day volume for a symbol, or null when N/A (see daemon/baselines.ts) */
-export type BaselineLookup = (symbol: string) => number | null;
+/** volume baseline for a symbol at `nowMs`: a plain number (typical full-day volume — the Week 9 contract), an object saying whether it is the time-of-day expectation or the full-day fallback, or null when N/A (see daemon/baselines.ts) */
+export type BaselineLookup = (symbol: string, nowMs: number) => number | null | { value: number; basis: 'time-of-day' | 'full-day' };
 export interface RuleMatch { rule: AlertRule; price: number; pct: number; message: string; tickTime: number; matchedAt: number }
 
 interface State { sig: string; prev: boolean | null; firedAt: number }
@@ -48,6 +49,11 @@ export class RuleIndex {
   private readonly rules = new Map<string, AlertRule>();
   private readonly states = new Map<string, State>();
   private baseline: BaselineLookup = () => null;
+  private baselineOf(symbol: string, nowMs: number): { value: number; basis: 'time-of-day' | 'full-day' } | null {
+    const b = this.baseline(symbol, nowMs);
+    if (b === null || b === undefined) return null;
+    return typeof b === 'number' ? { value: b, basis: 'full-day' } : b;
+  }
   private readonly flags = new DepthFlagTracker();
   private flagSink: ((f: DepthFlag) => void) | null = null;
   private flagsSeen = 0;
@@ -62,7 +68,7 @@ export class RuleIndex {
   /** symbols that have at least one enabled rule of this kind */
   symbolsWithKind(kind: RuleKind): string[] { return [...this.bySymbol.entries()].filter(([, l]) => l.some((r) => r.kind === kind)).map(([s]) => s); }
   /** volume_surge rules whose symbol currently has no usable baseline (they stay silent — shown as N/A) */
-  volumeRulesNA(): number { let n = 0; for (const l of this.bySymbol.values()) for (const r of l) if (r.kind === 'volume_surge' && this.baseline(r.symbol) === null) n++; return n; }
+  volumeRulesNA(): number { let n = 0; for (const l of this.bySymbol.values()) for (const r of l) if (r.kind === 'volume_surge' && this.baselineOf(r.symbol, Date.now()) === null) n++; return n; }
 
   get size(): number { return this.rules.size; }
   symbols(): string[] { return [...this.bySymbol.keys()]; }
@@ -126,7 +132,9 @@ export class RuleIndex {
       const st = this.states.get(rule.id);
       if (!st) continue;
       if (!derived && (rule.kind === 'volume_surge' || rule.kind === 'order_imbalance_above' || rule.kind === 'order_imbalance_below')) {
-        quote.baselineVolume = this.baseline(sym);
+        const base = this.baselineOf(sym, now);
+        quote.baselineVolume = base ? base.value : null;
+        quote.baselineBasis = base?.basis;
         quote.imbalance = t.depth ? (topFiveImbalance(t.depth.bids, t.depth.asks)?.value ?? null) : null;
         derived = true;
       }
