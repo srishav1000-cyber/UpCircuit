@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { useAuth } from '@/hooks/useAuth';
-import { DISCLOSURE_POINTS, DISCLOSURE_VERSION, metadataAcked, readAck, saveMetadataAck, writeAck } from '@/lib/disclosure';
+import { DISCLOSURE_POINTS, DISCLOSURE_VERSION, readAck, saveMetadataAck, sessionStamp, writeAck } from '@/lib/disclosure';
 
 /** Blocking Regulatory & Risk Disclosure, shown right after sign-in until accepted (no Esc / backdrop dismissal). */
 export function RegulatoryDisclosureModal() {
@@ -11,21 +11,26 @@ export function RegulatoryDisclosureModal() {
   const btn = useRef<HTMLButtonElement>(null);
   const id = user?.id ?? null;
 
+  const [stamp, setStamp] = useState<string | null>(null);        // the login session (null while it is being read)
+
+  // every login / fresh browser session starts un-acknowledged; the acknowledgement is only valid for this user AND this login session
   useEffect(() => {
-    if (!id) return setOpen(false);
-    if (readAck(id)) return setOpen(false);
-    setOpen(true);                                                   // block immediately; a metadata hit on another device closes it
-    if (backend !== 'supabase' || id === 'guest') return;
+    if (!id) { setStamp(null); return setOpen(false); }
     let alive = true;
-    void getToken().then((t) => (t ? metadataAcked(t) : false)).then((ok) => { if (alive && ok) { writeAck(id); setOpen(false); } }).catch(() => undefined);
+    void getToken().catch(() => null).then((t) => {
+      if (!alive) return;
+      const st = sessionStamp(t);
+      setStamp(st);
+      setOpen(!readAck(id, st));
+    });
     return () => { alive = false; };
-  }, [id, backend, getToken]);
+  }, [id, getToken]);
 
   useEffect(() => { if (open) btn.current?.focus(); }, [open]);
-  if (!open || !id) return null;
+  if (!open || !id || stamp === null) return null;
 
   const accept = () => {
-    writeAck(id);
+    writeAck(id, stamp);
     setOpen(false);
     if (backend === 'supabase' && id !== 'guest') void getToken().then((t) => (t ? saveMetadataAck(t) : false)).catch(() => undefined);
   };

@@ -4,10 +4,11 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { adminHeaders, cleanEnv, cleanUrl, isOpaqueKey, keyKind, privilegedKeyProblem, sbFailure, sbFailureText } from '../lib/supabaseAdmin';
 import { loadConfig } from '../daemon/index';
-import { DISCLOSURE_POINTS, disclosureKey, readAck, writeAck } from '../lib/disclosure';
+import { DISCLOSURE_POINTS, clearAck, disclosureKey, readAck, sessionStamp, writeAck } from '../lib/disclosure';
 import { GET, PUT } from '../app/api/alerts/push/route';
 
-const mem = () => { const m = new Map<string, string>(); return { getItem: (k: string) => m.get(k) ?? null, setItem: (k: string, v: string) => void m.set(k, v) }; };
+const mem = () => { const m = new Map<string, string>(); return { getItem: (k: string) => m.get(k) ?? null, setItem: (k: string, v: string) => void m.set(k, v), removeItem: (k: string) => void m.delete(k), key: (i: number) => [...m.keys()][i] ?? null, get length() { return m.size; } }; };
+const tok = (claims: object) => `h.${Buffer.from(JSON.stringify(claims)).toString('base64url')}.s`;
 
 test('sb_secret_ keys are sent as apikey only; legacy JWT service keys also as Bearer', () => {
   assert.ok(isOpaqueKey('sb_secret_abc')); assert.ok(!isOpaqueKey('eyJhbGciOi.x.y'));
@@ -17,7 +18,7 @@ test('sb_secret_ keys are sent as apikey only; legacy JWT service keys also as B
 
 test('disclosure: per user + version, persisted, covers the three required statements', () => {
   const st = mem();
-  assert.equal(readAck('u1', st), false); writeAck('u1', st); assert.equal(readAck('u1', st), true); assert.equal(readAck('u2', st), false);
+  assert.equal(readAck('u1', 's1', st), false); writeAck('u1', 's1', st); assert.equal(readAck('u1', 's1', st), true); assert.equal(readAck('u2', 's1', st), false);
   assert.match(disclosureKey('u1'), /^upcircuit:disclosure:.+:u1$/);
   const t = DISCLOSURE_POINTS.join(' ');
   assert.match(t, /NOT a SEBI-registered Investment Adviser or Research Analyst/); assert.match(t, /heuristic depth flags/); assert.match(t, /backtests/);
@@ -143,4 +144,36 @@ test('daemon config: same helper — trims the key/URL, accepts sb_secret_ and l
   const c = loadConfig({ ...base, SUPABASE_SERVICE_ROLE_KEY: ' sb_secret_k\n' }); assert.equal(c.serviceKey, 'sb_secret_k'); assert.equal(c.supabaseUrl, 'https://p.supabase.co');
   assert.equal(loadConfig({ ...base, SUPABASE_SERVICE_ROLE_KEY: jwt('service_role') }).serviceKey, jwt('service_role'));
   assert.throws(() => loadConfig({ ...base, SUPABASE_SERVICE_ROLE_KEY: jwt('anon') }), /anon key/);
+});
+
+test('disclosure is per browser session: stored in sessionStorage, tied to the login session, cleared on sign-out', () => {
+  // the stamp is the JWT's session_id: stable across refreshes (new iat), different on every sign-in
+  const a1 = tok({ session_id: 'sess-A', iat: 1 }), a2 = tok({ session_id: 'sess-A', iat: 999 }), b = tok({ session_id: 'sess-B' });
+  assert.equal(sessionStamp(a1), 'sess-A'); assert.equal(sessionStamp(a1), sessionStamp(a2)); assert.notEqual(sessionStamp(a1), sessionStamp(b));
+  assert.equal(sessionStamp(null), ''); assert.equal(sessionStamp('garbage'), ''); assert.equal(sessionStamp(tok({})), '');
+
+  const ss = mem();                                                   // one browser tab session
+  assert.equal(readAck('u1', sessionStamp(a1), ss), false);           // fresh session → modal
+  writeAck('u1', sessionStamp(a1), ss);
+  assert.equal(readAck('u1', sessionStamp(a2), ss), true);            // reload / token refresh inside the same login → no modal
+  assert.equal(readAck('u1', sessionStamp(b), ss), false);            // a NEW login (new session_id) for the same user → modal again
+  assert.equal(readAck('u2', sessionStamp(a1), ss), false);           // another account in the same tab → modal
+
+  const closed = mem();                                               // closing the tab / browser empties sessionStorage
+  assert.equal(readAck('u1', sessionStamp(a1), closed), false);
+
+  writeAck('u1', 'x', ss); writeAck('u2', 'y', ss); ss.setItem('unrelated', '1');
+  clearAck(ss);                                                       // sign-out
+  assert.equal(readAck('u1', 'x', ss), false); assert.equal(readAck('u2', 'y', ss), false); assert.equal(ss.getItem('unrelated'), '1');
+  assert.equal(readAck('u1', sessionStamp(a1), ss), false);           // sign back in → modal immediately
+
+  // demo / local accounts have no token: still per session
+  const d = mem(); writeAck('local1', '', d); assert.equal(readAck('local1', '', d), true); clearAck(d); assert.equal(readAck('local1', '', d), false);
+});
+
+test('disclosure wiring: no localStorage / metadata suppression, sign-out clears it, accept records an audit timestamp', () => {
+  const m = readFileSync('components/RegulatoryDisclosureModal.tsx', 'utf8'), d = readFileSync('lib/disclosure.ts', 'utf8'), a = readFileSync('hooks/useAuth.tsx', 'utf8');
+  assert.ok(!/localStorage/.test(m + d.replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, '')) && !/metadataAcked/.test(m + d), 'metadata/localStorage must not suppress the modal');
+  assert.ok(/sessionStorage/.test(d) && /sessionStamp\(t\)/.test(m) && /saveMetadataAck/.test(m) && /disclosure_ack_at/.test(d));
+  assert.ok(/signOut: async \(\) => \{\s*clearAck\(\)/.test(a), 'signOut clears the acknowledgement');
 });

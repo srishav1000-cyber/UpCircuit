@@ -1,5 +1,6 @@
 'use client';
 
+import { clearAck } from '@/lib/disclosure';
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { type AuthBackend, type AuthResult, type PlanId, type Role, type User } from '@/lib/auth';
 import { pickBackend } from '@/lib/authBackends';
@@ -123,6 +124,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       verifyOtp: (phone, code) => wrap(async () => (be.current?.verifyOtp ? be.current.verifyOtp(phone, code) : { ok: false as const, error: 'Phone OTP login needs Supabase accounts.' })),
       getToken: async () => (await be.current?.accessToken().catch(() => null)) ?? null,
       signOut: async () => {
+        clearAck();                                                  // the next sign-in must accept the regulatory disclosure again
         await be.current?.signOut().catch(() => undefined);
         put(REQUIRED ? null : GUEST);
       },
