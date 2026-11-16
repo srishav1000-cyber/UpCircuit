@@ -30,6 +30,7 @@ import { HomePage } from '@/components/HomePage';
 import { ChartWorkspace } from '@/components/ChartWorkspace';
 import { StockResearchModal } from '@/components/StockResearchModal';
 import { SystemTelemetryModal } from '@/components/SystemTelemetryModal';
+import { RegulatoryDisclosureModal } from '@/components/RegulatoryDisclosureModal';
 import { Week7MilestoneModal } from '@/components/Week7MilestoneModal';
 import { DayTraderDashboard } from '@/components/dashboards/DayTrader';
 import { RetailDashboard } from '@/components/dashboards/Retail';
@@ -136,7 +137,7 @@ function Terminal() {
   const [panel, setPanel] = useState<'overview' | 'dashboard'>('overview');
   const [chartIndex, setChartIndex] = useState<string | null>(null);
   const [research, setResearch] = useState<string | null>(null);
-  const [tf, setTf] = useState<Timeframe>('5m');
+  const [tf, setTf] = useState<Timeframe>('1D');
   const [toast, setToast] = useState<string | null>(null);
   const [askOpen, setAskOpen] = useState(false);
   const [askReq, setAskReq] = useState<AskRequest | null>(null);
@@ -528,7 +529,7 @@ function Terminal() {
         </span>
         <button type="button" onClick={() => setMethodOpen(true)} data-testid="methodology-open" className="cursor-pointer rounded border border-line px-1.5 py-px font-semibold text-accent hover:bg-accent/10">ƒ Methodology</button>
         <button type="button" onClick={() => setTeleOpen(true)} data-testid="telemetry-open" title="Live feed diagnostics" className="cursor-pointer rounded border border-line px-1.5 py-px font-semibold text-accent hover:bg-accent/10">📡 Telemetry</button>
-        <button type="button" onClick={() => setWeek7Open(true)} data-testid="week7-open" title="Week 7 architecture summary" className="cursor-pointer rounded border border-line px-1.5 py-px font-semibold text-accent hover:bg-accent/10">Week 7 Specs</button>
+        <button type="button" onClick={() => setWeek7Open(true)} data-testid="week7-open" title="Platform architecture summary" className="cursor-pointer rounded border border-line px-1.5 py-px font-semibold text-accent hover:bg-accent/10">Platform Specs</button>
         <span className="ml-auto hidden sm:inline">{mode === 'live' ? 'Prices streamed via Angel One SmartAPI; fundamentals not available from the feed show N/A.' : 'Prices are real NSE session data; fundamentals not available from the feed show N/A.'} Not investment advice.</span>
       </footer>
 
@@ -664,5 +665,10 @@ function Gate() {
     }
     return <AuthScreen />;
   }
-  return <Terminal key={user.id} />;
+  return (
+    <>
+      <Terminal key={user.id} />
+      <RegulatoryDisclosureModal />
+    </>
+  );
 }

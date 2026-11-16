@@ -1,14 +1,16 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
+import { useAuth } from '@/hooks/useAuth';
 import { useCloud } from '@/hooks/useCloud';
 import { useNotify } from '@/hooks/useNotify';
-import { currentPushEndpoint, disablePush, enablePush, pushConfigured, pushSupported } from '@/lib/pushNotifications';
+import { currentPushEndpoint, disablePush, enablePush, pushConfigured, pushSupported, syncPushDevice } from '@/lib/pushNotifications';
 
 /** Web Push on/off for THIS device (shared by the profile popover and Settings): subscribes / unsubscribes and records the device in the account. */
 export function usePushToggle() {
   const { cloud, userId } = useCloud();
   const { prefs, set } = useNotify();
+  const { getToken } = useAuth();
   const [device, setDevice] = useState<'unknown' | 'on' | 'off'>('unknown');
   const [busy, setBusy] = useState(false);
   const [perm, setPerm] = useState<string>('default');
@@ -39,12 +41,13 @@ export function usePushToggle() {
         if (pushSupported()) setPerm(Notification.permission);
         return setMsg({ kind: 'err', text: r.error });
       }
+      void getToken().then((t) => (t ? syncPushDevice(t) : null)).catch(() => null);   // belt and braces: also register through the server
       set({ push: true });
       setDevice('on');
       setPerm('granted');
       setMsg({ kind: 'ok', text: 'Push notifications are on — circuit alerts will reach this device.' });
     },
-    [cloud, userId, set],
+    [cloud, userId, set, getToken],
   );
 
   const hint = !pushSupported() ? 'Not supported in this browser (on iPhone, install UpCircuit to the Home Screen first).' : !pushConfigured() ? 'Not configured on this deployment (VAPID keys missing).' : perm === 'denied' ? 'Blocked in your browser — allow notifications for this site, then switch on.' : prefs.push && device === 'off' ? 'Enabled on your account but not on this device — switch on to subscribe it.' : 'Circuit-limit alerts pushed to your phone, even from another device’s terminal.';

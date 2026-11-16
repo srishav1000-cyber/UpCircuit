@@ -1,3 +1,4 @@
+import { adminHeaders } from '@/lib/supabaseAdmin';
 import { NextRequest } from 'next/server';
 import webpush from 'web-push';
 import { runAlertWorker, ruleEmail, type WorkerDeps } from '@/lib/alertWorker';
@@ -25,7 +26,7 @@ async function handle(req: NextRequest) {
   if (given.length !== secret.length || !timingSafe(given, secret)) return Response.json({ ok: false, error: 'Unauthorized.' }, { status: 401 });
 
   const base = url.replace(/\/+$/, '');
-  const h = { apikey: key, Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' };
+  const h = adminHeaders(key, true);
   const rest = (path: string, init: RequestInit = {}) => fetch(`${base}/rest/v1/${path}`, { ...init, headers: { ...h, ...(init.headers as Record<string, string> | undefined) }, signal: AbortSignal.timeout(8000) });
   const pub = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY, priv = process.env.VAPID_PRIVATE_KEY, subject = process.env.VAPID_SUBJECT;
   if (pub && priv && subject) webpush.setVapidDetails(subject, pub, priv);

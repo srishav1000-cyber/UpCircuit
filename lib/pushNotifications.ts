@@ -68,3 +68,18 @@ export async function disablePush(cloud: CloudClient | null, userId: string | nu
     /* best effort */
   }
 }
+
+/** Idempotently registers THIS browser's existing PushSubscription with the account through the server (PUT /api/alerts/push). No prompt; no-op without a granted permission + subscription. */
+export async function syncPushDevice(token: string): Promise<'registered' | 'none' | 'failed'> {
+  if (!pushSupported() || Notification.permission !== 'granted') return 'none';
+  try {
+    const reg = await navigator.serviceWorker.getRegistration();
+    const sub = await reg?.pushManager.getSubscription();
+    const row = sub ? toPushSub(sub) : null;
+    if (!row) return 'none';
+    const r = await fetch('/api/alerts/push', { method: 'PUT', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ subscription: row }), cache: 'no-store' });
+    return r.ok ? 'registered' : 'failed';
+  } catch {
+    return 'failed';
+  }
+}

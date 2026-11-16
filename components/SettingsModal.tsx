@@ -1,5 +1,6 @@
 'use client';
 
+import { AlertChannelsStatus } from '@/components/settings/AlertChannelsStatus';
 import { TestPushSection } from '@/components/settings/TestPushSection';
 import { QuietHoursSection } from '@/components/settings/QuietHoursSection';
 import { downloadText } from '@/lib/csvOut';
@@ -244,11 +245,12 @@ function AlertsTab() {
         <h3 className={h2}>Channels</h3>
         <div className="divide-y divide-line">
           <Toggle testid="toggle-push" on={push.on} disabled={push.busy || !push.supported} onChange={(v) => void push.toggle(v)} label="Web Push Notifications" hint={push.hint} />
-          <Toggle testid="toggle-email" on={prefs.email} onChange={(v) => set({ email: v })} label="Email Circuit Alerts" hint={user?.email ? `Sent to ${user.email} when a stock hits an upper or lower circuit.` : 'Add an e-mail address to receive these.'} disabled={!user?.email} />
+          <Toggle testid="toggle-email" on={prefs.email} onChange={(v) => set({ email: v })} label="Email Alerts" hint={user?.email ? `Sent to ${user.email} for circuit hits and the alert rules you enable e-mail on.` : 'Add an e-mail address to receive these.'} disabled={!user?.email} />
           <Toggle testid="toggle-audio" on={prefs.audio} onChange={(v) => set({ audio: v })} label="Audio Alarm Chimes" hint="Siren for lower circuits, chime for upper circuits while the terminal is open." />
         </div>
         {push.msg && <p role="status" data-testid="settings-msg" className={`mt-3 rounded-md px-3 py-2 text-[12px] ${push.msg.kind === 'ok' ? 'bg-up/10 text-up' : 'bg-down/10 text-down'}`}>{push.msg.text}</p>}
       </section>
+      <AlertChannelsStatus />
       <TestPushSection />
       <QuietHoursSection />
       <section className={card} data-testid="settings-sound">

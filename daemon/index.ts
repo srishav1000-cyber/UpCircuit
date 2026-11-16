@@ -1,6 +1,7 @@
 // UpCircuit alert daemon — a long-running process (NOT a Vercel function) that holds the SmartAPI socket, keeps every enabled alert rule in memory,
 // evaluates each live tick against the rules for its symbol, and sends Web Push through the dispatcher the moment a rule crosses.
 // Run:  npm run daemon      (Node ≥ 20, e.g. Fly.io / Railway / Render / a VM — see docs/WEEK9_DAEMON.md)
+import { adminHeaders } from '../lib/supabaseAdmin';
 import { createServer } from 'node:http';
 import { createClient, type RealtimeChannel } from '@supabase/supabase-js';
 import { WebSocket as NodeWebSocket } from 'ws';
@@ -56,7 +57,7 @@ export async function main(cfg = loadConfig(), env: Env = process.env): Promise<
   const dispatcher = createDispatcher({
     supabaseUrl: cfg.supabaseUrl, serviceKey: cfg.serviceKey, vapid: cfg.vapid, ackSecret: ackSecret(env), pushEndpointAllow: env.PUSH_ENDPOINT_ALLOW, emailEnabled: !!env.RESEND_API_KEY, log,
   });
-  const sbHeaders = { apikey: cfg.serviceKey, Authorization: `Bearer ${cfg.serviceKey}`, 'Content-Type': 'application/json' };
+  const sbHeaders = adminHeaders(cfg.serviceKey, true);
   const sbBase = cfg.supabaseUrl.replace(/\/+$/, '');
   // volume baselines: real daily bars (Yahoo, the repo's existing historical source — the SmartAPI login deliberately never exposes a JWT for getCandleData)
   const baselines = new BaselineStore({
@@ -128,7 +129,7 @@ export async function main(cfg = loadConfig(), env: Env = process.env): Promise<
   let subscribed = new Set<string>();
 
   /* ───── rules: initial load + resync + Realtime ───── */
-  const restHeaders = { apikey: cfg.serviceKey, Authorization: `Bearer ${cfg.serviceKey}` };
+  const restHeaders = adminHeaders(cfg.serviceKey);
   async function fetchAllRules() {
     const out = [];
     for (let offset = 0; ; offset += 1000) {

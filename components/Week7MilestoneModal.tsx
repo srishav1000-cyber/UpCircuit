@@ -53,7 +53,7 @@ const SECTIONS: { id: string; title: string; points: string[] }[] = [
   },
 ];
 
-/** "Week 7 Specs" — one-screen architecture summary for the project submission. Esc or backdrop closes. */
+/** "Platform Specs" — one-screen architecture summary for the project submission. Esc or backdrop closes. */
 export function Week7MilestoneModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -70,14 +70,14 @@ export function Week7MilestoneModal({ open, onClose }: { open: boolean; onClose:
   if (!open) return null;
   return (
     <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/60 p-3" onMouseDown={(e) => e.target === e.currentTarget && onClose()} data-testid="week7-backdrop">
-      <div ref={ref} tabIndex={-1} role="dialog" aria-modal="true" aria-label="Week 7 specs" data-testid="week7-modal" className="flex max-h-[92vh] w-full max-w-[760px] flex-col overflow-hidden rounded-lg border border-line bg-panel shadow-2xl outline-none">
+      <div ref={ref} tabIndex={-1} role="dialog" aria-modal="true" aria-label="Platform specs" data-testid="week7-modal" className="flex max-h-[92vh] w-full max-w-[760px] flex-col overflow-hidden rounded-lg border border-line bg-panel shadow-2xl outline-none">
         <header className="flex items-start justify-between gap-3 border-b border-line px-5 py-4">
           <div>
-            <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-accent">Week 7 milestone</p>
+            <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-accent">Platform specs</p>
             <h2 className="text-[18px] font-bold text-ink">UpCircuit — system specification</h2>
             <p className="text-[11.5px] text-muted">Real-Time Stock Market Analytics &amp; Circuit Breaker Engine · M.Sc. Data Science capstone</p>
           </div>
-          <button onClick={onClose} aria-label="Close Week 7 specs" data-testid="week7-close" className="flex h-8 w-8 shrink-0 items-center justify-center rounded border border-line text-[18px] leading-none text-muted hover:bg-line hover:text-ink">×</button>
+          <button onClick={onClose} aria-label="Close platform specs" data-testid="week7-close" className="flex h-8 w-8 shrink-0 items-center justify-center rounded border border-line text-[18px] leading-none text-muted hover:bg-line hover:text-ink">×</button>
         </header>
         <div className="space-y-4 overflow-y-auto px-5 py-4">
           {SECTIONS.map((s) => (

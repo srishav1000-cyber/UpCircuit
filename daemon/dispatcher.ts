@@ -2,6 +2,7 @@
 // All I/O is injectable (fetch, push sender, clock) so it is unit-testable; the Next.js test-push route reuses it.
 import { randomUUID } from 'node:crypto';
 import webpush from 'web-push';
+import { adminHeaders } from '../lib/supabaseAdmin';
 import type { PushSub } from '../lib/cloud';
 import { fanOut, isB64Url, isPushEndpoint, type SendFn } from '../lib/pushSender';
 import { ackToken } from '../lib/ackToken';
@@ -52,7 +53,7 @@ export function createDispatcher(cfg: DispatcherConfig) {
   const concurrency = cfg.concurrency ?? 16;
   const subsTtl = cfg.subsTtlMs ?? 60_000;
   const ttl = cfg.ttlSec ?? 300;
-  const headers = { apikey: cfg.serviceKey, Authorization: `Bearer ${cfg.serviceKey}`, 'Content-Type': 'application/json' };
+  const headers = adminHeaders(cfg.serviceKey, true);
   const rest = (path: string, init: RequestInit = {}) =>
     f(`${base}/rest/v1/${path}`, { ...init, headers: { ...headers, ...(init.headers as Record<string, string> | undefined) }, signal: AbortSignal.timeout(8000) });
 

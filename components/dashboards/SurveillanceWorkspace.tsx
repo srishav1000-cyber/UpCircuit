@@ -40,7 +40,10 @@ interface BacktestFile {
   precision?: number | null;
   recall?: Record<string, { episodes: number; detected: number; rate: number | null; medianDelayMs: number | null }> | null;
 }
-const pctTxt = (x: number | null | undefined) => (x === null || x === undefined ? 'N/A' : `${(x * 100).toFixed(0)}%`);
+const pctTxt = (x: number | null | undefined, d = 1) => (x === null || x === undefined ? 'N/A' : `${(x * 100).toFixed(d)}%`);
+/** high-contrast text for the dark glass panes (values / labels) */
+const HI = '#f8fafc', LO = '#cbd5e1';
+const fmtUS = (n: number) => n.toLocaleString('en-US');
 
 /** Compact status card: the intraday volume curve the volume_surge rule compares against, plus the offline heuristic-flag backtest and this session's flag tally. */
 function BacktestCurveCard({ symbol, profile, volume, sessionFlags }: { symbol: string; profile: IntradayProfile | null; volume: number | null; sessionFlags: { wall: number; add_cancel: number } }) {
@@ -85,15 +88,16 @@ function BacktestCurveCard({ symbol, profile, volume, sessionFlags }: { symbol: 
           {bt === null ? <p className="py-4 text-[12px] text-muted">Loading…</p>
             : bt === 'none' || !bt.data ? <p data-testid="desk-bt-na" className="py-3 text-[12px] text-muted">N/A — no backtest result published. Run <code className="text-ink">npx tsx scripts/backtest-heuristics.ts --out public/backtest-heuristics.json</code>.</p>
             : (
-              <ul className="space-y-0.5 text-[12px]" data-testid="desk-bt-rows">
-                <li className="flex justify-between"><span className="text-muted">Data</span><span className="num" data-testid="desk-bt-data">{fmtN(bt.data.snapshots)} snapshots · {bt.data.symbols} symbols{synth ? ' · synthetic' : ''}</span></li>
-                <li className="flex justify-between"><span className="text-muted">Precision</span><b className="num" data-testid="desk-bt-precision" style={{ color: GOLD }}>{pctTxt(bt.precision)}</b></li>
-                <li className="flex justify-between"><span className="text-muted">Recall wall / add-cancel</span><span className="num" data-testid="desk-bt-recall">{pctTxt(bt.recall?.spoof_wall?.rate)} / {pctTxt(bt.recall?.flicker?.rate)}</span></li>
-                <li className="flex justify-between"><span className="text-muted">Flags per 1 000 snapshots</span><span className="num">{bt.flags?.per1000Snapshots ?? 'N/A'}</span></li>
+              <ul className="space-y-1 text-[12px]" data-testid="desk-bt-rows">
+                <li className="flex justify-between gap-3"><span style={{ color: LO }}>Data</span><span className="num font-semibold" style={{ color: HI }} data-testid="desk-bt-data">{fmtUS(bt.data.snapshots)} snapshots · {bt.data.symbols} symbols{synth ? ' · synthetic' : ''}</span></li>
+                <li className="flex justify-between gap-3"><span style={{ color: LO }}>Precision</span><b className="num" data-testid="desk-bt-precision" style={{ color: GOLD }}>{pctTxt(bt.precision)}</b></li>
+                <li className="flex justify-between gap-3"><span style={{ color: LO }}>Recall · spoof_wall</span><b className="num" style={{ color: HI }} data-testid="desk-bt-recall-wall">{pctTxt(bt.recall?.spoof_wall?.rate)}</b></li>
+                <li className="flex justify-between gap-3"><span style={{ color: LO }}>Recall · flicker</span><b className="num" style={{ color: HI }} data-testid="desk-bt-recall-flicker">{pctTxt(bt.recall?.flicker?.rate)}</b></li>
+                <li className="flex justify-between gap-3"><span style={{ color: LO }}>Flags per 1 000 snapshots</span><span className="num font-semibold" style={{ color: HI }}>{bt.flags?.per1000Snapshots ?? 'N/A'}</span></li>
               </ul>
             )}
-          <div className="num mt-2 text-[11px] text-muted" data-testid="desk-session-flags">Recent flags: wall {sessionFlags.wall} · add/cancel {sessionFlags.add_cancel}</div>
-          {synth && <p className="mt-1 text-[10px] leading-snug text-muted" data-testid="desk-bt-caveat">Synthetic data: precision depends on the assumed book noise and describes agreement with the generator’s own pattern definition — not how often real markets are manipulated.</p>}
+          <div className="num mt-2 text-[11px]" style={{ color: LO }} data-testid="desk-session-flags">Recent flags: wall {sessionFlags.wall} · add/cancel {sessionFlags.add_cancel}</div>
+          {synth && <p className="mt-1 text-[10px] leading-snug" style={{ color: LO }} data-testid="desk-bt-caveat">Synthetic data: precision depends on the assumed book noise and describes agreement with the generator’s own pattern definition — not how often real markets are manipulated.</p>}
         </div>
       </div>
     </section>
