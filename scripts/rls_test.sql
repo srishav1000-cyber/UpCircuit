@@ -310,4 +310,12 @@ select t.ok(t.try('select count(*) from public.daemon_leases', :alice) <> '', 'u
 select t.ok(t.try('update public.volume_baselines set profile = ''{"cum":[1,2]}'' where symbol = ''ABC''', :alice, 'service_role') <> '', 'a profile whose cum array is not 25 long is rejected');
 select t.ok(t.try('update public.volume_baselines set profile = (select jsonb_build_object(''cum'', (select jsonb_agg(g) from generate_series(1,25) g), ''sessions'', 12)), profile_sessions = 12 where symbol = ''ABC''', :alice, 'service_role') = '', 'a 25-bucket profile is accepted');
 
+-- Week 11: synced UI prefs + labelled push devices
+select t.ok(t.try('insert into public.preferences(user_id, ui) values (''00000000-0000-0000-0000-00000000000a'', ''{"tf":"5m","ind":{"rsi":true},"updatedAt":5}'')  on conflict (user_id) do update set ui = excluded.ui', :alice) = '', 'a user can save their UI preferences');
+select t.ok(t.try('update public.preferences set ui = ''"junk"'' where user_id = ''00000000-0000-0000-0000-00000000000a''', :alice) <> '', 'ui must be a JSON object');
+select t.ok(t.try('update public.preferences set ui = (select jsonb_build_object(''pad'', repeat(''x'', 3000))) where user_id = ''00000000-0000-0000-0000-00000000000a''', :alice) <> '', 'ui is size-capped');
+select t.ok(t.try('insert into public.push_subscriptions(user_id, endpoint, keys, label, platform) values (''00000000-0000-0000-0000-00000000000a'', ''https://fcm.googleapis.com/fcm/send/w11'', ''{}'', ''Android · Chrome'', ''Android'')', :alice) = '', 'a user can register a labelled device');
+select t.ok(t.try('insert into public.push_subscriptions(user_id, endpoint, keys, label) values (''00000000-0000-0000-0000-00000000000a'', ''https://fcm.googleapis.com/fcm/send/w11b'', ''{}'', repeat(''x'', 200))', :alice) <> '', 'device label is length-capped');
+select t.ok(t.try('delete from public.push_subscriptions where endpoint = ''https://fcm.googleapis.com/fcm/send/w11''', :alice) = '', 'a user can remove their own device');
+
 select count(*) || ' assertions passed' as result from t.log;

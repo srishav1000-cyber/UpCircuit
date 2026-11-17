@@ -25,19 +25,37 @@ type Row = { endpoint?: unknown; keys?: { p256dh?: unknown; auth?: unknown } };
 const validRows = (rows: Row[]): PushSub[] => rows.flatMap((x) => (isPushEndpoint(x.endpoint, process.env.PUSH_ENDPOINT_ALLOW) && isB64Url(x.keys?.p256dh, 40) && isB64Url(x.keys?.auth, 10, 40) ? [{ endpoint: x.endpoint as string, keys: { p256dh: x.keys!.p256dh as string, auth: x.keys!.auth as string } }] : []));
 
 type Attempt = { via: 'service' | 'user'; failure: SbFailure };
-/** reads this user's devices. Tries the service key first (when it looks valid) and, if Supabase rejects it, falls back to the user's own token — every failure is kept verbatim. */
-async function readDevices(userId: string, token: string): Promise<{ ok: true; subs: PushSub[]; via: 'service' | 'user'; attempts: Attempt[] } | { ok: false; attempts: Attempt[] }> {
+export interface DeviceRow { id: string | null; label: string; platform: string | null; addedAt: string | null; tail: string; usable: boolean }
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const cleanText = (v: unknown, max: number): string | null => (typeof v === 'string' && v.trim() ? v.replace(/[\u0000-\u001f<>]/g, '').trim().slice(0, max) : null);
+const legacyLabel = (endpoint: string) => (/fcm\.googleapis|android\.googleapis/.test(endpoint) ? 'Chrome / Android / Edge (Google push)' : /push\.apple/.test(endpoint) ? 'Apple device (Safari / Home Screen)' : /mozilla/.test(endpoint) ? 'Firefox' : /notify\.windows|wns/.test(endpoint) ? 'Windows (Edge)' : 'Browser');
+/** reads this user's devices. Tries the service key first (when it looks valid) and, if Supabase rejects it, falls back to the user's own token — every failure is kept verbatim. The label columns (docs/WEEK11_SCHEMA.sql) are optional. */
+async function readDevices(userId: string, token: string): Promise<{ ok: true; subs: PushSub[]; list: DeviceRow[]; via: 'service' | 'user'; attempts: Attempt[] } | { ok: false; attempts: Attempt[] }> {
   const attempts: Attempt[] = [];
   const order: ('service' | 'user')[] = hasServiceKey() ? ['service', 'user'] : ['user'];
   for (const via of order) {
     const a = access(token, via);
-    let r: Response | null = null, err: unknown;
-    try { r = await fetch(`${a.base}/rest/v1/push_subscriptions?user_id=eq.${encodeURIComponent(userId)}&select=endpoint,keys`, { headers: a.headers, cache: 'no-store', signal: AbortSignal.timeout(8000) }); } catch (e) { err = e; }
-    if (r?.ok) {
-      const rows = (await r.json().catch(() => [])) as Row[];
-      return { ok: true, subs: validRows(Array.isArray(rows) ? rows : []), via, attempts };
+    for (const cols of ['id,endpoint,keys,label,platform,created_at', 'id,endpoint,keys']) {
+      let r: Response | null = null, err: unknown;
+      try { r = await fetch(`${a.base}/rest/v1/push_subscriptions?user_id=eq.${encodeURIComponent(userId)}&select=${cols}&order=created_at.asc.nullslast`, { headers: a.headers, cache: 'no-store', signal: AbortSignal.timeout(8000) }); } catch (e) { err = e; }
+      if (r?.ok) {
+        const rows = (await r.json().catch(() => [])) as (Row & { id?: unknown; label?: unknown; platform?: unknown; created_at?: unknown })[];
+        const arr = Array.isArray(rows) ? rows : [];
+        const okSubs = validRows(arr);
+        const list: DeviceRow[] = arr.map((x) => ({
+          id: typeof x.id === 'string' && UUID.test(x.id) ? x.id : null,
+          label: cleanText(x.label, 80) ?? (typeof x.endpoint === 'string' ? legacyLabel(x.endpoint) : 'Browser'),
+          platform: cleanText(x.platform, 24), addedAt: typeof x.created_at === 'string' ? x.created_at : null,
+          tail: typeof x.endpoint === 'string' ? x.endpoint.slice(-12) : '',
+          usable: okSubs.some((sub) => sub.endpoint === x.endpoint),
+        }));
+        return { ok: true, subs: okSubs, list, via, attempts };
+      }
+      const f = await sbFailure(r, err);
+      if (cols.includes('label') && (f.status === 400 || /column|42703/i.test(f.message + (f.code ?? '')))) continue;   // label columns not migrated yet → plain select
+      attempts.push({ via, failure: f });
+      break;
     }
-    attempts.push({ via, failure: await sbFailure(r, err) });
   }
   return { ok: false, attempts };
 }
@@ -75,7 +93,7 @@ export async function GET(req: NextRequest) {
   const vapid = Boolean(process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY && process.env.VAPID_PRIVATE_KEY && process.env.VAPID_SUBJECT);
   const email = resendConfigured();
   return Response.json({
-    ok: true, devices: d.subs.length, readVia: d.via, endpoints: d.subs.map((x) => x.endpoint.slice(-12)),
+    ok: true, devices: d.subs.length, deviceList: d.list, readVia: d.via, endpoints: d.subs.map((x) => x.endpoint.slice(-12)),
     push: { configured: vapid, note: vapid ? undefined : 'Web Push needs NEXT_PUBLIC_VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY and VAPID_SUBJECT on the server.' },
     email: { configured: email, to: s.user.email, note: email ? undefined : 'E-mail alerts are not configured: RESEND_API_KEY is not set on the server.' },
     kinds: ['price_above', 'price_below', 'pct_up', 'pct_down', 'volume_surge', 'order_imbalance_above', 'order_imbalance_below', 'circuit_proximity'],
@@ -85,18 +103,25 @@ export async function GET(req: NextRequest) {
 /** PUT /api/alerts/push { subscription: { endpoint, keys:{p256dh,auth} } } → registers / refreshes THIS browser's PushSubscription (idempotent) */
 export async function PUT(req: NextRequest) {
   const s = await session(req); if (s.err) return s.err;
-  let b: { subscription?: { endpoint?: unknown; keys?: { p256dh?: unknown; auth?: unknown } } };
+  let b: { label?: unknown; platform?: unknown; subscription?: { endpoint?: unknown; keys?: { p256dh?: unknown; auth?: unknown } } };
   try { b = await req.json(); } catch { return Response.json({ ok: false, error: 'Bad JSON.' }, { status: 400 }); }
   const [sub] = validRows([b.subscription ?? {}]);
   if (!sub) return Response.json({ ok: false, error: 'Invalid push subscription.' }, { status: 400 });
   if (!(await allowAsync(`pushreg:${s.user.id}`, 30, 3600_000))) return Response.json({ ok: false, error: 'Too many registrations — try later.' }, { status: 429 });
   const attempts: Attempt[] = [];
+  const label = cleanText(b.label, 80), platform = cleanText(b.platform, 24);
   for (const via of (hasServiceKey() ? ['service', 'user'] : ['user']) as ('service' | 'user')[]) {
     const a = access(s.token, via);
-    let r: Response | null = null, err: unknown;
-    try { r = await fetch(`${a.base}/rest/v1/push_subscriptions?on_conflict=user_id,endpoint`, { method: 'POST', headers: { ...a.headers, Prefer: 'resolution=merge-duplicates,return=minimal' }, body: JSON.stringify([{ user_id: s.user.id, endpoint: sub.endpoint, keys: sub.keys }]), signal: AbortSignal.timeout(8000) }); } catch (e) { err = e; }
-    if (r?.ok) return Response.json({ ok: true, registered: true, via });
-    attempts.push({ via, failure: await sbFailure(r, err) });
+    for (const withLabel of label ? [true, false] : [false]) {
+      const row = { user_id: s.user.id, endpoint: sub.endpoint, keys: sub.keys, ...(withLabel ? { label, platform, last_seen: new Date().toISOString() } : {}) };
+      let r: Response | null = null, err: unknown;
+      try { r = await fetch(`${a.base}/rest/v1/push_subscriptions?on_conflict=user_id,endpoint`, { method: 'POST', headers: { ...a.headers, Prefer: 'resolution=merge-duplicates,return=minimal' }, body: JSON.stringify([row]), signal: AbortSignal.timeout(8000) }); } catch (e) { err = e; }
+      if (r?.ok) return Response.json({ ok: true, registered: true, via, label: withLabel ? label : null });
+      const f = await sbFailure(r, err);
+      if (withLabel && (f.status === 400 || /column|42703/i.test(f.message + (f.code ?? '')))) continue;   // label columns not migrated: register without them
+      attempts.push({ via, failure: f });
+      break;
+    }
   }
   const f = attempts[attempts.length - 1].failure;
   return Response.json({ ok: false, error: `Could not save this device — ${sbFailureText(f)}`, supabase: attempts.map((x) => ({ via: x.via, status: x.failure.status, code: x.failure.code ?? null, message: x.failure.message })) }, { status: 502 });
@@ -144,4 +169,21 @@ export async function POST(req: NextRequest) {
   await Promise.all(res.gone.map((e) => fetch(`${pa.base}/rest/v1/push_subscriptions?user_id=eq.${encodeURIComponent(user.id)}&endpoint=eq.${encodeURIComponent(e)}`, { method: 'DELETE', headers: pa.headers }).catch(() => null)));
   if (res.sent) sentToday.set(dedupe, true);
   return Response.json({ ok: true, sent: res.sent, failed: res.failed, devices: subs.length, pruned: res.gone.length });
+}
+
+/** DELETE /api/alerts/push { id } → removes ONE of this account's registered devices (e.g. an old phone) */
+export async function DELETE(req: NextRequest) {
+  const s = await session(req); if (s.err) return s.err;
+  let b: { id?: unknown };
+  try { b = await req.json(); } catch { return Response.json({ ok: false, error: 'Bad JSON.' }, { status: 400 }); }
+  if (typeof b.id !== 'string' || !UUID.test(b.id)) return Response.json({ ok: false, error: 'Bad device id.' }, { status: 400 });
+  const attempts: Attempt[] = [];
+  for (const via of (hasServiceKey() ? ['service', 'user'] : ['user']) as ('service' | 'user')[]) {
+    const a = access(s.token, via);
+    let r: Response | null = null, err: unknown;
+    try { r = await fetch(`${a.base}/rest/v1/push_subscriptions?user_id=eq.${encodeURIComponent(s.user.id)}&id=eq.${b.id}`, { method: 'DELETE', headers: { ...a.headers, Prefer: 'return=minimal' }, signal: AbortSignal.timeout(8000) }); } catch (e) { err = e; }
+    if (r?.ok) return Response.json({ ok: true, removed: true });
+    attempts.push({ via, failure: await sbFailure(r, err) });
+  }
+  return Response.json({ ok: false, error: `Could not remove this device — ${sbFailureText(attempts[attempts.length - 1].failure)}`, supabase: attempts.map((x) => ({ via: x.via, status: x.failure.status, code: x.failure.code ?? null, message: x.failure.message })) }, { status: 502 });
 }

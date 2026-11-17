@@ -25,6 +25,7 @@ export function TestPushSection() {
   const { cloud } = useCloud();
   const [checks, setChecks] = useState<Check[]>([]);
   const [phase, setPhase] = useState<Phase>({ k: 'idle' });
+  const [emailMsg, setEmailMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const timer = useRef<ReturnType<typeof setInterval> | null>(null);
   const alive = useRef(true);
 
@@ -48,14 +49,16 @@ export function TestPushSection() {
   async function run() {
     if (timer.current) clearInterval(timer.current);
     setPhase({ k: 'sending' });
+    setEmailMsg(null);
     void refreshChecks();
     const token = await getToken().catch(() => null);
     if (!token) return setPhase({ k: 'error', text: 'Sign in with an account (e-mail, Google or phone) to test push.' });
-    let r: { ok?: boolean; error?: string; deliveryId?: string; sent?: number; devices?: number };
+    let r: { ok?: boolean; error?: string; deliveryId?: string; sent?: number; devices?: number; email?: { configured: boolean; sent: boolean; to?: string; error?: string } };
     try {
       const res = await fetch('/api/alerts/test', { method: 'POST', headers: { Authorization: `Bearer ${token}` }, cache: 'no-store' });
       r = await res.json().catch(() => ({}));
       if (!res.ok && !r.error) r = { error: `Server answered ${res.status}.` };
+      if (r.email) setEmailMsg(r.email.sent ? { ok: true, text: `Test e-mail sent to ${r.email.to}.` } : { ok: false, text: r.email.error ?? 'E-mail was not sent.' });
     } catch {
       return setPhase({ k: 'error', text: 'Could not reach the server.' });
     }
@@ -105,6 +108,7 @@ export function TestPushSection() {
           </p>
         )}
         {phase.k === 'noack' && <p className="rounded-md bg-warn/10 px-3 py-2 text-warn" data-testid="testpush-noack">The push service accepted it for {phase.sent}/{phase.devices} device(s), but no device confirmed within {GIVE_UP_MS / 1000} s. The device may be offline, the browser fully closed (desktop), or notifications are silenced by the OS.</p>}
+        {emailMsg && <p data-testid="testpush-email" data-ok={String(emailMsg.ok)} className={`rounded-md px-3 py-2 ${emailMsg.ok ? 'bg-up/10 text-up' : 'bg-line text-muted'}`}>{emailMsg.text}</p>}
         {phase.k === 'error' && <p role="alert" className="rounded-md bg-down/10 px-3 py-2 text-down" data-testid="testpush-error">{phase.text}</p>}
       </div>
     </section>

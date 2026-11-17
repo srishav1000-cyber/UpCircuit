@@ -30,6 +30,7 @@ import { HomePage } from '@/components/HomePage';
 import { ChartWorkspace } from '@/components/ChartWorkspace';
 import { StockResearchModal } from '@/components/StockResearchModal';
 import { SystemTelemetryModal } from '@/components/SystemTelemetryModal';
+import { useUi, useUiSync } from '@/hooks/useUiPrefs';
 import { RegulatoryDisclosureModal } from '@/components/RegulatoryDisclosureModal';
 import { Week7MilestoneModal } from '@/components/Week7MilestoneModal';
 import { DayTraderDashboard } from '@/components/dashboards/DayTrader';
@@ -137,7 +138,10 @@ function Terminal() {
   const [panel, setPanel] = useState<'overview' | 'dashboard'>('overview');
   const [chartIndex, setChartIndex] = useState<string | null>(null);
   const [research, setResearch] = useState<string | null>(null);
-  const [tf, setTf] = useState<Timeframe>('1D');
+  const [ui, patchUi] = useUi();                                     // chart timeframe + indicators: synced to the account (hooks/useUiPrefs)
+  useUiSync();
+  const tf = ui.tf;
+  const setTf = useCallback((t: Timeframe) => patchUi({ tf: t }), [patchUi]);
   const [toast, setToast] = useState<string | null>(null);
   const [askOpen, setAskOpen] = useState(false);
   const [askReq, setAskReq] = useState<AskRequest | null>(null);
@@ -299,7 +303,7 @@ function Terminal() {
         case 'Escape': return setAlertFor(null);
       }
     },
-    [deepResearch, toggleWatchlist, setAlert],
+    [deepResearch, toggleWatchlist, setAlert, setTf],
   );
 
   useHotkeys(

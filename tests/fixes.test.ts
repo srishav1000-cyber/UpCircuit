@@ -2,6 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { DEFAULT_UI } from '../lib/uiPrefs';
 import { adminHeaders, cleanEnv, cleanUrl, isOpaqueKey, keyKind, privilegedKeyProblem, sbFailure, sbFailureText } from '../lib/supabaseAdmin';
 import { loadConfig } from '../daemon/index';
 import { DISCLOSURE_POINTS, clearAck, disclosureKey, readAck, sessionStamp, writeAck } from '../lib/disclosure';
@@ -30,7 +31,7 @@ test('disclosure: per user + version, persisted, covers the three required state
 
 test('defaults + wording: chart opens on 1D, footer says Platform Specs, no hard-coded week numbers in the UI', () => {
   const page = readFileSync('app/page.tsx', 'utf8');
-  assert.match(page, /useState<Timeframe>\('1D'\)/); assert.ok(/>Platform Specs</.test(page) && !/Week 7 Specs/.test(page));
+  assert.match(page, /const tf = ui\.tf/); assert.equal(DEFAULT_UI.tf, '1D'); assert.ok(/>Platform Specs</.test(page) && !/Week 7 Specs/.test(page));
   for (const f of ['app/page.tsx', 'components/Week7MilestoneModal.tsx']) assert.ok(!/\bWeek ?\d+\b/i.test(readFileSync(f, 'utf8').replace(/data-testid=("[^"]*"|{`[^`]*`})/g, '')), f);
 });
 

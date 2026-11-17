@@ -1,3 +1,4 @@
+import { describeDevice, isStandalone } from './deviceLabel';
 // Browser side of Web Push: permission → service-worker subscription (VAPID) → stored in Supabase `push_subscriptions`.
 import type { CloudClient, PushSub } from './cloud';
 
@@ -47,7 +48,8 @@ export async function enablePush(cloud: CloudClient, userId: string): Promise<Pu
     const sub = (await reg.pushManager.getSubscription()) ?? (await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY) as BufferSource }));
     const row = toPushSub(sub);
     if (!row) return { ok: false, error: 'The browser returned an incomplete push subscription.' };
-    await cloud.savePushSubscription(userId, row);
+    const dev = describeDevice(navigator.userAgent, isStandalone());
+    await cloud.savePushSubscription(userId, row, { label: dev.label, platform: dev.platform });
     return { ok: true, endpoint: row.endpoint };
   } catch {
     return { ok: false, error: 'Could not enable push notifications — check your connection and try again.' };
@@ -77,7 +79,7 @@ export async function syncPushDevice(token: string): Promise<'registered' | 'non
     const sub = await reg?.pushManager.getSubscription();
     const row = sub ? toPushSub(sub) : null;
     if (!row) return 'none';
-    const r = await fetch('/api/alerts/push', { method: 'PUT', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ subscription: row }), cache: 'no-store' });
+    const r = await fetch('/api/alerts/push', { method: 'PUT', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ subscription: row, ...(() => { const d = describeDevice(navigator.userAgent, isStandalone()); return { label: d.label, platform: d.platform }; })() }), cache: 'no-store' });
     return r.ok ? 'registered' : 'failed';
   } catch {
     return 'failed';

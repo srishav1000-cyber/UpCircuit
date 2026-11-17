@@ -363,6 +363,7 @@ function CloudTab() {
   const [msg, setMsg] = useState('');
   if (!user) return null;
   const last = sync.lastOkAt ? new Date(sync.lastOkAt).toLocaleTimeString() : null;
+  const saved = sync.lastSaveAt ? new Date(sync.lastSaveAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'medium' }) : null;
 
   const resetCache = () => {
     purgeUserCache(localStorage, user.id);
@@ -404,7 +405,12 @@ function CloudTab() {
       <section className={card} data-testid="settings-cloud">
         <h3 className={h2}>Persistence</h3>
         <div className="mt-2 text-sm font-semibold text-ink" data-testid="cloud-status" data-state={sync.state}>{syncLabel(sync.state)}</div>
-        <p className="mt-1 text-[12px] text-muted">{cloud ? `Holdings, watchlists, focus basket and settings are stored in your Supabase account${last ? ` · last successful sync ${last}` : ''}.` : 'This account keeps data in this browser only. Sign in with e-mail, Google or phone (Supabase) to sync across devices.'}</p>
+        {cloud ? (
+          <p className="mt-1 text-[12px] font-semibold" data-testid="cloud-last-saved" data-state={sync.state} style={{ color: sync.state === 'offline' ? '#fbbf24' : '#34d399' }}>
+            {sync.state === 'offline' ? 'Not synced — retrying' : 'Synced to cloud'} · {saved ? `last saved ${saved}` : 'nothing saved yet this session'}
+          </p>
+        ) : null}
+        <p className="mt-1 text-[12px] text-muted">{cloud ? `Holdings, watchlists, MY FOCUS, chart timeframe and indicators, alert rules and notification settings are stored in your Supabase account and load on every device you sign in on${last ? ` · last successful sync ${last}` : ''}.` : 'This account keeps data in this browser only. Sign in with e-mail, Google or phone (Supabase) to sync across devices.'}</p>
         <div className="mt-3 flex flex-wrap gap-2">
           <button type="button" className={primary} disabled={fs.busy || !fs.canSync} data-testid="cloud-force-sync" onClick={() => void fs.run()}>{fs.busy ? 'Syncing…' : 'Force Sync Cloud State'}</button>
           <button type="button" className={btn} data-testid="cloud-backup" onClick={() => downloadBackup({ id: user.id, email: user.email, phone: user.phone }, prefs)}>⬇ Export Portfolio &amp; Watchlist Backup (JSON)</button>

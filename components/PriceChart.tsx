@@ -13,6 +13,7 @@ import { DrawingLayer } from './DrawingLayer';
 import { CHART_THEME, type ThemeName } from '@/lib/theme';
 import { fmt, fmtInt, tone } from '@/lib/format';
 import { scoped } from '@/lib/scope';
+import { useUi } from '@/hooks/useUiPrefs';
 import { sanitizeBars } from '@/lib/historicalEngine';
 import { INDICATOR_COLORS, LiveIndicators, emaFull, rsiFull, toPoints, vwapAvailable, vwapFull, type IndicatorId } from '@/lib/technicalIndicators';
 
@@ -20,7 +21,6 @@ const toBar = (c: Candle) => ({ time: c.time as UTCTimestamp, open: c.open, high
 const toVol = (c: Candle, th: (typeof CHART_THEME)[ThemeName]) => ({ time: c.time as UTCTimestamp, value: c.volume, color: (c.close >= c.open ? th.up : th.down) + '73' });
 
 const DRAW_KEY = 'upcircuit:drawings:';
-const IND_KEY = 'upcircuit:indicators:v1';
 const IND_BUTTONS: { id: IndicatorId; label: string }[] = [
   { id: 'ema20', label: 'EMA 20' },
   { id: 'ema50', label: 'EMA 50' },
@@ -29,14 +29,6 @@ const IND_BUTTONS: { id: IndicatorId; label: string }[] = [
 ];
 type IndOn = Record<IndicatorId, boolean>;
 const IND_OFF: IndOn = { ema20: false, ema50: false, vwap: false, rsi: false };
-function loadInd(): IndOn {
-  try {
-    const j = JSON.parse(localStorage.getItem(scoped(IND_KEY)) ?? '{}') as Partial<IndOn>;
-    return { ema20: !!j.ema20, ema50: !!j.ema50, vwap: !!j.vwap, rsi: !!j.rsi };
-  } catch {
-    return IND_OFF;
-  }
-}
 
 const GROUPS: { label: string; items: Timeframe[] }[] = [
   { label: 'Intraday', items: ['1m', '5m', '15m', '1h'] },
@@ -85,10 +77,12 @@ export function PriceChart({ symbol, ltp, volume, tf, onTf, className = '', live
   thRef.current = th;
   const byTime = useRef(new Map<number, Candle>());
   // indicator overlays: line series on the price pane (EMA / VWAP) + RSI in its own bottom band; `liveInd` updates only the forming bar per tick
-  const [indOn, setIndOn] = useState<IndOn>(IND_OFF);
-  useEffect(() => setIndOn(loadInd()), []);
-  const indOnRef = useRef(indOn);
+  const indOnRef = useRef<IndOn>(IND_OFF);
+  const [ui, patchUi] = useUi();                                      // indicator toggles live in the synced UI store
+  const indOn: IndOn = ui.ind;
   indOnRef.current = indOn;
+  const setIndOn = (f: (o: IndOn) => IndOn) => patchUi({ ind: f(indOnRef.current) });
+
   const indSeries = useRef<Partial<Record<IndicatorId, ISeriesApi<'Line'>>>>({});
   const liveInd = useRef<LiveIndicators | null>(null);
   const syncInd = useRef<() => void>(() => undefined);
@@ -301,7 +295,6 @@ export function PriceChart({ symbol, ltp, volume, tf, onTf, className = '', live
     layoutPanes.current();
   };
   useEffect(() => {
-    try { localStorage.setItem(scoped(IND_KEY), JSON.stringify(indOn)); } catch { /* per-viewer convenience only */ }
     syncInd.current();
   }, [indOn, tf, symbol]);
 

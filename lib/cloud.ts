@@ -1,6 +1,7 @@
 // Cloud persistence over Supabase PostgREST (plain fetch, no SDK). Every call carries the user's access token, so Row Level Security
 // (docs/PERSISTENCE_SCHEMA.sql) confines it to that user's rows. Saves are UPSERT-then-delete: a failed save never loses the previous data.
 import { sanitizeQuiet, validateQuiet, type QuietHours } from './quietHours';
+import { sanitizeUi, type UiPrefs } from './uiPrefs';
 import type { Holding } from './types';
 import type { WatchlistState } from './watchlist';
 import { coerceAppRole, type AppRole } from './rbac';
@@ -13,7 +14,7 @@ export interface CloudConfig {
   getToken: () => Promise<string | null>;
   fetch?: typeof fetch;
   /** every REST call reports its outcome (drives the 🟢 Supabase Synced / 🟡 Local Cache Only badge) */
-  onResult?: (ok: boolean) => void;
+  onResult?: (ok: boolean, now?: number, write?: boolean) => void;
 }
 /** Everything in `preferences.notify` (one jsonb blob, one sync path): alert channels + alarm sound + startup screen + density. */
 export type AlarmSound = 'default' | 'arpeggio';
@@ -121,7 +122,7 @@ export function createCloud(cfg: CloudConfig) {
       const detail = await r.text().then((x) => (JSON.parse(x) as { message?: string }).message).catch(() => undefined);
       throw new Error(`cloud ${r.status}${detail ? `: ${detail}` : ''}`);
     }
-    cfg.onResult?.(true);
+    cfg.onResult?.(true, Date.now(), (init.method ?? 'GET') !== 'GET');
     const txt = await r.text();
     return txt ? JSON.parse(txt) : null;
   }
@@ -159,6 +160,17 @@ export function createCloud(cfg: CloudConfig) {
     async savePrefs(userId: string, p: { focus?: string[]; notify?: NotifyPrefs }): Promise<void> {
       await call('preferences?on_conflict=user_id', { method: 'POST', body: [{ user_id: userId, ...(p.focus ? { focus: p.focus } : {}), ...(p.notify ? { notify: p.notify } : {}), updated_at: new Date().toISOString() }], prefer: 'resolution=merge-duplicates,return=minimal' });
     },
+    /** chart timeframe + indicator toggles (preferences.ui, docs/WEEK11_SCHEMA.sql); null = never saved or the column is not migrated yet */
+    async loadUi(userId: string): Promise<UiPrefs | null> {
+      try {
+        const r = ((await call(`preferences?${uid(userId)}&select=ui`)) as { ui?: unknown }[] | null)?.[0];
+        return r?.ui ? sanitizeUi(r.ui) : null;
+      } catch (e) { if (/column|PGRST|42703/i.test(String(e))) return null; throw e; }
+    },
+    async saveUi(userId: string, ui: UiPrefs): Promise<void> {
+      try { await call('preferences?on_conflict=user_id', { method: 'POST', body: [{ user_id: userId, ui, updated_at: new Date().toISOString() }], prefer: 'resolution=merge-duplicates,return=minimal' }); }
+      catch (e) { if (!/column|PGRST|42703/i.test(String(e))) throw e; /* schema not migrated: keep the local copy, do not retry forever */ }
+    },
     /** Settings → Cloud & Data → "Reset cloud data": removes this account's portfolio, watchlists, preferences and alert history (profile and push devices stay) */
     async resetAccountData(userId: string): Promise<void> {
       for (const t of ['portfolios', 'watchlists', 'alert_history', 'preferences']) await call(`${t}?${uid(userId)}`, { method: 'DELETE', prefer: 'return=minimal' });
@@ -170,8 +182,11 @@ export function createCloud(cfg: CloudConfig) {
       const rows = (await call(`alert_history?${uid(userId)}&select=symbol,direction,band,price,triggered_at&order=triggered_at.desc&limit=${limit}`)) as AlertRow[] | null;
       return Array.isArray(rows) ? rows : [];
     },
-    async savePushSubscription(userId: string, s: PushSub): Promise<void> {
-      await call('push_subscriptions?on_conflict=user_id,endpoint', { method: 'POST', body: [{ user_id: userId, endpoint: s.endpoint, keys: s.keys }], prefer: 'resolution=merge-duplicates,return=minimal' });
+    async savePushSubscription(userId: string, s: PushSub, device?: { label: string; platform: string }): Promise<void> {
+      const post = (extra: object) => call('push_subscriptions?on_conflict=user_id,endpoint', { method: 'POST', body: [{ user_id: userId, endpoint: s.endpoint, keys: s.keys, ...extra }], prefer: 'resolution=merge-duplicates,return=minimal' });
+      if (!device) return void (await post({}));
+      try { await post({ label: device.label, platform: device.platform, last_seen: new Date().toISOString() }); }
+      catch (e) { if (!/column|PGRST|42703|400/i.test(String(e))) throw e; await post({}); }   // label columns not migrated yet (docs/WEEK11_SCHEMA.sql)
     },
     async deletePushSubscription(userId: string, endpoint: string): Promise<void> {
       await call(`push_subscriptions?${uid(userId)}&endpoint=eq.${encodeURIComponent(endpoint)}`, { method: 'DELETE', prefer: 'return=minimal' });
