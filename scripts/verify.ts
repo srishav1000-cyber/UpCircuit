@@ -639,11 +639,19 @@ t('stream: URL carries clientCode/feedToken/apiKey; 30 s ping default; subscribe
   s.close(); assert.equal(s.status, 'idle');
 });
 t('stream: heartbeat sends "ping" on the interval and stops on close', async () => {
-  const { FakeWS, made } = fakeWS();
-  const s = new DirectSmartApiStream({ apiKey: 'K', clientCode: 'C', feedToken: 'F', pingMs: 15, onTick: () => {}, onError: () => {}, WebSocketImpl: FakeWS as unknown as typeof WebSocket });
-  s.connect(); made[0].open(); await sleep(900);
-  const pings = made[0].sent.filter((m) => m === 'ping').length; assert.ok(pings >= 2, 'pings: ' + pings);
-  s.close(); const n = made[0].sent.length; await sleep(40); assert.equal(made[0].sent.length, n, 'no pings after close');
+  // virtual clock (node:test mock timers): no real sleeping, so CPU load / event-loop stalls can no longer make the count flaky
+  const { mock } = await import('node:test');
+  mock.timers.enable({ apis: ['setInterval', 'setTimeout'] });
+  try {
+    const { FakeWS, made } = fakeWS();
+    const s = new DirectSmartApiStream({ apiKey: 'K', clientCode: 'C', feedToken: 'F', pingMs: 15, onTick: () => {}, onError: () => {}, WebSocketImpl: FakeWS as unknown as typeof WebSocket });
+    s.connect(); made[0].open();
+    const pings = () => made[0].sent.filter((m) => m === 'ping').length;
+    mock.timers.tick(14); assert.equal(pings(), 0, 'nothing before the first interval');
+    mock.timers.tick(1); assert.equal(pings(), 1);
+    mock.timers.tick(45); assert.equal(pings(), 4, 'one ping per 15 ms');
+    s.close(); const n = made[0].sent.length; mock.timers.tick(300); assert.equal(made[0].sent.length, n, 'no pings after close');
+  } finally { mock.timers.reset(); }
 });
 t('stream: binary ticks → MarketTick {symbol,lastPrice,changePercent,volume,timestamp}; stock + index; junk / unknown tokens ignored', () => {
   const { FakeWS, made } = fakeWS(); const got: MarketTick[] = [];

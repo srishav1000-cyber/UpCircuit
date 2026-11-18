@@ -76,6 +76,11 @@ const until = async (f: () => boolean, ms = 8000, what = 'condition') => { const
   const daemon = await main({ ...loadConfig(), port: 0 });
   let ok = 0; const pass = (m: string) => { ok++; console.log('  ✓', m); };
 
+  for (const path of ['/', '/health']) {
+    const r = await fetch(`http://127.0.0.1:${daemon.port}${path}`); const j = (await r.json()) as Record<string, unknown>;
+    assert.equal(r.status, 200); assert.match(r.headers.get('content-type') ?? '', /application\/json/); assert.equal(j.ok, true); assert.ok(['leader', 'standby'].includes(String(j.role)) && typeof j.epoch === 'number' && typeof j.feed === 'string' && typeof j.uptimeSec === 'number' && !Number.isNaN(Date.parse(String(j.timestamp))));
+  }
+  pass('GET / and /health answer 200 JSON from the running daemon while it is still booting');
   await until(() => joined > 0, 8000, 'realtime join'); pass('Realtime channel joined');
   await until(() => feedWs !== null && subscribes.flat().includes('1001'), 8000, 'feed subscribe ABC'); pass('daemon logged in, connected the feed and subscribed to the rule symbol (token 1001)');
 

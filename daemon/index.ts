@@ -2,13 +2,12 @@
 // evaluates each live tick against the rules for its symbol, and sends Web Push through the dispatcher the moment a rule crosses.
 // Run:  npm run daemon      (Node ≥ 20, e.g. Fly.io / Railway / Render / a VM — see docs/WEEK9_DAEMON.md)
 import { adminHeaders, cleanEnv, cleanUrl, keyKind, privilegedKeyProblem, sbFailure, sbFailureText } from '../lib/supabaseAdmin';
-import { createServer } from 'node:http';
 import { createClient, type RealtimeChannel } from '@supabase/supabase-js';
 import { WebSocket as NodeWebSocket } from 'ws';
 import { DirectSmartApiStream, type Listing as StreamListing, type MarketTick } from '../lib/smartapiDirect';
 import { smartApiLogin, type FeedSession } from '../lib/smartapiLogin';
 import { loadListings, type Listing } from '../lib/scripMaster';
-import { isStreamWindow } from '../lib/market';
+import { isMarketOpen } from '../lib/market';
 import { ackSecret } from '../lib/ackToken';
 import { fetchBars } from '../lib/yahooQuotes';
 import { RuleIndex, toRule } from './engine';
@@ -16,6 +15,8 @@ import { BaselineStore } from './baselines';
 import { createDispatcher } from './dispatcher';
 import type { DepthFlag } from '../lib/heuristicFlags';
 import { createLease, newHolderId, type LeaseRow } from './lease';
+import { startHealthServer } from './health';
+import { lastOpenAt, sessionDeadline } from './session';
 
 /* ───────────── config ───────────── */
 type Env = Record<string, string | undefined>;
@@ -37,7 +38,7 @@ export function loadConfig(env: Env = process.env): DaemonConfig {
   return {
     supabaseUrl: supabaseUrl!, serviceKey: serviceKey!, apiKey: apiKey!,
     vapid: pub && priv && subject ? { publicKey: pub, privateKey: priv, subject } : undefined,
-    port: Number(env.PORT ?? 8080), resyncMs: Number(env.DAEMON_RESYNC_MS ?? 300_000), stallMs: Number(env.DAEMON_STALL_MS ?? 20_000), maxBackoffMs: Number(env.DAEMON_MAX_BACKOFF_MS ?? 60_000),
+    port: Number(env.PORT || 10000), resyncMs: Number(env.DAEMON_RESYNC_MS ?? 300_000), stallMs: Number(env.DAEMON_STALL_MS ?? 20_000), maxBackoffMs: Number(env.DAEMON_MAX_BACKOFF_MS ?? 60_000),
   };
 }
 
@@ -54,7 +55,7 @@ class DaemonStream extends DirectSmartApiStream {
 }
 
 /* ───────────── main ───────────── */
-export async function main(cfg = loadConfig(), env: Env = process.env): Promise<{ stop: () => Promise<void> }> {
+export async function main(cfg = loadConfig(), env: Env = process.env): Promise<{ stop: () => Promise<void>; port: number }> {
   const index = new RuleIndex();
   const dispatcher = createDispatcher({
     supabaseUrl: cfg.supabaseUrl, serviceKey: cfg.serviceKey, vapid: cfg.vapid, ackSecret: ackSecret(env), pushEndpointAllow: env.PUSH_ENDPOINT_ALLOW, emailEnabled: !!env.RESEND_API_KEY, log,
@@ -126,6 +127,22 @@ export async function main(cfg = loadConfig(), env: Env = process.env): Promise<
     release: (name, holder) => (haOff || haMissing ? Promise.resolve() : fetch(`${sbBase}/rest/v1/rpc/release_daemon_lease`, { method: 'POST', headers: sbHeaders, signal: AbortSignal.timeout(3000), body: JSON.stringify({ p_lease_name: name, p_holder_id: holder }) })),
     onChange: (info) => { if (info.role === 'standby') health.feed = 'standby'; },
   });
+  /* ───── HTTP: bound FIRST (before any network call) so the host's port scan and keep-alive pings succeed while the daemon boots ───── */
+  const server = await startHealthServer({
+    port: cfg.port, host: '0.0.0.0',
+    deps: {
+      // liveness: in-memory reads only (no DB / SmartAPI work, no state change)
+      liveness: () => ({ ok: true, role: lease.isLeader() ? 'leader' : 'standby', epoch: lease.info().epoch, feed: lease.isLeader() ? health.feed : 'standby', uptimeSec: Math.round((Date.now() - health.startedAt) / 1000), timestamp: new Date().toISOString() }),
+      readiness: () => {
+        const now = Date.now(), age = health.lastTickAt ? now - health.lastTickAt : null, leader = lease.isLeader();
+        // silent feed = no tick for 60 s since the later of: last tick, process start, today's 09:15 open — judged during the cash session only
+        const stalled = leader && isMarketOpen(now) && now - Math.max(health.lastTickAt, health.startedAt, lastOpenAt(now)) > 60_000;
+        const li = lease.info();
+        return { ok: !stalled, body: { ok: !stalled, ha: { role: leader ? 'leader' : 'standby', instance: holderId, leader: li.holder, epoch: li.epoch, expiresAt: li.expiresAt, enabled: !haOff && !haMissing }, uptimeS: Math.round((now - health.startedAt) / 1000), feed: health.feed, ticks: health.ticks, lastTickAgeMs: age, lastTickLagMs: health.lastTickLagMs, reconnects: health.reconnects, logins: health.logins, rules: index.size, symbols: index.symbols().length, unresolvedSymbols: health.unresolved.length, realtime: health.realtime, resyncs: health.resyncs, dispatch: dispatcher.stats(), baselines: baselines.stats(), volumeRulesNA: index.volumeRulesNA(), depthFlags: { ...index.flagStats(), buffered: flagBuf.length }, pushConfigured: dispatcher.configured } };
+      },
+    },
+  });
+  log('info', 'http listening', { host: '0.0.0.0', port: (server.address() as { port: number } | null)?.port ?? cfg.port });
   let stream: DaemonStream | null = null;
   let listings = new Map<string, Listing>();
   let subscribed = new Set<string>();
@@ -217,6 +234,7 @@ export async function main(cfg = loadConfig(), env: Env = process.env): Promise<
       session = login.session; health.logins++;
       try { listings = await loadListings(); } catch (e) { log('warn', 'scrip master unavailable, retrying', { error: String(e) }); await sleep(5000); if (!listings.size) continue; }
 
+      const deadline = sessionDeadline(session.expiresAt, Date.now());
       const ticksBefore = health.ticks;
       health.feed = 'connecting';
       let openedAt = Date.now();
@@ -232,10 +250,10 @@ export async function main(cfg = loadConfig(), env: Env = process.env): Promise<
         stream = s;
         // watchdog: connected but silent during market hours → recycle; also recycle before the feed token expires
         const watch = setInterval(() => {
-          const quiet = Date.now() - Math.max(health.lastTickAt, openedAt);
+          const quiet = Date.now() - Math.max(health.lastTickAt, openedAt, lastOpenAt(Date.now()));
           if (!lease.isLeader()) { log('warn', 'lost the leader lease — closing the feed'); finish(); }
-          else if (stopping || Date.now() >= session.expiresAt) { log('info', 'recycling feed', { reason: stopping ? 'stopping' : 'session expiring' }); finish(); }
-          else if (s.status === 'open' && isStreamWindow(Date.now()) && quiet > cfg.stallMs) { log('warn', 'feed stalled — reconnecting', { quietMs: quiet }); finish(); }
+          else if (stopping || Date.now() >= deadline) { log('info', 'recycling feed', { reason: stopping ? 'stopping' : 'scheduled session refresh (6 h TTL or 08:45 IST)' }); finish(); }
+          else if (s.status === 'open' && isMarketOpen(Date.now()) && quiet > cfg.stallMs) { log('warn', 'feed stalled — reconnecting', { quietMs: quiet }); finish(); }
         }, 2000);
         function finish() { clearInterval(watch); s.close(); if (stream === s) stream = null; done(); }
         s.connect();
@@ -267,17 +285,7 @@ export async function main(cfg = loadConfig(), env: Env = process.env): Promise<
   const beatTimer = setInterval(() => void beat(), 5000);
   void beat();
 
-  /* ───── health endpoint (host health check / manual curl) ───── */
-  const http = createServer((req, res) => {
-    if (req.url !== '/healthz') { res.writeHead(404).end(); return; }
-    const age = health.lastTickAt ? Date.now() - health.lastTickAt : null;
-    const leader = lease.isLeader();
-    const stalled = leader && isStreamWindow(Date.now()) && (age === null ? Date.now() - health.startedAt > 60_000 : age > 60_000);
-    res.writeHead(stalled ? 503 : 200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
-    const li = lease.info();
-    res.end(JSON.stringify({ ok: !stalled, ha: { role: leader ? 'leader' : 'standby', instance: holderId, leader: li.holder, epoch: li.epoch, expiresAt: li.expiresAt, enabled: !haOff && !haMissing }, uptimeS: Math.round((Date.now() - health.startedAt) / 1000), feed: health.feed, ticks: health.ticks, lastTickAgeMs: age, lastTickLagMs: health.lastTickLagMs, reconnects: health.reconnects, logins: health.logins, rules: index.size, symbols: index.symbols().length, unresolvedSymbols: health.unresolved.length, realtime: health.realtime, resyncs: health.resyncs, dispatch: dispatcher.stats(), baselines: baselines.stats(), volumeRulesNA: index.volumeRulesNA(), depthFlags: { ...index.flagStats(), buffered: flagBuf.length }, pushConfigured: dispatcher.configured }));
-  });
-  http.listen(cfg.port, () => log('info', 'daemon up', { port: cfg.port, rules: index.size, serviceKey: keyKind(cfg.serviceKey) }));
+  log('info', 'daemon up', { rules: index.size, serviceKey: keyKind(cfg.serviceKey) });
 
   async function stop(): Promise<void> {
     if (stopping) return;
@@ -288,9 +296,9 @@ export async function main(cfg = loadConfig(), env: Env = process.env): Promise<
     await dispatcher.drain(5000);
     await lease.stop();                                                  // release the lease so a standby takes over on its next poll
     await sb.removeChannel(channel).catch(() => undefined);
-    await new Promise<void>((r) => http.close(() => r()));
+    await new Promise<void>((r) => server.close(() => r()));
   }
-  return { stop };
+  return { stop, port: (server.address() as { port: number }).port };
 }
 
 if (process.argv[1] && /daemon[\\/]index\.(ts|js|mjs|cjs)$/.test(process.argv[1])) {

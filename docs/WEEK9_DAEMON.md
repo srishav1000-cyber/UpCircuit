@@ -14,7 +14,7 @@ SmartAPI WS ─ticks─► daemon (RuleIndex: Map<SYMBOL, AlertRule[]>) ─risin
 3. Daemon env: `NEXT_PUBLIC_SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SMARTAPI_API_KEY`, `SMARTAPI_CLIENT_CODE`, `SMARTAPI_PASSWORD`, `SMARTAPI_TOTP_SECRET`,
    `NEXT_PUBLIC_VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT`, optional `RESEND_API_KEY`, `ALERT_ACK_SECRET`, `NEXT_PUBLIC_APP_URL`, `PORT`.
 4. Vercel env (so the test button and ACK route work): `SUPABASE_SERVICE_ROLE_KEY`, the three VAPID vars, and the **same** `ALERT_ACK_SECRET` (or the same `VAPID_PRIVATE_KEY`, from which the ACK key is derived).
-5. Health: `GET :$PORT/healthz` → feed state, last-tick age, rule/symbol counts, dispatch counters (503 when the feed is silent > 60 s in market hours).
+5. Health (bound on `0.0.0.0:$PORT`, default 10000, before any network call): `GET /` and `GET /health` → always `200` `{ ok, role, epoch, feed, uptimeSec, timestamp }` from in-memory state only (safe for keep-alive pings; `HEAD` works). `GET /healthz` → full diagnostics: feed state, last-tick age, rule/symbol counts, dispatch counters; `503` when the leader has had no tick for 60 s during 09:15–15:30 IST (measured from the open, so overnight silence never trips it).
 
 ## Behaviour you should know
 - **Edge-triggered**: fires on the tick where a condition goes false → true. The first tick after a rule appears only seeds state; a crossing inside the cooldown is swallowed.

@@ -49,3 +49,10 @@ If `WEEK10_SCHEMA` is not applied (RPC 404) the daemon logs loudly and runs as s
 **Order imbalance:** gauge has Raw / Weighted (w = e^(−0.5·(i−1))). Alert rules still use Raw.
 
 **Backtest:** `npm run backtest` (synthetic, labels come from the generator — precision reflects agreement with that definition and the assumed noise, not real manipulation).
+
+**Unattended operation (Render).**
+- Point Render's *Health Check Path* at `/health` (liveness). Use `/healthz` for monitoring: it returns 503 on an upstream feed outage, which would make the host restart-loop for a problem a restart cannot fix.
+- An external pinger on `/health` every ≤ 10 min keeps a free-tier instance from spinning down; a sleeping instance cannot hold the SmartAPI feed, so closed-app alerts need an always-on instance.
+- SmartAPI session: re-login every 6 h and once daily at 08:45 IST (03:15 UTC), so the 09:15 IST open runs on a session ≤ ~40 min old. The silent-feed watchdog only runs 09:15–15:30 IST. No manual step. Logins that fail are retried with capped, jittered backoff.
+- Restart / deploy: SIGTERM → the old instance releases the lease and the new one takes over on its next 10 s poll. After a crash the lease expires after its 30 s TTL, so failover takes up to ~40 s (TTL + one poll). Alerts for crossings inside that gap are not replayed (rules are edge-triggered).
+

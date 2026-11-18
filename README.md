@@ -6,7 +6,7 @@ Rishav Singh & Pratima Bastola
 | | |
 |---|---|
 | Web app | https://upcircuit.vercel.app |
-| Alert daemon | https://upcircuit-daemon.onrender.com (`/healthz`) |
+| Alert daemon | https://upcircuit-daemon.onrender.com (`/health`, `/healthz`) |
 
 UpCircuit streams NSE equity data, charts it, and watches it. A Next.js terminal serves retail traders, analysts and risk/compliance staff; a separate always-on daemon evaluates alert rules against the live tick stream and pushes to closed-app phones. Everything shown is either live data or labelled **N/A** — values are never invented.
 
@@ -112,7 +112,7 @@ Names only — see `.env.example` for comments. Server-only secrets must never u
 | AI / news | `GEMINI_API_KEY`, `GEMINI_MODEL`, `NEWS_RSS_URLS` |
 | Instruments | `ANGEL_SCRIP_MASTER_URL`, `NSE_EQUITY_CSV_URL` |
 | Ops | `CRON_SECRET`, `UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN`, `SENTRY_DSN`, `LOG_LEVEL`, `CSP_CONNECT_EXTRA` |
-| Daemon | `PORT`, `DAEMON_HA`, `DAEMON_LEASE_NAME`, `DAEMON_LEASE_TTL_S`, `DAEMON_LEASE_RENEW_MS`, `DAEMON_RESYNC_MS`, `DAEMON_STALL_MS`, `DAEMON_MAX_BACKOFF_MS` |
+| Daemon | `PORT` (default 10000), `DAEMON_HA`, `DAEMON_LEASE_NAME`, `DAEMON_LEASE_TTL_S`, `DAEMON_LEASE_RENEW_MS`, `DAEMON_RESYNC_MS`, `DAEMON_STALL_MS`, `DAEMON_MAX_BACKOFF_MS` |
 
 `ALERT_ACK_SECRET` must be identical on Vercel and the daemon (otherwise it is derived from `VAPID_PRIVATE_KEY`, which must then match).
 
@@ -121,8 +121,9 @@ Build from the repo root; supply configuration at run time, not in the image.
 
 ```bash
 docker build -f daemon/Dockerfile -t upcircuit-daemon .
-docker run -d --name upcircuit-daemon -p 8080:8080 --env-file .env.daemon upcircuit-daemon
-curl http://localhost:8080/healthz
+docker run -d --name upcircuit-daemon -p 10000:10000 --env-file .env.daemon upcircuit-daemon
+curl http://localhost:10000/health      # liveness (always 200)
+curl http://localhost:10000/healthz     # readiness / diagnostics (503 if the leader's feed is silent in market hours)
 ```
 Without Docker: `npm run daemon`. On Render, deploy as a Docker web service from `daemon/Dockerfile`. Run two instances for HA — the lease keeps one active. Details: `docs/WEEK9_DAEMON.md`, `docs/RUNBOOK.md`.
 

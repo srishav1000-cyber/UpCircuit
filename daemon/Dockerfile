@@ -6,8 +6,7 @@ RUN npm ci --ignore-scripts          # tsx runs the TypeScript directly; --ignor
 COPY tsconfig.json ./
 COPY lib ./lib
 COPY daemon ./daemon
-COPY data ./data
-ENV NODE_ENV=production PORT=8080
-EXPOSE 8080
-HEALTHCHECK --interval=30s --timeout=5s --start-period=30s CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||8080)+'/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+ENV NODE_ENV=production PORT=10000
+EXPOSE 10000
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||10000)+'/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 CMD ["npx", "tsx", "daemon/index.ts"]
