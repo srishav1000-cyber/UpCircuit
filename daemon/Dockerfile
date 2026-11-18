@@ -5,6 +5,7 @@ COPY package.json package-lock.json ./
 RUN npm ci --ignore-scripts          # tsx runs the TypeScript directly; --ignore-scripts skips the OCR-asset postinstall the daemon does not need
 COPY tsconfig.json ./
 COPY lib ./lib
+COPY data ./data
 COPY daemon ./daemon
 ENV NODE_ENV=production PORT=10000
 EXPOSE 10000
