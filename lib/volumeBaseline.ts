@@ -122,3 +122,60 @@ export function volumeMultipleAt(volume: number, profile: IntradayProfile | null
   if (!e || !(volume >= 0) || !Number.isFinite(volume)) return null;
   return { ...e, multiple: volume / e.expected };
 }
+
+/* ───────────── Week 11: R(t), the 15-minute surge ratio used by the multi-signal flag confirmation ─────────────
+ *   R(t) = volume traded over the last W minutes ÷ volume a typical session trades over the same W minutes   (W = 15, shortened to the time since the open)
+ * "Typical" comes from the same median cumulative profile as volumeMultipleAt, so the open's heavy volume is not mistaken for a surge. null = N/A:
+ * no usable profile, outside 09:15–15:30 IST, fewer than MIN_WINDOW_MIN minutes since the open, or a window the profile says is almost silent. */
+export const SURGE_WINDOW_MIN = 15;
+export const MIN_WINDOW_MIN = 5;
+/** the profile's expected cumulative volume at `nowMs` (interpolated, no floor); null outside the session or without a usable profile */
+export function expectedCumAt(profile: IntradayProfile | null | undefined, nowMs: number): number | null {
+  if (!profile || profile.status !== 'ok' || profile.cum.length !== BUCKETS || !profile.cum.every((v) => Number.isFinite(v) && v >= 0)) return null;
+  const m = istMinuteOf(nowMs), k = bucketIndex(m);
+  if (k === null) return null;
+  const prev = k === 0 ? 0 : profile.cum[k - 1], end = profile.cum[k];
+  return prev + ((m - (SESSION_OPEN_MIN + k * BUCKET_MIN)) / BUCKET_MIN) * (end - prev);
+}
+/** `volNow` / `volThen`: cumulative day volume at nowMs and at nowMs − windowMs (the caller supplies the sample at the window start). */
+export function windowSurge(profile: IntradayProfile | null | undefined, volNow: number, volThen: number, nowMs: number, windowMs: number = SURGE_WINDOW_MIN * 60_000): number | null {
+  const e1 = expectedCumAt(profile, nowMs), e0 = expectedCumAt(profile, nowMs - windowMs) ?? 0;
+  if (e1 === null || !Number.isFinite(volNow) || !Number.isFinite(volThen) || volNow < volThen) return null;
+  const sinceOpen = istMinuteOf(nowMs) - SESSION_OPEN_MIN;
+  if (sinceOpen < MIN_WINDOW_MIN) return null;
+  const expected = e1 - (sinceOpen >= windowMs / 60_000 ? e0 : 0);
+  const full = profile!.cum[BUCKETS - 1];
+  if (!(expected > 0.002 * full)) return null;
+  return (volNow - volThen) / expected;
+}
+
+/** live helper: remembers (time, cumulative volume) samples per symbol (≥ `everyMs` apart, 20 min kept) and answers R(t) */
+export class VolumeWindow {
+  private readonly s = new Map<string, { t: number; v: number }[]>();
+  constructor(private readonly everyMs = 5_000, private readonly keepMs = 20 * 60_000) {}
+  push(symbol: string, t: number, cumVolume: number): void {
+    if (!(cumVolume >= 0) || !Number.isFinite(t)) return;
+    const a = this.s.get(symbol) ?? [];
+    const last = a[a.length - 1];
+    if (last && (t - last.t < this.everyMs && cumVolume >= last.v)) return;
+    if (last && cumVolume < last.v) a.length = 0;                       // a new session (volume reset): start over
+    a.push({ t, v: cumVolume });
+    while (a.length && t - a[0].t > this.keepMs) a.shift();
+    this.s.set(symbol, a);
+  }
+  /** R(t) from the samples held; the window start is the sample closest to (but not after) now − 15 min, else the oldest sample ≥ 5 min back, else the session open (volume 0) */
+  ratio(symbol: string, profile: IntradayProfile | null | undefined, nowMs: number, cumVolumeNow: number): number | null {
+    const a = this.s.get(symbol); if (!a || !a.length) return null;
+    const target = nowMs - SURGE_WINDOW_MIN * 60_000;
+    const sinceOpen = istMinuteOf(nowMs) - SESSION_OPEN_MIN;
+    let then: { t: number; v: number } | null = null;
+    for (const x of a) if (x.t <= target) then = x;
+    if (!then) {
+      const oldest = a[0];
+      if (nowMs - oldest.t >= MIN_WINDOW_MIN * 60_000 && nowMs - oldest.t < SURGE_WINDOW_MIN * 60_000) then = oldest;
+      else return null;
+    }
+    return windowSurge(profile, cumVolumeNow, then.v, nowMs, nowMs - then.t);
+  }
+  clear(): void { this.s.clear(); }
+}

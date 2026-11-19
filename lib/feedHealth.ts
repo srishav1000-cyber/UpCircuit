@@ -31,7 +31,7 @@ export function feedState(i: FeedInput): FeedHealth {
 export const fmtLag = (ms: number | null): string => (ms === null ? '—' : ms < 1000 ? `${Math.round(ms)} ms` : ms < 60_000 ? `${(ms / 1000).toFixed(1)} s` : `${Math.floor(ms / 60_000)} min ${Math.round((ms % 60_000) / 1000)} s`);
 
 /** one row of public.daemon_health() */
-export interface DaemonBeat { id: string; age_ms: number; last_tick_age_ms: number | null; feed_status: string; reconnects: number; started_at: string; version: string | null }
+export interface DaemonBeat { id: string; age_ms: number; last_tick_age_ms: number | null; feed_status: string; reconnects: number; started_at: string; version: string | null; /** Week 11: leader-lease fencing epoch and its remaining life on the database clock (absent before docs/WEEK11_CAPSTONE_SCHEMA.sql) */ lease_epoch?: number | null; lease_ttl_ms?: number | null }
 export type DaemonState = 'running' | 'degraded' | 'stale' | 'offline' | 'not_seen';
 export const DAEMON_STALE_MS = 20_000;
 export const DAEMON_OFFLINE_MS = 120_000;

@@ -276,6 +276,9 @@ insert into public.depth_flags(symbol, kind, side, severity, price, qty, detail)
 select t.become(:alice); select t.ok((select count(*) from public.depth_flags) = 1 and (select label from public.depth_flags limit 1) = 'Heuristic Flag / Possible Manipulation Pattern', 'signed-in users can read flags and every flag carries the heuristic label'); select t.back();
 select t.ok(t.try('insert into public.depth_flags(symbol, kind, side, severity, detail) values (''HAX'', ''wall'', ''bid'', ''watch'', ''x'')', :alice) <> '', 'users cannot write flags');
 select t.ok(t.try('delete from public.depth_flags', :alice) <> '' and (select count(*) from public.depth_flags) = 1, 'users cannot delete flags');
+select t.ok(t.try('insert into public.depth_flags(symbol, kind, side, severity, detail, confirmed_by) values (''OK1'', ''wall'', ''bid'', ''watch'', ''x'', array[''obi'', ''volume''])', null, 'service_role') = '', 'the daemon can store which signals confirmed a flag');
+select t.ok(t.try('insert into public.depth_flags(symbol, kind, side, severity, detail, confirmed_by) values (''BAD1'', ''wall'', ''bid'', ''watch'', ''x'', array[''bogus''])', null, 'service_role') <> '', 'confirmed_by only accepts obi / volume / spread');
+delete from public.depth_flags where symbol in ('OK1', 'BAD1');
 select t.ok(t.try('select count(*) from public.depth_flags', null, 'anon') <> '', 'anon cannot read flags');
 select t.ok(t.try('insert into public.depth_flags(symbol, kind, side, severity, detail, label) values (''ABC'', ''wall'', ''bid'', ''watch'', ''x'', ''Confirmed manipulation'')', :alice, 'service_role') <> '', 'a flag cannot be labelled as anything but a heuristic');
 select t.ok(t.try('insert into public.depth_flags(symbol, kind, side, severity, detail) values (''ABC'', ''spoof_proof'', ''bid'', ''watch'', ''x'')', :alice, 'service_role') <> '', 'unknown flag kinds rejected');
@@ -288,6 +291,7 @@ select t.ok(t.try('select public.acquire_daemon_lease(''alert-daemon'', ''A'', 3
 select t.ok((select holder_id from public.daemon_leases where lease_name = 'alert-daemon') = 'A' and (select epoch from public.daemon_leases where lease_name = 'alert-daemon') = 1, 'first acquire creates the lease at epoch 1');
 select t.become(null, 'service_role');
 select t.ok((select acquired from public.acquire_daemon_lease('alert-daemon', 'B', 30)) = false, 'a rival is refused while the lease is live');
+select t.back(); select t.become(:alice); select t.ok((select lease_epoch from public.daemon_health() limit 1) >= 1 and (select lease_ttl_ms from public.daemon_health() limit 1) between 0 and 30000, 'signed-in users see the lease epoch and its remaining life through daemon_health'); select t.back(); select t.become(null, 'service_role');
 select t.ok((select holder_id from public.acquire_daemon_lease('alert-daemon', 'B', 30)) = 'A', 'the refusal names the current holder');
 select t.ok((select acquired and epoch = 1 from public.acquire_daemon_lease('alert-daemon', 'A', 30)), 'renewal by the holder keeps the epoch');
 select t.back();

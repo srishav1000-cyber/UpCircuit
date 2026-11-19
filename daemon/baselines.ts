@@ -49,6 +49,11 @@ export class BaselineStore {
     return r && r.status === 'ok' ? expectedVolume(r.profile, r.medianVolume, nowMs) : null;
   }
   info(symbol: string): BaselineRecord | undefined { return this.rows.get(symbol.toUpperCase()); }
+  /** the symbol's usable intraday profile, or null (no baseline yet / not enough sessions) */
+  profileOf(symbol: string): IntradayProfile | null {
+    const r = this.info(symbol);
+    return r && r.status === 'ok' && r.profile.status === 'ok' ? r.profile : null;
+  }
   stats(): { symbols: number; ok: number; insufficient: number; unavailable: number; loading: number; withProfile: number } {
     const all = [...this.rows.values()];
     return { symbols: all.length, ok: all.filter((r) => r.status === 'ok').length, insufficient: all.filter((r) => r.status === 'insufficient').length, unavailable: all.filter((r) => r.status === 'unavailable').length, loading: this.loading.size + this.queue.length, withProfile: all.filter((r) => r.profile.status === 'ok').length };

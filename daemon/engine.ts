@@ -14,6 +14,7 @@
 import { canEvaluate, evaluateRule, isRuleKind, type AlertRule, type RuleKind, type RuleQuote } from '../lib/alertRules';
 import { topFiveImbalance } from '../lib/depthImbalance';
 import { DepthFlagTracker, type DepthFlag } from '../lib/heuristicFlags';
+import { VolumeWindow, type IntradayProfile } from '../lib/volumeBaseline';
 import type { DepthLevel } from '../lib/types';
 
 export interface TickIn {
@@ -54,13 +55,20 @@ export class RuleIndex {
     if (b === null || b === undefined) return null;
     return typeof b === 'number' ? { value: b, basis: 'full-day' } : b;
   }
-  private readonly flags = new DepthFlagTracker();
+  private flags = new DepthFlagTracker();
+  private profileOf: (symbol: string) => IntradayProfile | null = () => null;
+  private readonly volWin = new VolumeWindow();
+  private confirmOn = false;
   private flagSink: ((f: DepthFlag) => void) | null = null;
   private flagsSeen = 0;
   private lastPrune = 0;
 
   /** receives every NEW heuristic depth flag (daemon/index.ts persists them to depth_flags); null disables flag detection */
   setFlagSink(f: ((flag: DepthFlag) => void) | null): void { this.flagSink = f; }
+  /** Week 11: tag every flag with its multi-signal confirmation (baseline flags are still emitted; the tag says which ones were corroborated). R(t) needs a volume baseline, which the daemon only has for symbols with a volume_surge rule — elsewhere that signal is N/A. */
+  setConfirmation(on: boolean, profileOf: (symbol: string) => IntradayProfile | null = () => null): void {
+    this.confirmOn = on; this.profileOf = profileOf; this.flags = new DepthFlagTracker({ evaluate: on }); this.volWin.clear();
+  }
   flagStats(): { symbols: number; emitted: number } { return { symbols: this.flags.size, emitted: this.flagsSeen }; }
 
   /** where volume_surge rules get their baseline from (until set, every volume rule is N/A) */
@@ -120,7 +128,12 @@ export class RuleIndex {
     const list = this.bySymbol.get(sym);
     if (!list || !(t.ltp > 0)) return [];
     if (this.flagSink && t.depth && (t.depth.bids.length || t.depth.asks.length)) {
-      try { for (const f of this.flags.observe(sym, t.depth, t.ltp, t.ts > 0 ? t.ts : now)) { this.flagsSeen++; this.flagSink(f); } }
+      try {
+        const ts = t.ts > 0 ? t.ts : now;
+        let volRatio: number | null = null;
+        if (this.confirmOn && t.volume && t.volume > 0) { this.volWin.push(sym, ts, t.volume); volRatio = this.volWin.ratio(sym, this.profileOf(sym), ts, t.volume); }
+        for (const f of this.flags.observe(sym, t.depth, t.ltp, ts, { volRatio })) { this.flagsSeen++; this.flagSink(f); }
+      }
       catch { /* a flag problem must never stop rule evaluation */ }
       if (now - this.lastPrune > 60_000) { this.lastPrune = now; this.flags.prune(now); }
     }

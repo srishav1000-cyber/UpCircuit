@@ -5,11 +5,14 @@ import { Activity, Flame, ShieldAlert, Waves } from 'lucide-react';
 import type { CloudClient, AlertRuleRow, DepthFlagRow, VolumeBaselineRow } from '@/lib/cloud';
 import type { MarketEngine } from '@/lib/market';
 import { circuitWatchlist, NEAR_PCT } from '@/lib/analytics/proximity';
-import { volumeMultipleAt, expectedVolume, bucketLabel, bucketIndex, istMinuteOf, BUCKETS, MIN_BASELINE_SESSIONS, type IntradayProfile } from '@/lib/volumeBaseline';
-import { DepthFlagTracker, FLAG_DISCLAIMER, FLAG_LABEL, type DepthFlag } from '@/lib/heuristicFlags';
+import { volumeMultipleAt, expectedVolume, VolumeWindow, bucketLabel, bucketIndex, istMinuteOf, BUCKETS, MIN_BASELINE_SESSIONS, type IntradayProfile } from '@/lib/volumeBaseline';
+import { DepthFlagTracker, FLAG_DISCLAIMER, FLAG_LABEL, flagTag, confirmationFromHits, type DepthFlag } from '@/lib/heuristicFlags';
 import { FeedHealthStatus, type FeedHealthStatusProps } from './FeedHealthStatus';
 import { OrderImbalanceGauge } from './OrderImbalanceGauge';
 import { AlertDeliveryLog } from './AlertDeliveryLog';
+import { SlippageCard } from './SlippageCard';
+import { ThresholdExplorer, type ExplorerData } from './ThresholdExplorer';
+import { AuditExport } from './AuditExport';
 
 // Dark slate canvas with gold (attention) and teal (healthy / live) accents; everything else uses the theme tokens.
 const GOLD = '#d4a64a';
@@ -33,7 +36,7 @@ function PaneHead({ icon, title, right, testid }: { icon: React.ReactNode; title
   );
 }
 
-interface BacktestFile {
+interface BacktestFile extends ExplorerData {
   config?: Record<string, unknown>;
   data?: { snapshots: number; symbols: number; labelled: boolean; episodes: Record<string, number> };
   flags?: { total: number; per1000Snapshots: number; byKind: Record<string, number> };
@@ -63,7 +66,7 @@ function BacktestCurveCard({ symbol, profile, volume, sessionFlags }: { symbol: 
   const synth = bt && bt !== 'none' && bt.config && (bt.config as { source?: string }).source === 'synthetic';
   return (
     <section className={pane} data-testid="desk-backtest" aria-label="Session backtest and intraday curve">
-      <PaneHead icon={<Activity size={14} />} title="Session backtest & intraday curve" right={symbol} />
+      <PaneHead icon={<Activity size={14} />} title="Session backtest, threshold explorer & intraday curve" right={symbol} />
       <div className="grid gap-3 p-3 sm:grid-cols-2">
         <div data-testid="desk-curve">
           <div className="mb-1 text-[11px] font-semibold text-muted">Typical cumulative volume, 09:15 → 15:30 IST</div>
@@ -100,6 +103,7 @@ function BacktestCurveCard({ symbol, profile, volume, sessionFlags }: { symbol: 
           {synth && <p className="mt-1 text-[10px] leading-snug" style={{ color: LO }} data-testid="desk-bt-caveat">Synthetic data: precision depends on the assumed book noise and describes agreement with the generator’s own pattern definition — not how often real markets are manipulated.</p>}
         </div>
       </div>
+      {bt && bt !== 'none' && bt.data ? <div className="px-3 pb-3"><ThresholdExplorer data={bt} /></div> : null}
     </section>
   );
 }
@@ -123,8 +127,16 @@ export function SurveillanceWorkspace({ engine, symbol, feed, cloud, onOpenStock
   const [stored, setStored] = useState<DepthFlagRow[]>([]);
   const [live, setLive] = useState<LiveFlag[]>([]);
   const [, force] = useState(0);
-  const tracker = useRef(new DepthFlagTracker());
+  const tracker = useRef(new DepthFlagTracker({ evaluate: true }));    // attaches the multi-signal confirmation to every flag so each row can be tagged
+  const volWin = useRef(new VolumeWindow());
+  const profileRef = useRef<IntradayProfile | null>(null);
   const symRef = useRef(symbol);
+
+  /* the selected stock's intraday profile feeds R(t) for the multi-signal confirmation */
+  useEffect(() => {
+    const b = baselines[symbol.toUpperCase()];
+    profileRef.current = b?.status === 'ok' && b.profile && b.profile.cum.length === BUCKETS ? { cum: b.profile.cum, sessions: b.profile.sessions, status: 'ok' } : null;
+  }, [baselines, symbol]);
 
   /* user's rules + their baselines (refreshed every 30 s) */
   useEffect(() => {
@@ -157,12 +169,14 @@ export function SurveillanceWorkspace({ engine, symbol, feed, cloud, onOpenStock
 
   /* browser-side detection on the selected stock's live depth, sampled twice a second (the daemon sees every tick; this view sees a sample) */
   useEffect(() => {
-    if (symRef.current !== symbol) { tracker.current.reset(); symRef.current = symbol; setLive([]); }
+    if (symRef.current !== symbol) { tracker.current.reset(); volWin.current.clear(); symRef.current = symbol; setLive([]); }
     const t = setInterval(() => {
       force((n) => (n + 1) % 1_000_000);
       const q = engine.quotes.get(symbol);
       if (!engine.depthReal || !q || !(q.ltp > 0)) return;
-      const fresh = tracker.current.observe(symbol, engine.depth, q.ltp, Date.now());
+      const nowMs = Date.now();
+      if (q.volume > 0) volWin.current.push(symbol, nowMs, q.volume);
+      const fresh = tracker.current.observe(symbol, engine.depth, q.ltp, nowMs, { volRatio: q.volume > 0 ? volWin.current.ratio(symbol, profileRef.current, nowMs, q.volume) : null });
       if (fresh.length) setLive((cur) => [...fresh.map((f) => ({ ...f, source: 'browser' as const })), ...cur].slice(0, 20));
     }, 500);
     return () => clearInterval(t);
@@ -182,7 +196,7 @@ export function SurveillanceWorkspace({ engine, symbol, feed, cloud, onOpenStock
     const seen = new Set<string>();
     const rows: LiveFlag[] = [
       ...live,
-      ...stored.map((r): LiveFlag => ({ key: `${r.symbol}|${r.kind}|${r.side}`, symbol: r.symbol, kind: r.kind, side: r.side, severity: r.severity, price: r.price, qty: r.qty, detail: r.detail, ts: Date.parse(r.flagged_at), label: FLAG_LABEL, heuristic: true, definitive: false, source: 'daemon' })),
+      ...stored.map((r): LiveFlag => ({ key: `${r.symbol}|${r.kind}|${r.side}`, symbol: r.symbol, kind: r.kind, side: r.side, severity: r.severity, price: r.price, qty: r.qty, detail: r.detail, ts: Date.parse(r.flagged_at), label: FLAG_LABEL, heuristic: true, definitive: false, confirmation: confirmationFromHits(r.confirmed_by), source: 'daemon' })),
     ].sort((a, b) => b.ts - a.ts);
     return rows.filter((f) => { const k = `${f.key}|${Math.floor(f.ts / 60_000)}`; if (seen.has(k)) return false; seen.add(k); return true; }).slice(0, 12);
   }, [live, stored]);
@@ -200,6 +214,7 @@ export function SurveillanceWorkspace({ engine, symbol, feed, cloud, onOpenStock
       </header>
 
       <FeedHealthStatus {...feed} cloud={cloud} variant="panel" className="mb-3" />
+      <AuditExport engine={engine} symbol={symbol} feed={feed} cloud={cloud} flags={flags} profile={profileRef.current} surge15={volWin.current.ratio(symbol, profileRef.current, Date.now(), engine.quotes.get(symbol)?.volume ?? 0)} className="mb-3" />
 
       <div className="grid gap-3 lg:grid-cols-2">
         {/* circuit proximity */}
@@ -268,6 +283,7 @@ export function SurveillanceWorkspace({ engine, symbol, feed, cloud, onOpenStock
         {/* depth imbalance + heuristic flags */}
         <div className="grid gap-3" data-testid="desk-depth">
           <OrderImbalanceGauge bids={depth.bids} asks={depth.asks} symbol={symbol} live={engine.depthReal} thresholds={thresholds} />
+          <SlippageCard engine={engine} symbol={symbol} />
         </div>
 
         <section className={pane} data-testid="desk-flags" aria-label="Heuristic depth flags">
@@ -284,6 +300,7 @@ export function SurveillanceWorkspace({ engine, symbol, feed, cloud, onOpenStock
                     <div className="flex flex-wrap items-center gap-2">
                       <button type="button" onClick={() => onSel(f.symbol)} className="font-bold text-ink hover:underline">{f.symbol}</button>
                       <span className="text-muted">{f.kind === 'wall' ? 'Resting-order wall' : 'Rapid add / cancel'} · {f.side}</span>
+                      <span data-testid="desk-flag-tag" data-tag={f.confirmation?.confirmed ? 'confirmed' : 'baseline'} title={f.confirmation?.confirmed ? `Corroborated by ${f.confirmation.hits.join(' + ')}` : 'Single-rule pattern; not corroborated by a second signal'} className="rounded border px-1.5 text-[10px] font-bold uppercase" style={f.confirmation?.confirmed ? { borderColor: TEAL, color: TEAL } : { borderColor: 'rgb(255 255 255 / 0.25)', color: LO }}>{flagTag(f)}{f.confirmation?.confirmed ? ` · ${f.confirmation.hits.join('+')}` : ''}</span>
                       <span className="rounded px-1.5 text-[10px] font-bold uppercase" style={{ background: f.severity === 'elevated' ? `${GOLD}33` : 'rgb(255 255 255 / 0.08)', color: f.severity === 'elevated' ? GOLD : undefined }}>{f.severity}</span>
                       <span className="num ml-auto text-[11px] text-muted">{ist(f.ts)} IST · {f.source === 'daemon' ? 'daemon' : 'this browser (sampled)'}</span>
                     </div>

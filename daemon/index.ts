@@ -21,6 +21,8 @@ import { lastOpenAt, sessionDeadline } from './session';
 /* ───────────── config ───────────── */
 type Env = Record<string, string | undefined>;
 export interface DaemonConfig {
+  /** DEPTH_CONFIRM=1: store the multi-signal confirmation with each depth flag (needs docs/WEEK11_CAPSTONE_SCHEMA.sql) */
+  depthConfirm: boolean;
   supabaseUrl: string; serviceKey: string; apiKey: string;
   vapid?: { publicKey: string; privateKey: string; subject: string };
   port: number; resyncMs: number; stallMs: number; maxBackoffMs: number;
@@ -38,7 +40,7 @@ export function loadConfig(env: Env = process.env): DaemonConfig {
   return {
     supabaseUrl: supabaseUrl!, serviceKey: serviceKey!, apiKey: apiKey!,
     vapid: pub && priv && subject ? { publicKey: pub, privateKey: priv, subject } : undefined,
-    port: Number(env.PORT || 10000), resyncMs: Number(env.DAEMON_RESYNC_MS ?? 300_000), stallMs: Number(env.DAEMON_STALL_MS ?? 20_000), maxBackoffMs: Number(env.DAEMON_MAX_BACKOFF_MS ?? 60_000),
+    depthConfirm: env.DEPTH_CONFIRM === '1', port: Number(env.PORT || 10000), resyncMs: Number(env.DAEMON_RESYNC_MS ?? 300_000), stallMs: Number(env.DAEMON_STALL_MS ?? 20_000), maxBackoffMs: Number(env.DAEMON_MAX_BACKOFF_MS ?? 60_000),
   };
 }
 
@@ -80,6 +82,9 @@ export async function main(cfg = loadConfig(), env: Env = process.env): Promise<
   // They are screening hints for the Surveillance workspace, never alert rules and never proof of manipulation.
   const flagBuf: DepthFlag[] = [];
   let flagFailLogged = 0;
+  // DEPTH_CONFIRM=1 → every flag also carries its multi-signal confirmation, stored in depth_flags.confirmed_by (apply docs/WEEK11_CAPSTONE_SCHEMA.sql first). Off = identical rows to before.
+  const confirmOn = cfg.depthConfirm;
+  index.setConfirmation(confirmOn, (sym) => baselines.profileOf(sym));
   index.setFlagSink((f) => { if (flagBuf.length < 500) flagBuf.push(f); });
   const flushFlags = async () => {
     if (!flagBuf.length) return;
@@ -87,7 +92,7 @@ export async function main(cfg = loadConfig(), env: Env = process.env): Promise<
     try {
       const r = await fetch(`${sbBase}/rest/v1/depth_flags`, {
         method: 'POST', headers: { ...sbHeaders, Prefer: 'return=minimal' }, signal: AbortSignal.timeout(6000),
-        body: JSON.stringify(batch.map((f) => ({ symbol: f.symbol, kind: f.kind, side: f.side, severity: f.severity, price: f.price, qty: f.qty, detail: f.detail, label: f.label, flagged_at: new Date(f.ts > 0 ? f.ts : Date.now()).toISOString() }))),
+        body: JSON.stringify(batch.map((f) => ({ symbol: f.symbol, kind: f.kind, side: f.side, severity: f.severity, price: f.price, qty: f.qty, detail: f.detail, label: f.label, ...(confirmOn && f.confirmation ? { confirmed_by: f.confirmation.hits } : {}), flagged_at: new Date(f.ts > 0 ? f.ts : Date.now()).toISOString() }))),
       });
       if (!r.ok) throw new Error(`depth_flags ${r.status}`);
     } catch (e) {

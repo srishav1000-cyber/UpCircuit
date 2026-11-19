@@ -14,13 +14,14 @@
 // how often real markets contain manipulation, and they say nothing about intent. Without labels, precision is reported as N/A.
 import { createReadStream, writeFileSync } from 'node:fs';
 import { createInterface } from 'node:readline';
-import { DepthFlagTracker, FLAG_PARAMS, type DepthFlag } from '../lib/heuristicFlags';
+import { DepthFlagTracker, FLAG_PARAMS, CONFIRM_PARAMS, confirmFlag, makeCooldown, obiOfBook, type DepthFlag } from '../lib/heuristicFlags';
+import { windowSurge, istDayOf, SURGE_WINDOW_MIN, BUCKETS, type IntradayProfile } from '../lib/volumeBaseline';
 import type { DepthLevel } from '../lib/types';
 
 /* ───────────────────────── types ───────────────────────── */
 export type EpisodeClass = 'spoof_wall' | 'flicker' | 'benign_fill_wall' | 'benign_displacement';
 export interface Episode { cls: EpisodeClass; symbol: string; side: 'bid' | 'ask'; from: number; to: number }
-export interface Snapshot { t: number; symbol: string; ltp: number; bids: DepthLevel[]; asks: DepthLevel[] }
+export interface Snapshot { t: number; symbol: string; ltp: number; bids: DepthLevel[]; asks: DepthLevel[]; /** cumulative traded volume of the session so far (synthetic runs; absent in recorded input without it) */ vol?: number }
 export interface BacktestResult {
   config: Record<string, unknown>;
   data: { snapshots: number; symbols: number; labelled: boolean; episodes: Record<string, number> };
@@ -32,6 +33,12 @@ export interface BacktestResult {
   recall: Record<string, { episodes: number; detected: number; rate: number | null; medianDelayMs: number | null }> | null;
   params: typeof FLAG_PARAMS;
   notes: string[];
+  /** Week 11 (present when the sweep ran): both modes side by side, the threshold grid, sensitivity runs and the assumptions behind the volume signal */
+  schemaVersion?: number;
+  modes?: SweepResult['modes'];
+  sweep?: Pick<SweepResult, 'axes' | 'fixed' | 'cells'>;
+  sensitivity?: SweepResult['sensitivity'];
+  assumptions?: SweepResult['assumptions'];
 }
 
 /* ───────────────────────── helpers ───────────────────────── */
@@ -150,6 +157,35 @@ export function synthesize(opts: { symbols: number; days: number; stepMs: number
   return { snaps, episodes };
 }
 
+
+/* ───────────────────────── scoring (shared by baseline, composite and the sweep) ───────────────────────── */
+type FlagLite = Pick<DepthFlag, 'symbol' | 'kind' | 'side' | 'ts'>;
+export interface Score { tp: number; fp: number; causes: Record<string, number>; recall: NonNullable<BacktestResult['recall']> }
+export function scoreFlags(flags: readonly FlagLite[], episodes: Episode[]): Score {
+  // match every flag to the episode (if any) whose window, symbol, side and pattern kind it fits
+  const hitBy = new Map<Episode, number[]>();            // episode → flag delays
+  let tp = 0, fp = 0;
+  const causes: Record<string, number> = {};
+  const bySym = new Map<string, Episode[]>();
+  for (const e of episodes) (bySym.get(e.symbol) ?? bySym.set(e.symbol, []).get(e.symbol)!).push(e);
+  for (const f of flags) {
+    const sameWindow = (bySym.get(f.symbol) ?? []).filter((e) => f.ts >= e.from && f.ts <= e.to + GRACE_MS);
+    const pos = sameWindow.find((e) => POSITIVE[e.cls] && e.side === f.side && KIND_OF[e.cls] === f.kind);
+    if (pos) { tp++; (hitBy.get(pos) ?? hitBy.set(pos, []).get(pos)!).push(f.ts - pos.from); continue; }
+    fp++;
+    const ben = sameWindow.find((e) => !POSITIVE[e.cls] && KIND_OF[e.cls] === f.kind);
+    const cause = ben ? ben.cls : sameWindow.length ? 'wrong_side_or_kind_near_episode' : `background_noise_${f.kind}`;
+    causes[cause] = (causes[cause] ?? 0) + 1;
+  }
+  const recall: Score['recall'] = {};
+  for (const cls of ['spoof_wall', 'flicker'] as const) {
+    const eps = episodes.filter((e) => e.cls === cls);
+    const delays = eps.flatMap((e) => (hitBy.get(e) ? [Math.min(...(hitBy.get(e) as number[]))] : []));
+    recall[cls] = { episodes: eps.length, detected: delays.length, rate: eps.length ? round(delays.length / eps.length) : null, medianDelayMs: median(delays) };
+  }
+  return { tp, fp, causes, recall };
+}
+
 /* ───────────────────────── evaluation ───────────────────────── */
 export function evaluate(snaps: Snapshot[], episodes: Episode[] | null, config: Record<string, unknown> = {}): BacktestResult {
   const tracker = new DepthFlagTracker();
@@ -170,26 +206,8 @@ export function evaluate(snaps: Snapshot[], episodes: Episode[] | null, config: 
   };
   if (!episodes || !episodes.length) { base.notes.push('No ground-truth labels: precision and recall are N/A. Trigger counts only.'); return base; }
 
-  // match every flag to the episode (if any) whose window, symbol, side and pattern kind it fits
-  const hitBy = new Map<Episode, number[]>();            // episode → flag delays
-  let tp = 0, fp = 0;
-  const causes: Record<string, number> = {};
-  for (const f of flags) {
-    const sym = f.symbol;
-    const sameWindow = episodes.filter((e) => e.symbol === sym && f.ts >= e.from && f.ts <= e.to + GRACE_MS);
-    const pos = sameWindow.find((e) => POSITIVE[e.cls] && e.side === f.side && KIND_OF[e.cls] === f.kind);
-    if (pos) { tp++; (hitBy.get(pos) ?? hitBy.set(pos, []).get(pos)!).push(f.ts - pos.from); continue; }
-    fp++;
-    const ben = sameWindow.find((e) => !POSITIVE[e.cls] && KIND_OF[e.cls] === f.kind);
-    const cause = ben ? ben.cls : sameWindow.length ? 'wrong_side_or_kind_near_episode' : `background_noise_${f.kind}`;
-    causes[cause] = (causes[cause] ?? 0) + 1;
-  }
-  const recall: NonNullable<BacktestResult['recall']> = {};
-  for (const cls of ['spoof_wall', 'flicker'] as const) {
-    const eps = episodes.filter((e) => e.cls === cls);
-    const delays = eps.flatMap((e) => (hitBy.get(e) ? [Math.min(...(hitBy.get(e) as number[]))] : []));
-    recall[cls] = { episodes: eps.length, detected: delays.length, rate: eps.length ? round(delays.length / eps.length) : null, medianDelayMs: median(delays) };
-  }
+  const sc = scoreFlags(flags, episodes);
+  const { tp, fp, causes, recall } = sc;
   base.precision = tp + fp ? round(tp / (tp + fp)) : null;
   base.truePositives = tp; base.falsePositives = fp; base.falsePositiveCauses = causes; base.recall = recall;
   base.notes.push(
@@ -198,6 +216,168 @@ export function evaluate(snaps: Snapshot[], episodes: Episode[] | null, config: 
     'precision = flags matching a labelled pattern ÷ all flags; recall = labelled episodes with ≥ 1 matching flag ÷ labelled episodes.',
   );
   return base;
+}
+
+
+/* ───────────────────────── synthetic volume layer (Week 11) ─────────────────────────
+ * The depth generator above is untouched (so the baseline numbers are reproducible bit-for-bit). Traded volume is generated AFTERWARDS from a separate
+ * seeded stream, so it can only ever be an additional signal, never a change to the book.
+ *   • base rate  = a U-shaped typical intraday profile (heavy open and close) × a slow mean-reverting log-normal regime (sd ≈ 0.15, τ ≈ 20 min) × per-step noise
+ *   • bursts     = volume runs at 2–4× for 5–15 min. Background bursts occur at random (default 2 per symbol-day).
+ *   • COUPLING   = the ASSUMPTION that labelled episodes tend to be accompanied by a burst that is already running 6–12 min before the pattern appears (a
+ *                  trailing 15-minute ratio needs that long to react) and lasts until 3 min after it ends; probability per class below. This is the one place
+ *                  where the generator encodes "manipulation correlates with volume". It is an assumption, not a measurement — `sensitivity.volumeCouplingOff` in the output
+ *                  shows what the composite does when it is false.
+ *     benign_fill_wall gets the highest coupling on purpose: a wall that is genuinely traded through IS volume, so volume cannot tell it from a spoof.
+ */
+export interface VolumeCoupling { spoof_wall: number; flicker: number; benign_fill_wall: number; benign_displacement: number; backgroundBurstsPerDay: number }
+export const DEFAULT_COUPLING: VolumeCoupling = { spoof_wall: 0.7, flicker: 0.7, benign_fill_wall: 0.9, benign_displacement: 0.1, backgroundBurstsPerDay: 2 };
+export const NO_COUPLING: VolumeCoupling = { spoof_wall: 0, flicker: 0, benign_fill_wall: 0, benign_displacement: 0, backgroundBurstsPerDay: 2 };
+
+/** typical full-day volume of synthetic symbol `BTnn` */
+export const synthFullDay = (symbol: string): number => 3_000_000 + 400_000 * (Number(symbol.replace(/\D/g, '')) || 0);
+/** normalised U-shaped intraday shape → median cumulative profile (25 buckets) scaled to `fullDay` */
+export function synthProfile(fullDay: number): IntradayProfile {
+  const w = Array.from({ length: BUCKETS }, (_, k) => 1 + 1.4 * Math.exp(-k / 2.5) + 0.9 * Math.exp(-(BUCKETS - 1 - k) / 2.5));
+  const tot = w.reduce((a, b) => a + b, 0); let c = 0;
+  return { cum: w.map((x) => (c += (x / tot) * fullDay)), sessions: 20, status: 'ok' };
+}
+
+/** cumulative session volume per snapshot, aligned with `snaps` (the array must already be time-sorted) */
+export function synthesizeVolume(snaps: Snapshot[], episodes: Episode[], seed: number, coupling: VolumeCoupling = DEFAULT_COUPLING): Float64Array {
+  const R = rng((seed ^ 0x9e3779b1) >>> 0), N = () => { let u = 0, v = 0; while (!u) u = R(); while (!v) v = R(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v); };
+  const U = (a: number, b: number) => a + (b - a) * R();
+  const out = new Float64Array(snaps.length);
+  const groups = new Map<string, number[]>();
+  snaps.forEach((x, i) => { const k = `${x.symbol}|${istDayOf(x.t)}`; (groups.get(k) ?? groups.set(k, []).get(k)!).push(i); });
+  const epBySym = new Map<string, Episode[]>();
+  for (const e of episodes) (epBySym.get(e.symbol) ?? epBySym.set(e.symbol, []).get(e.symbol)!).push(e);
+  for (const [key, idx] of groups) {
+    const symbol = key.split('|')[0], t0 = snaps[idx[0]].t, t1 = snaps[idx[idx.length - 1]].t;
+    const full = synthFullDay(symbol), prof = synthProfile(full);
+    const bursts: { from: number; to: number; mult: number }[] = [];
+    for (const e of epBySym.get(symbol) ?? []) {
+      if (e.from < t0 || e.from > t1) continue;
+      if (R() < coupling[e.cls]) { const from = e.from - U(6, 12) * 60_000; bursts.push({ from, to: e.to + 180_000, mult: U(2.2, 4.0) }); }
+    }
+    let n = 0; for (let L = Math.exp(-coupling.backgroundBurstsPerDay), p = 1; (p *= R()) > L; ) n++;
+    for (let k = 0; k < n; k++) { const from = t0 + R() * (t1 - t0); bursts.push({ from, to: from + U(300_000, 900_000), mult: U(2, 3.5) }); }
+    let x = 0, cum = 0, prevT = t0;
+    for (const i of idx) {
+      const t = snaps[i].t, dt = Math.max(0, t - prevT); prevT = t;
+      const m = Math.max(1, ...bursts.filter((b) => t >= b.from && t < b.to).map((b) => b.mult));
+      const tau = 20 * 60_000; x += -x * (dt / tau) + 0.15 * Math.sqrt((2 * dt) / tau) * N();
+      const minute = (t - t0) / 60_000, k = Math.min(BUCKETS - 1, Math.floor(minute / 15));
+      const slope = (prof.cum[k] - (k ? prof.cum[k - 1] : 0)) / 15 / 60_000;               // shares per ms in this bucket
+      cum += slope * dt * m * Math.exp(x) * Math.exp(0.3 * N() - 0.045);
+      out[i] = cum;
+    }
+  }
+  return out;
+}
+
+/** R(t) for snapshot i, using only snapshots at or before it (no look-ahead). null = N/A */
+export function makeSurgeLookup(snaps: Snapshot[], vol: Float64Array | null): (i: number) => number | null {
+  if (!vol) return () => null;
+  const groups = new Map<string, number[]>(), groupOf = new Int32Array(snaps.length), list: number[][] = [], profiles: IntradayProfile[] = [];
+  snaps.forEach((x, i) => {
+    const k = `${x.symbol}|${istDayOf(x.t)}`; let g = groups.get(k);
+    if (!g) { g = []; groups.set(k, g); list.push(g); profiles.push(synthProfile(synthFullDay(x.symbol))); }
+    g.push(i); groupOf[i] = list.indexOf(g);
+  });
+  const W = SURGE_WINDOW_MIN * 60_000;
+  return (i) => {
+    const gi = groupOf[i], g = list[gi], now = snaps[i].t;
+    let lo = 0, hi = g.length - 1;                                      // last snapshot of this symbol-day at or before now − W (else the first)
+    while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (snaps[g[mid]].t <= now - W) lo = mid; else hi = mid - 1; }
+    const j = g[lo], then = snaps[j].t <= now - W ? vol[j] : 0, span = snaps[j].t <= now - W ? W : now - snaps[g[0]].t;
+    return windowSurge(profiles[gi], vol[i], then, now, span);
+  };
+}
+
+/* ───────────────────────── composite (multi-signal) evaluation + sweep ───────────────────────── */
+interface Cand { f: DepthFlag; i: number; spreadRatio: number | null; obi: number[] }
+export interface Metrics { flags: number; tp: number; fp: number; precision: number | null; recallSpoof: number | null; recallFlicker: number | null; recall: number | null; f1: number | null; per1000: number }
+export const LAMBDAS = [0.2, 0.4, 0.5, 0.6, 0.8] as const;           // 0.5 = the platform's own decay (LEVEL_WEIGHTS); the other four are the requested grid
+export const WALL_MULTS = [2.5, 3, 4, 5] as const;
+export const SURGES = [1.0, 1.5, 1.8, 2.2] as const;
+
+/** one tracker pass at a wall multiple: every candidate (no cooldown) with its signals at that instant */
+function collect(snaps: Snapshot[], wallMult: number): Cand[] {
+  const tr = new DepthFlagTracker({ wallMult }), out: Cand[] = [];
+  for (let i = 0; i < snaps.length; i++) {
+    const s = snaps[i], { flags, spreadRatio } = tr.candidates(s.symbol, { bids: s.bids, asks: s.asks }, s.ltp, s.t);
+    if (!flags.length) continue;
+    const obi = LAMBDAS.map((l) => obiOfBook(s.bids, s.asks, l) ?? NaN);
+    for (const f of flags) out.push({ f, i, spreadRatio, obi });
+  }
+  return out;
+}
+function metrics(flags: FlagLite[], snapCount: number, episodes: Episode[]): Metrics {
+  const sc = scoreFlags(flags, episodes), n = flags.length;
+  const eps = (sc.recall.spoof_wall?.episodes ?? 0) + (sc.recall.flicker?.episodes ?? 0), det = (sc.recall.spoof_wall?.detected ?? 0) + (sc.recall.flicker?.detected ?? 0);
+  const precision = n ? sc.tp / n : null, recall = eps ? det / eps : null;
+  return {
+    flags: n, tp: sc.tp, fp: sc.fp, precision: precision === null ? null : round(precision), recallSpoof: sc.recall.spoof_wall?.rate ?? null, recallFlicker: sc.recall.flicker?.rate ?? null,
+    recall: recall === null ? null : round(recall), f1: precision !== null && recall !== null && precision + recall > 0 ? round((2 * precision * recall) / (precision + recall)) : null, per1000: snapCount ? round((n / snapCount) * 1000, 3) : 0,
+  };
+}
+/** baseline flags from candidates: cooldown only (identical to DepthFlagTracker.observe in baseline mode) */
+function baselineFlags(c: Cand[]): DepthFlag[] { const gate = makeCooldown(); return c.filter((x) => gate(x.f, x.f.ts)).map((x) => x.f); }
+/** composite flags: confirmation BEFORE the cooldown (an unconfirmed candidate never mutes a later confirmed one) */
+function compositeFlags(c: Cand[], surge: (i: number) => number | null, lambdaIdx: number, o: { surgeMin: number; useVolume?: boolean }): DepthFlag[] {
+  const gate = makeCooldown(), out: DepthFlag[] = [];
+  for (const x of c) {
+    const conf = confirmFlag({ obi: Number.isNaN(x.obi[lambdaIdx]) ? null : x.obi[lambdaIdx], volRatio: o.useVolume === false ? null : surge(x.i), spreadRatio: x.spreadRatio }, { SURGE_MIN: o.surgeMin });
+    if (conf.confirmed && gate(x.f, x.f.ts)) out.push(x.f);
+  }
+  return out;
+}
+const cmp = (b: Metrics, c: Metrics) => ({
+  precisionBefore: b.precision, precisionAfter: c.precision, fpBefore: b.fp, fpAfter: c.fp, fpReductionPct: b.fp ? round(((b.fp - c.fp) / b.fp) * 100, 1) : null,
+  recallBefore: b.recall, recallAfter: c.recall, recallDelta: b.recall !== null && c.recall !== null ? round(c.recall - b.recall) : null,
+});
+
+export interface SweepResult {
+  axes: { lambda: number[]; wallMultiple: number[]; surge: number[] };
+  fixed: { obiMin: number; spreadMult: number; minSignals: number };
+  cells: { lambda: number; wallMultiple: number; surge: number; baseline: Metrics; composite: Metrics; fpReductionPct: number | null }[];
+  modes: { baseline: Metrics; confirmed_composite: Metrics & { params: Record<string, number> }; comparison: ReturnType<typeof cmp> };
+  sensitivity: { volumeCouplingOff: Metrics; volumeSignalDisabled: Metrics };
+  assumptions: { volumeCoupling: VolumeCoupling; surgeWindowMin: number; spreadWindow: number; note: string };
+}
+export function runSweep(snaps: Snapshot[], episodes: Episode[], vol: Float64Array | null, volOff: Float64Array | null): SweepResult {
+  const surge = makeSurgeLookup(snaps, vol), surgeOff = makeSurgeLookup(snaps, volOff);
+  const cells: SweepResult['cells'] = [];
+  let headline: SweepResult['modes'] | null = null, sens: SweepResult['sensitivity'] | null = null;
+  const defL = LAMBDAS.indexOf(CONFIRM_PARAMS.LAMBDA as (typeof LAMBDAS)[number]);
+  for (const wm of WALL_MULTS) {
+    const cand = collect(snaps, wm);
+    const base = metrics(baselineFlags(cand), snaps.length, episodes);
+    LAMBDAS.forEach((lambda, li) => {
+      for (const r of SURGES) {
+        const comp = metrics(compositeFlags(cand, surge, li, { surgeMin: r }), snaps.length, episodes);
+        cells.push({ lambda, wallMultiple: wm, surge: r, baseline: base, composite: comp, fpReductionPct: cmp(base, comp).fpReductionPct });
+      }
+    });
+    if (wm === FLAG_PARAMS.WALL_MULT) {
+      const comp = metrics(compositeFlags(cand, surge, defL, { surgeMin: CONFIRM_PARAMS.SURGE_MIN }), snaps.length, episodes);
+      headline = { baseline: base, confirmed_composite: { ...comp, params: { lambda: CONFIRM_PARAMS.LAMBDA, wallMultiple: wm, obiMin: CONFIRM_PARAMS.OBI_MIN, surgeMin: CONFIRM_PARAMS.SURGE_MIN, spreadMult: CONFIRM_PARAMS.SPREAD_MULT, minSignals: CONFIRM_PARAMS.MIN_SIGNALS } }, comparison: cmp(base, comp) };
+      sens = {
+        volumeCouplingOff: metrics(compositeFlags(cand, surgeOff, defL, { surgeMin: CONFIRM_PARAMS.SURGE_MIN }), snaps.length, episodes),
+        volumeSignalDisabled: metrics(compositeFlags(cand, surge, defL, { surgeMin: CONFIRM_PARAMS.SURGE_MIN, useVolume: false }), snaps.length, episodes),
+      };
+    }
+  }
+  return {
+    axes: { lambda: [...LAMBDAS], wallMultiple: [...WALL_MULTS], surge: [...SURGES] },
+    fixed: { obiMin: CONFIRM_PARAMS.OBI_MIN, spreadMult: CONFIRM_PARAMS.SPREAD_MULT, minSignals: CONFIRM_PARAMS.MIN_SIGNALS },
+    cells, modes: headline!, sensitivity: sens!,
+    assumptions: {
+      volumeCoupling: DEFAULT_COUPLING, surgeWindowMin: SURGE_WINDOW_MIN, spreadWindow: CONFIRM_PARAMS.SPREAD_WINDOW,
+      note: 'Order-book imbalance and spread are computed from the synthetic book itself. Volume is generated separately and its link to labelled episodes (volumeCoupling) is an ASSUMPTION; sensitivity.volumeCouplingOff shows the composite without it. All signals use data available at the flag time only (no look-ahead). Synthetic replay — not evidence about real-market manipulation.',
+    },
+  };
 }
 
 /* ───────────────────────── recorded input ───────────────────────── */
@@ -246,6 +426,15 @@ async function main(): Promise<void> {
   const data = input ? await loadJsonl(input) : synthesize(cfg);
   const res = evaluate(data.snaps, data.episodes, input ? { input } : { source: 'synthetic', ...cfg });
   print(res);
+  if (!input && data.episodes.length && !argv.includes('--no-sweep')) {
+    const vol = synthesizeVolume(data.snaps, data.episodes, cfg.seed, DEFAULT_COUPLING), volOff = synthesizeVolume(data.snaps, data.episodes, cfg.seed, NO_COUPLING);
+    const sw = runSweep(data.snaps, data.episodes, vol, volOff);
+    const m = sw.modes, pc = (x: number | null) => (x === null ? 'N/A' : `${(x * 100).toFixed(1)} %`);
+    console.log(`\nconfirmed_composite (λ ${CONFIRM_PARAMS.LAMBDA}, wall ×${FLAG_PARAMS.WALL_MULT}, R ≥ ${CONFIRM_PARAMS.SURGE_MIN}, ≥ ${CONFIRM_PARAMS.MIN_SIGNALS} of 3 signals)`);
+    console.log(`  precision ${pc(m.baseline.precision)} → ${pc(m.confirmed_composite.precision)} · FP ${m.baseline.fp} → ${m.confirmed_composite.fp} (−${m.comparison.fpReductionPct} %) · recall ${pc(m.baseline.recall)} → ${pc(m.confirmed_composite.recall)} · flags/1000 ${m.baseline.per1000} → ${m.confirmed_composite.per1000}`);
+    console.log(`  if volume is NOT coupled to episodes: precision ${pc(sw.sensitivity.volumeCouplingOff.precision)}, recall ${pc(sw.sensitivity.volumeCouplingOff.recall)} · volume signal disabled: precision ${pc(sw.sensitivity.volumeSignalDisabled.precision)}, recall ${pc(sw.sensitivity.volumeSignalDisabled.recall)}`);
+    Object.assign(res, { schemaVersion: 2, modes: sw.modes, sweep: { axes: sw.axes, fixed: sw.fixed, cells: sw.cells }, sensitivity: sw.sensitivity, assumptions: sw.assumptions });
+  }
   if (out) { writeFileSync(out, JSON.stringify(res, null, 2) + '\n'); console.log(`wrote ${out}`); }
 }
 if (process.argv[1] && /backtest-heuristics\.(ts|js|mjs|cjs)$/.test(process.argv[1])) main().catch((e) => { console.error(e instanceof Error ? e.message : e); process.exit(1); });

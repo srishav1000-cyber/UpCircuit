@@ -127,6 +127,13 @@ curl http://localhost:10000/healthz     # readiness / diagnostics (503 if the le
 ```
 Without Docker: `npm run daemon`. On Render, deploy as a Docker web service from `daemon/Dockerfile`. Run two instances for HA — the lease keeps one active. Details: `docs/WEEK9_DAEMON.md`, `docs/RUNBOOK.md`.
 
+## Week 11 capstone
+
+- **Multi-signal confirmation.** `confirmed_composite` mode keeps a spoof-wall / flicker candidate only if ≥ 2 of 3 agree: |OBI_λ| ≥ 0.35, 15-min volume surge R(t) ≥ 1.8, spread ≥ 1.5× its rolling median. Flags are tagged `Baseline Flag` or `Multi-Signal Confirmed`. `npx tsx scripts/backtest-heuristics.ts --out public/backtest-heuristics.json` regenerates the baseline-vs-composite comparison and the 5×4×4 sweep (synthetic data, no look-ahead; the volume↔episode link is an assumption, shown with sensitivity runs).
+- **Threshold & Sensitivity Explorer** and **Slippage / Circuit-Lock Exit Risk** card in the Surveillance Desk (Day Trader too); N/A when the market is closed or no 5-level depth.
+- **Surveillance Audit Pack.** Button in the Surveillance Desk downloads `upcircuit-surveillance-audit-<YYYY-MM-DD>.json` (SHA-256 sealed, secrets redacted) and opens a printable report. It is a white-box record of rules and readings, not investment advice and not a statement of regulatory compliance.
+- Optional: `DEPTH_CONFIRM=1` on the daemon stores `depth_flags.confirmed_by`; apply `docs/WEEK11_CAPSTONE_SCHEMA.sql` (or the root `schema.sql`) first.
+
 ## Verification
 
 ```bash

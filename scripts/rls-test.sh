@@ -6,7 +6,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 PGBIN=$(ls -d /usr/lib/postgresql/*/bin 2>/dev/null | tail -1 || true)
 [ -n "$PGBIN" ] || { echo "PostgreSQL server binaries not found — skipping RLS tests"; exit 0; }
-W=$(mktemp -d); chmod 755 "$W"; cp schema.sql docs/PERSISTENCE_SCHEMA.sql docs/ENTERPRISE_SCHEMA.sql docs/ENTERPRISE_SCHEMA_P1.sql docs/ENTERPRISE_SCHEMA_P2.sql docs/WEEK9_SCHEMA.sql docs/WEEK9_TURN43_SCHEMA.sql docs/WEEK9_TURN44_SCHEMA.sql docs/WEEK10_SCHEMA.sql docs/WEEK11_SCHEMA.sql scripts/rls_test.sql "$W"/; chmod 644 "$W"/*.sql
+W=$(mktemp -d); chmod 755 "$W"; cp schema.sql docs/PERSISTENCE_SCHEMA.sql docs/ENTERPRISE_SCHEMA.sql docs/ENTERPRISE_SCHEMA_P1.sql docs/ENTERPRISE_SCHEMA_P2.sql docs/WEEK9_SCHEMA.sql docs/WEEK9_TURN43_SCHEMA.sql docs/WEEK9_TURN44_SCHEMA.sql docs/WEEK10_SCHEMA.sql docs/WEEK11_SCHEMA.sql docs/WEEK11_CAPSTONE_SCHEMA.sql scripts/rls_test.sql "$W"/; chmod 644 "$W"/*.sql
 cat > "$W/stub.sql" <<'SQL'
 create role anon nologin; create role authenticated nologin; create role service_role nologin bypassrls;
 create schema auth;
@@ -32,8 +32,8 @@ if [ "${RLS_SCHEMA_MODE:-}" = "consolidated" ]; then
   $RUN "$PSQL -f $W/stub.sql >/dev/null"; $RUN "$PSQL -f $W/schema.sql >/dev/null"
   echo "· schema.sql applied; applying twice to prove it is re-runnable"; $RUN "$PSQL -f $W/schema.sql >/dev/null"
 else
-for f in stub PERSISTENCE_SCHEMA ENTERPRISE_SCHEMA ENTERPRISE_SCHEMA_P1 ENTERPRISE_SCHEMA_P2 WEEK9_SCHEMA WEEK9_TURN43_SCHEMA WEEK9_TURN44_SCHEMA WEEK10_SCHEMA WEEK11_SCHEMA; do $RUN "$PSQL -f $W/$f.sql >/dev/null"; done
+for f in stub PERSISTENCE_SCHEMA ENTERPRISE_SCHEMA ENTERPRISE_SCHEMA_P1 ENTERPRISE_SCHEMA_P2 WEEK9_SCHEMA WEEK9_TURN43_SCHEMA WEEK9_TURN44_SCHEMA WEEK10_SCHEMA WEEK11_SCHEMA WEEK11_CAPSTONE_SCHEMA; do $RUN "$PSQL -f $W/$f.sql >/dev/null"; done
 echo "· schemas applied; applying twice to prove they are re-runnable"
-for f in PERSISTENCE_SCHEMA ENTERPRISE_SCHEMA ENTERPRISE_SCHEMA_P1 ENTERPRISE_SCHEMA_P2 WEEK9_SCHEMA WEEK9_TURN43_SCHEMA WEEK9_TURN44_SCHEMA WEEK10_SCHEMA WEEK11_SCHEMA; do $RUN "$PSQL -f $W/$f.sql >/dev/null"; done
+for f in PERSISTENCE_SCHEMA ENTERPRISE_SCHEMA ENTERPRISE_SCHEMA_P1 ENTERPRISE_SCHEMA_P2 WEEK9_SCHEMA WEEK9_TURN43_SCHEMA WEEK9_TURN44_SCHEMA WEEK10_SCHEMA WEEK11_SCHEMA WEEK11_CAPSTONE_SCHEMA; do $RUN "$PSQL -f $W/$f.sql >/dev/null"; done
 fi
 $RUN "$PSQL -t -A -f $W/rls_test.sql" | tail -3

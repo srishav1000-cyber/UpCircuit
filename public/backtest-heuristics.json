@@ -74,5 +74,2354 @@
     "Labels define \"pattern\" the same way the generator does: results show agreement with that definition, not how often real markets are manipulated, and nothing about intent.",
     "benign_fill_wall: a large order that rests and is then FILLED still looks like a wall while it rests — counted as a false positive, because a wall alone cannot tell liquidity from a spoof.",
     "precision = flags matching a labelled pattern ÷ all flags; recall = labelled episodes with ≥ 1 matching flag ÷ labelled episodes."
-  ]
+  ],
+  "schemaVersion": 2,
+  "modes": {
+    "baseline": {
+      "flags": 427,
+      "tp": 57,
+      "fp": 370,
+      "precision": 0.133,
+      "recallSpoof": 1,
+      "recallFlicker": 0.952,
+      "recall": 0.983,
+      "f1": 0.235,
+      "per1000": 0.791
+    },
+    "confirmed_composite": {
+      "flags": 134,
+      "tp": 28,
+      "fp": 106,
+      "precision": 0.209,
+      "recallSpoof": 0.622,
+      "recallFlicker": 0.238,
+      "recall": 0.483,
+      "f1": 0.292,
+      "per1000": 0.248,
+      "params": {
+        "lambda": 0.5,
+        "wallMultiple": 4,
+        "obiMin": 0.35,
+        "surgeMin": 1.8,
+        "spreadMult": 1.5,
+        "minSignals": 2
+      }
+    },
+    "comparison": {
+      "precisionBefore": 0.133,
+      "precisionAfter": 0.209,
+      "fpBefore": 370,
+      "fpAfter": 106,
+      "fpReductionPct": 71.4,
+      "recallBefore": 0.983,
+      "recallAfter": 0.483,
+      "recallDelta": -0.5
+    }
+  },
+  "sweep": {
+    "axes": {
+      "lambda": [
+        0.2,
+        0.4,
+        0.5,
+        0.6,
+        0.8
+      ],
+      "wallMultiple": [
+        2.5,
+        3,
+        4,
+        5
+      ],
+      "surge": [
+        1,
+        1.5,
+        1.8,
+        2.2
+      ]
+    },
+    "fixed": {
+      "obiMin": 0.35,
+      "spreadMult": 1.5,
+      "minSignals": 2
+    },
+    "cells": [
+      {
+        "lambda": 0.2,
+        "wallMultiple": 2.5,
+        "surge": 1,
+        "baseline": {
+          "flags": 727,
+          "tp": 57,
+          "fp": 670,
+          "precision": 0.078,
+          "recallSpoof": 1,
+          "recallFlicker": 0.952,
+          "recall": 0.983,
+          "f1": 0.145,
+          "per1000": 1.346
+        },
+        "composite": {
+          "flags": 303,
+          "tp": 41,
+          "fp": 262,
+          "precision": 0.135,
+          "recallSpoof": 0.892,
+          "recallFlicker": 0.381,
+          "recall": 0.707,
+          "f1": 0.227,
+          "per1000": 0.561
+        },
+        "fpReductionPct": 60.9
+      },
+      {
+        "lambda": 0.2,
+        "wallMultiple": 2.5,
+        "surge": 1.5,
+        "baseline": {
+          "flags": 727,
+          "tp": 57,
+          "fp": 670,
+          "precision": 0.078,
+          "recallSpoof": 1,
+          "recallFlicker": 0.952,
+          "recall": 0.983,
+          "f1": 0.145,
+          "per1000": 1.346
+        },
+        "composite": {
+          "flags": 185,
+          "tp": 34,
+          "fp": 151,
+          "precision": 0.184,
+          "recallSpoof": 0.784,
+          "recallFlicker": 0.238,
+          "recall": 0.586,
+          "f1": 0.28,
+          "per1000": 0.343
+        },
+        "fpReductionPct": 77.5
+      },
+      {
+        "lambda": 0.2,
+        "wallMultiple": 2.5,
+        "surge": 1.8,
+        "baseline": {
+          "flags": 727,
+          "tp": 57,
+          "fp": 670,
+          "precision": 0.078,
+          "recallSpoof": 1,
+          "recallFlicker": 0.952,
+          "recall": 0.983,
+          "f1": 0.145,
+          "per1000": 1.346
+        },
+        "composite": {
+          "flags": 157,
+          "tp": 30,
+          "fp": 127,
+          "precision": 0.191,
+          "recallSpoof": 0.703,
+          "recallFlicker": 0.19,
+          "recall": 0.517,
+          "f1": 0.279,
+          "per1000": 0.291
+        },
+        "fpReductionPct": 81
+      },
+      {
+        "lambda": 0.2,
+        "wallMultiple": 2.5,
+        "surge": 2.2,
+        "baseline": {
+          "flags": 727,
+          "tp": 57,
+          "fp": 670,
+          "precision": 0.078,
+          "recallSpoof": 1,
+          "recallFlicker": 0.952,
+          "recall": 0.983,
+          "f1": 0.145,
+          "per1000": 1.346
+        },
+        "composite": {
+          "flags": 118,
+          "tp": 25,
+          "fp": 93,
+          "precision": 0.212,
+          "recallSpoof": 0.649,
+          "recallFlicker": 0.048,
+          "recall": 0.431,
+          "f1": 0.284,
+          "per1000": 0.219
+        },
+        "fpReductionPct": 86.1
+      },
+      {
+        "lambda": 0.4,
+        "wallMultiple": 2.5,
+        "surge": 1,
+        "baseline": {
+          "flags": 727,
+          "tp": 57,
+          "fp": 670,
+          "precision": 0.078,
+          "recallSpoof": 1,
+          "recallFlicker": 0.952,
+          "recall": 0.983,
+          "f1": 0.145,
+          "per1000": 1.346
+        },
+        "composite": {
+          "flags": 319,
+          "tp": 41,
+          "fp": 278,
+          "precision": 0.129,
+          "recallSpoof": 0.892,
+          "recallFlicker": 0.381,
+          "recall": 0.707,
+          "f1": 0.218,
+          "per1000": 0.591
+        },
+        "fpReductionPct": 58.5
+      },
+      {
+        "lambda": 0.4,
+        "wallMultiple": 2.5,
+        "surge": 1.5,
+        "baseline": {
+          "flags": 727,
+          "tp": 57,
+          "fp": 670,
+          "precision": 0.078,
+          "recallSpoof": 1,
+          "recallFlicker": 0.952,
+          "recall": 0.983,
+          "f1": 0.145,
+          "per1000": 1.346
+        },
+        "composite": {
+          "flags": 196,
+          "tp": 33,
+          "fp": 163,
+          "precision": 0.168,
+          "recallSpoof": 0.757,
+          "recallFlicker": 0.238,
+          "recall": 0.569,
+          "f1": 0.26,
+          "per1000": 0.363
+        },
+        "fpReductionPct": 75.7
+      },
+      {
+        "lambda": 0.4,
+        "wallMultiple": 2.5,
+        "surge": 1.8,
+        "baseline": {
+          "flags": 727,
+          "tp": 57,
+          "fp": 670,
+          "precision": 0.078,
+          "recallSpoof": 1,
+          "recallFlicker": 0.952,
+          "recall": 0.983,
+          "f1": 0.145,
+          "per1000": 1.346
+        },
+        "composite": {
+          "flags": 167,
+          "tp": 28,
+          "fp": 139,
+          "precision": 0.168,
+          "recallSpoof": 0.649,
+          "recallFlicker": 0.19,
+          "recall": 0.483,
+          "f1": 0.249,
+          "per1000": 0.309
+        },
+        "fpReductionPct": 79.3
+      },
+      {
+        "lambda": 0.4,
+        "wallMultiple": 2.5,
+        "surge": 2.2,
+        "baseline": {
+          "flags": 727,
+          "tp": 57,
+          "fp": 670,
+          "precision": 0.078,
+          "recallSpoof": 1,
+          "recallFlicker": 0.952,
+          "recall": 0.983,
+          "f1": 0.145,
+          "per1000": 1.346
+        },
+        "composite": {
+          "flags": 129,
+          "tp": 23,
+          "fp": 106,
+          "precision": 0.178,
+          "recallSpoof": 0.595,
+          "recallFlicker": 0.048,
+          "recall": 0.397,
+          "f1": 0.246,
+          "per1000": 0.239
+        },
+        "fpReductionPct": 84.2
+      },
+      {
+        "lambda": 0.5,
+        "wallMultiple": 2.5,
+        "surge": 1,
+        "baseline": {
+          "flags": 727,
+          "tp": 57,
+          "fp": 670,
+          "precision": 0.078,
+          "recallSpoof": 1,
+          "recallFlicker": 0.952,
+          "recall": 0.983,
+          "f1": 0.145,
+          "per1000": 1.346
+        },
+        "composite": {
+          "flags": 336,
+          "tp": 42,
+          "fp": 294,
+          "precision": 0.125,
+          "recallSpoof": 0.892,
+          "recallFlicker": 0.429,
+          "recall": 0.724,
+          "f1": 0.213,
+          "per1000": 0.622
+        },
+        "fpReductionPct": 56.1
+      },
+      {
+        "lambda": 0.5,
+        "wallMultiple": 2.5,
+        "surge": 1.5,
+        "baseline": {
+          "flags": 727,
+          "tp": 57,
+          "fp": 670,
+          "precision": 0.078,
+          "recallSpoof": 1,
+          "recallFlicker": 0.952,
+          "recall": 0.983,
+          "f1": 0.145,
+          "per1000": 1.346
+        },
+        "composite": {
+          "flags": 217,
+          "tp": 35,
+          "fp": 182,
+          "precision": 0.161,
+          "recallSpoof": 0.757,
+          "recallFlicker": 0.333,
+          "recall": 0.603,
+          "f1": 0.255,
+          "per1000": 0.402
+        },
+        "fpReductionPct": 72.8
+      },
+      {
+        "lambda": 0.5,
+        "wallMultiple": 2.5,
+        "surge": 1.8,
+        "baseline": {
+          "flags": 727,
+          "tp": 57,
+          "fp": 670,
+          "precision": 0.078,
+          "recallSpoof": 1,
+          "recallFlicker": 0.952,
+          "recall": 0.983,
+          "f1": 0.145,
+          "per1000": 1.346
+        },
+        "composite": {
+          "flags": 186,
+          "tp": 28,
+          "fp": 158,
+          "precision": 0.151,
+          "recallSpoof": 0.622,
+          "recallFlicker": 0.238,
+          "recall": 0.483,
+          "f1": 0.23,
+          "per1000": 0.344
+        },
+        "fpReductionPct": 76.4
+      },
+      {
+        "lambda": 0.5,
+        "wallMultiple": 2.5,
+        "surge": 2.2,
+        "baseline": {
+          "flags": 727,
+          "tp": 57,
+          "fp": 670,
+          "precision": 0.078,
+          "recallSpoof": 1,
+          "recallFlicker": 0.952,
+          "recall": 0.983,
+          "f1": 0.145,
+          "per1000": 1.346
+        },
+        "composite": {
+          "flags": 146,
+          "tp": 23,
+          "fp": 123,
+          "precision": 0.158,
+          "recallSpoof": 0.568,
+          "recallFlicker": 0.095,
+          "recall": 0.397,
+          "f1": 0.225,
+          "per1000": 0.27
+        },
+        "fpReductionPct": 81.6
+      },
+      {
+        "lambda": 0.6,
+        "wallMultiple": 2.5,
+        "surge": 1,
+        "baseline": {
+          "flags": 727,
+          "tp": 57,
+          "fp": 670,
+          "precision": 0.078,
+          "recallSpoof": 1,
+          "recallFlicker": 0.952,
+          "recall": 0.983,
+          "f1": 0.145,
+          "per1000": 1.346
+        },
+        "composite": {
+          "flags": 353,
+          "tp": 42,
+          "fp": 311,
+          "precision": 0.119,
+          "recallSpoof": 0.892,
+          "recallFlicker": 0.429,
+          "recall": 0.724,
+          "f1": 0.204,
+          "per1000": 0.654
+        },
+        "fpReductionPct": 53.6
+      },
+      {
+        "lambda": 0.6,
+        "wallMultiple": 2.5,
+        "surge": 1.5,
+        "baseline": {
+          "flags": 727,
+          "tp": 57,
+          "fp": 670,
+          "precision": 0.078,
+          "recallSpoof": 1,
+          "recallFlicker": 0.952,
+          "recall": 0.983,
+          "f1": 0.145,
+          "per1000": 1.346
+        },
+        "composite": {
+          "flags": 231,
+          "tp": 35,
+          "fp": 196,
+          "precision": 0.152,
+          "recallSpoof": 0.757,
+          "recallFlicker": 0.333,
+          "recall": 0.603,
+          "f1": 0.242,
+          "per1000": 0.428
+        },
+        "fpReductionPct": 70.7
+      },
+      {
+        "lambda": 0.6,
+        "wallMultiple": 2.5,
+        "surge": 1.8,
+        "baseline": {
+          "flags": 727,
+          "tp": 57,
+          "fp": 670,
+          "precision": 0.078,
+          "recallSpoof": 1,
+          "recallFlicker": 0.952,
+          "recall": 0.983,
+          "f1": 0.145,
+          "per1000": 1.346
+        },
+        "composite": {
+          "flags": 202,
+          "tp": 28,
+          "fp": 174,
+          "precision": 0.139,
+          "recallSpoof": 0.622,
+          "recallFlicker": 0.238,
+          "recall": 0.483,
+          "f1": 0.215,
+          "per1000": 0.374
+        },
+        "fpReductionPct": 74
+      },
+      {
+        "lambda": 0.6,
+        "wallMultiple": 2.5,
+        "surge": 2.2,
+        "baseline": {
+          "flags": 727,
+          "tp": 57,
+          "fp": 670,
+          "precision": 0.078,
+          "recallSpoof": 1,
+          "recallFlicker": 0.952,
+          "recall": 0.983,
+          "f1": 0.145,
+          "per1000": 1.346
+        },
+        "composite": {
+          "flags": 156,
+          "tp": 21,
+          "fp": 135,
+          "precision": 0.135,
+          "recallSpoof": 0.514,
+          "recallFlicker": 0.095,
+          "recall": 0.362,
+          "f1": 0.196,
+          "per1000": 0.289
+        },
+        "fpReductionPct": 79.9
+      },
+      {
+        "lambda": 0.8,
+        "wallMultiple": 2.5,
+        "surge": 1,
+        "baseline": {
+          "flags": 727,
+          "tp": 57,
+          "fp": 670,
+          "precision": 0.078,
+          "recallSpoof": 1,
+          "recallFlicker": 0.952,
+          "recall": 0.983,
+          "f1": 0.145,
+          "per1000": 1.346
+        },
+        "composite": {
+          "flags": 378,
+          "tp": 41,
+          "fp": 337,
+          "precision": 0.108,
+          "recallSpoof": 0.838,
+          "recallFlicker": 0.476,
+          "recall": 0.707,
+          "f1": 0.188,
+          "per1000": 0.7
+        },
+        "fpReductionPct": 49.7
+      },
+      {
+        "lambda": 0.8,
+        "wallMultiple": 2.5,
+        "surge": 1.5,
+        "baseline": {
+          "flags": 727,
+          "tp": 57,
+          "fp": 670,
+          "precision": 0.078,
+          "recallSpoof": 1,
+          "recallFlicker": 0.952,
+          "recall": 0.983,
+          "f1": 0.145,
+          "per1000": 1.346
+        },
+        "composite": {
+          "flags": 256,
+          "tp": 34,
+          "fp": 222,
+          "precision": 0.133,
+          "recallSpoof": 0.703,
+          "recallFlicker": 0.381,
+          "recall": 0.586,
+          "f1": 0.217,
+          "per1000": 0.474
+        },
+        "fpReductionPct": 66.9
+      },
+      {
+        "lambda": 0.8,
+        "wallMultiple": 2.5,
+        "surge": 1.8,
+        "baseline": {
+          "flags": 727,
+          "tp": 57,
+          "fp": 670,
+          "precision": 0.078,
+          "recallSpoof": 1,
+          "recallFlicker": 0.952,
+          "recall": 0.983,
+          "f1": 0.145,
+          "per1000": 1.346
+        },
+        "composite": {
+          "flags": 226,
+          "tp": 28,
+          "fp": 198,
+          "precision": 0.124,
+          "recallSpoof": 0.595,
+          "recallFlicker": 0.286,
+          "recall": 0.483,
+          "f1": 0.197,
+          "per1000": 0.419
+        },
+        "fpReductionPct": 70.4
+      },
+      {
+        "lambda": 0.8,
+        "wallMultiple": 2.5,
+        "surge": 2.2,
+        "baseline": {
+          "flags": 727,
+          "tp": 57,
+          "fp": 670,
+          "precision": 0.078,
+          "recallSpoof": 1,
+          "recallFlicker": 0.952,
+          "recall": 0.983,
+          "f1": 0.145,
+          "per1000": 1.346
+        },
+        "composite": {
+          "flags": 181,
+          "tp": 22,
+          "fp": 159,
+          "precision": 0.122,
+          "recallSpoof": 0.514,
+          "recallFlicker": 0.143,
+          "recall": 0.379,
+          "f1": 0.184,
+          "per1000": 0.335
+        },
+        "fpReductionPct": 76.3
+      },
+      {
+        "lambda": 0.2,
+        "wallMultiple": 3,
+        "surge": 1,
+        "baseline": {
+          "flags": 720,
+          "tp": 57,
+          "fp": 663,
+          "precision": 0.079,
+          "recallSpoof": 1,
+          "recallFlicker": 0.952,
+          "recall": 0.983,
+          "f1": 0.147,
+          "per1000": 1.333
+        },
+        "composite": {
+          "flags": 299,
+          "tp": 41,
+          "fp": 258,
+          "precision": 0.137,
+          "recallSpoof": 0.892,
+          "recallFlicker": 0.381,
+          "recall": 0.707,
+          "f1": 0.23,
+          "per1000": 0.554
+        },
+        "fpReductionPct": 61.1
+      },
+      {
+        "lambda": 0.2,
+        "wallMultiple": 3,
+        "surge": 1.5,
+        "baseline": {
+          "flags": 720,
+          "tp": 57,
+          "fp": 663,
+          "precision": 0.079,
+          "recallSpoof": 1,
+          "recallFlicker": 0.952,
+          "recall": 0.983,
+          "f1": 0.147,
+          "per1000": 1.333
+        },
+        "composite": {
+          "flags": 183,
+          "tp": 34,
+          "fp": 149,
+          "precision": 0.186,
+          "recallSpoof": 0.784,
+          "recallFlicker": 0.238,
+          "recall": 0.586,
+          "f1": 0.282,
+          "per1000": 0.339
+        },
+        "fpReductionPct": 77.5
+      },
+      {
+        "lambda": 0.2,
+        "wallMultiple": 3,
+        "surge": 1.8,
+        "baseline": {
+          "flags": 720,
+          "tp": 57,
+          "fp": 663,
+          "precision": 0.079,
+          "recallSpoof": 1,
+          "recallFlicker": 0.952,
+          "recall": 0.983,
+          "f1": 0.147,
+          "per1000": 1.333
+        },
+        "composite": {
+          "flags": 156,
+          "tp": 30,
+          "fp": 126,
+          "precision": 0.192,
+          "recallSpoof": 0.703,
+          "recallFlicker": 0.19,
+          "recall": 0.517,
+          "f1": 0.28,
+          "per1000": 0.289
+        },
+        "fpReductionPct": 81
+      },
+      {
+        "lambda": 0.2,
+        "wallMultiple": 3,
+        "surge": 2.2,
+        "baseline": {
+          "flags": 720,
+          "tp": 57,
+          "fp": 663,
+          "precision": 0.079,
+          "recallSpoof": 1,
+          "recallFlicker": 0.952,
+          "recall": 0.983,
+          "f1": 0.147,
+          "per1000": 1.333
+        },
+        "composite": {
+          "flags": 118,
+          "tp": 25,
+          "fp": 93,
+          "precision": 0.212,
+          "recallSpoof": 0.649,
+          "recallFlicker": 0.048,
+          "recall": 0.431,
+          "f1": 0.284,
+          "per1000": 0.219
+        },
+        "fpReductionPct": 86
+      },
+      {
+        "lambda": 0.4,
+        "wallMultiple": 3,
+        "surge": 1,
+        "baseline": {
+          "flags": 720,
+          "tp": 57,
+          "fp": 663,
+          "precision": 0.079,
+          "recallSpoof": 1,
+          "recallFlicker": 0.952,
+          "recall": 0.983,
+          "f1": 0.147,
+          "per1000": 1.333
+        },
+        "composite": {
+          "flags": 315,
+          "tp": 41,
+          "fp": 274,
+          "precision": 0.13,
+          "recallSpoof": 0.892,
+          "recallFlicker": 0.381,
+          "recall": 0.707,
+          "f1": 0.22,
+          "per1000": 0.583
+        },
+        "fpReductionPct": 58.7
+      },
+      {
+        "lambda": 0.4,
+        "wallMultiple": 3,
+        "surge": 1.5,
+        "baseline": {
+          "flags": 720,
+          "tp": 57,
+          "fp": 663,
+          "precision": 0.079,
+          "recallSpoof": 1,
+          "recallFlicker": 0.952,
+          "recall": 0.983,
+          "f1": 0.147,
+          "per1000": 1.333
+        },
+        "composite": {
+          "flags": 194,
+          "tp": 33,
+          "fp": 161,
+          "precision": 0.17,
+          "recallSpoof": 0.757,
+          "recallFlicker": 0.238,
+          "recall": 0.569,
+          "f1": 0.262,
+          "per1000": 0.359
+        },
+        "fpReductionPct": 75.7
+      },
+      {
+        "lambda": 0.4,
+        "wallMultiple": 3,
+        "surge": 1.8,
+        "baseline": {
+          "flags": 720,
+          "tp": 57,
+          "fp": 663,
+          "precision": 0.079,
+          "recallSpoof": 1,
+          "recallFlicker": 0.952,
+          "recall": 0.983,
+          "f1": 0.147,
+          "per1000": 1.333
+        },
+        "composite": {
+          "flags": 166,
+          "tp": 28,
+          "fp": 138,
+          "precision": 0.169,
+          "recallSpoof": 0.649,
+          "recallFlicker": 0.19,
+          "recall": 0.483,
+          "f1": 0.25,
+          "per1000": 0.307
+        },
+        "fpReductionPct": 79.2
+      },
+      {
+        "lambda": 0.4,
+        "wallMultiple": 3,
+        "surge": 2.2,
+        "baseline": {
+          "flags": 720,
+          "tp": 57,
+          "fp": 663,
+          "precision": 0.079,
+          "recallSpoof": 1,
+          "recallFlicker": 0.952,
+          "recall": 0.983,
+          "f1": 0.147,
+          "per1000": 1.333
+        },
+        "composite": {
+          "flags": 129,
+          "tp": 23,
+          "fp": 106,
+          "precision": 0.178,
+          "recallSpoof": 0.595,
+          "recallFlicker": 0.048,
+          "recall": 0.397,
+          "f1": 0.246,
+          "per1000": 0.239
+        },
+        "fpReductionPct": 84
+      },
+      {
+        "lambda": 0.5,
+        "wallMultiple": 3,
+        "surge": 1,
+        "baseline": {
+          "flags": 720,
+          "tp": 57,
+          "fp": 663,
+          "precision": 0.079,
+          "recallSpoof": 1,
+          "recallFlicker": 0.952,
+          "recall": 0.983,
+          "f1": 0.147,
+          "per1000": 1.333
+        },
+        "composite": {
+          "flags": 332,
+          "tp": 42,
+          "fp": 290,
+          "precision": 0.127,
+          "recallSpoof": 0.892,
+          "recallFlicker": 0.429,
+          "recall": 0.724,
+          "f1": 0.215,
+          "per1000": 0.615
+        },
+        "fpReductionPct": 56.3
+      },
+      {
+        "lambda": 0.5,
+        "wallMultiple": 3,
+        "surge": 1.5,
+        "baseline": {
+          "flags": 720,
+          "tp": 57,
+          "fp": 663,
+          "precision": 0.079,
+          "recallSpoof": 1,
+          "recallFlicker": 0.952,
+          "recall": 0.983,
+          "f1": 0.147,
+          "per1000": 1.333
+        },
+        "composite": {
+          "flags": 215,
+          "tp": 35,
+          "fp": 180,
+          "precision": 0.163,
+          "recallSpoof": 0.757,
+          "recallFlicker": 0.333,
+          "recall": 0.603,
+          "f1": 0.256,
+          "per1000": 0.398
+        },
+        "fpReductionPct": 72.9
+      },
+      {
+        "lambda": 0.5,
+        "wallMultiple": 3,
+        "surge": 1.8,
+        "baseline": {
+          "flags": 720,
+          "tp": 57,
+          "fp": 663,
+          "precision": 0.079,
+          "recallSpoof": 1,
+          "recallFlicker": 0.952,
+          "recall": 0.983,
+          "f1": 0.147,
+          "per1000": 1.333
+        },
+        "composite": {
+          "flags": 185,
+          "tp": 28,
+          "fp": 157,
+          "precision": 0.151,
+          "recallSpoof": 0.622,
+          "recallFlicker": 0.238,
+          "recall": 0.483,
+          "f1": 0.23,
+          "per1000": 0.343
+        },
+        "fpReductionPct": 76.3
+      },
+      {
+        "lambda": 0.5,
+        "wallMultiple": 3,
+        "surge": 2.2,
+        "baseline": {
+          "flags": 720,
+          "tp": 57,
+          "fp": 663,
+          "precision": 0.079,
+          "recallSpoof": 1,
+          "recallFlicker": 0.952,
+          "recall": 0.983,
+          "f1": 0.147,
+          "per1000": 1.333
+        },
+        "composite": {
+          "flags": 146,
+          "tp": 23,
+          "fp": 123,
+          "precision": 0.158,
+          "recallSpoof": 0.568,
+          "recallFlicker": 0.095,
+          "recall": 0.397,
+          "f1": 0.225,
+          "per1000": 0.27
+        },
+        "fpReductionPct": 81.4
+      },
+      {
+        "lambda": 0.6,
+        "wallMultiple": 3,
+        "surge": 1,
+        "baseline": {
+          "flags": 720,
+          "tp": 57,
+          "fp": 663,
+          "precision": 0.079,
+          "recallSpoof": 1,
+          "recallFlicker": 0.952,
+          "recall": 0.983,
+          "f1": 0.147,
+          "per1000": 1.333
+        },
+        "composite": {
+          "flags": 349,
+          "tp": 42,
+          "fp": 307,
+          "precision": 0.12,
+          "recallSpoof": 0.892,
+          "recallFlicker": 0.429,
+          "recall": 0.724,
+          "f1": 0.206,
+          "per1000": 0.646
+        },
+        "fpReductionPct": 53.7
+      },
+      {
+        "lambda": 0.6,
+        "wallMultiple": 3,
+        "surge": 1.5,
+        "baseline": {
+          "flags": 720,
+          "tp": 57,
+          "fp": 663,
+          "precision": 0.079,
+          "recallSpoof": 1,
+          "recallFlicker": 0.952,
+          "recall": 0.983,
+          "f1": 0.147,
+          "per1000": 1.333
+        },
+        "composite": {
+          "flags": 229,
+          "tp": 35,
+          "fp": 194,
+          "precision": 0.153,
+          "recallSpoof": 0.757,
+          "recallFlicker": 0.333,
+          "recall": 0.603,
+          "f1": 0.244,
+          "per1000": 0.424
+        },
+        "fpReductionPct": 70.7
+      },
+      {
+        "lambda": 0.6,
+        "wallMultiple": 3,
+        "surge": 1.8,
+        "baseline": {
+          "flags": 720,
+          "tp": 57,
+          "fp": 663,
+          "precision": 0.079,
+          "recallSpoof": 1,
+          "recallFlicker": 0.952,
+          "recall": 0.983,
+          "f1": 0.147,
+          "per1000": 1.333
+        },
+        "composite": {
+          "flags": 201,
+          "tp": 28,
+          "fp": 173,
+          "precision": 0.139,
+          "recallSpoof": 0.622,
+          "recallFlicker": 0.238,
+          "recall": 0.483,
+          "f1": 0.216,
+          "per1000": 0.372
+        },
+        "fpReductionPct": 73.9
+      },
+      {
+        "lambda": 0.6,
+        "wallMultiple": 3,
+        "surge": 2.2,
+        "baseline": {
+          "flags": 720,
+          "tp": 57,
+          "fp": 663,
+          "precision": 0.079,
+          "recallSpoof": 1,
+          "recallFlicker": 0.952,
+          "recall": 0.983,
+          "f1": 0.147,
+          "per1000": 1.333
+        },
+        "composite": {
+          "flags": 156,
+          "tp": 21,
+          "fp": 135,
+          "precision": 0.135,
+          "recallSpoof": 0.514,
+          "recallFlicker": 0.095,
+          "recall": 0.362,
+          "f1": 0.196,
+          "per1000": 0.289
+        },
+        "fpReductionPct": 79.6
+      },
+      {
+        "lambda": 0.8,
+        "wallMultiple": 3,
+        "surge": 1,
+        "baseline": {
+          "flags": 720,
+          "tp": 57,
+          "fp": 663,
+          "precision": 0.079,
+          "recallSpoof": 1,
+          "recallFlicker": 0.952,
+          "recall": 0.983,
+          "f1": 0.147,
+          "per1000": 1.333
+        },
+        "composite": {
+          "flags": 374,
+          "tp": 41,
+          "fp": 333,
+          "precision": 0.11,
+          "recallSpoof": 0.838,
+          "recallFlicker": 0.476,
+          "recall": 0.707,
+          "f1": 0.19,
+          "per1000": 0.693
+        },
+        "fpReductionPct": 49.8
+      },
+      {
+        "lambda": 0.8,
+        "wallMultiple": 3,
+        "surge": 1.5,
+        "baseline": {
+          "flags": 720,
+          "tp": 57,
+          "fp": 663,
+          "precision": 0.079,
+          "recallSpoof": 1,
+          "recallFlicker": 0.952,
+          "recall": 0.983,
+          "f1": 0.147,
+          "per1000": 1.333
+        },
+        "composite": {
+          "flags": 254,
+          "tp": 34,
+          "fp": 220,
+          "precision": 0.134,
+          "recallSpoof": 0.703,
+          "recallFlicker": 0.381,
+          "recall": 0.586,
+          "f1": 0.218,
+          "per1000": 0.47
+        },
+        "fpReductionPct": 66.8
+      },
+      {
+        "lambda": 0.8,
+        "wallMultiple": 3,
+        "surge": 1.8,
+        "baseline": {
+          "flags": 720,
+          "tp": 57,
+          "fp": 663,
+          "precision": 0.079,
+          "recallSpoof": 1,
+          "recallFlicker": 0.952,
+          "recall": 0.983,
+          "f1": 0.147,
+          "per1000": 1.333
+        },
+        "composite": {
+          "flags": 225,
+          "tp": 28,
+          "fp": 197,
+          "precision": 0.124,
+          "recallSpoof": 0.595,
+          "recallFlicker": 0.286,
+          "recall": 0.483,
+          "f1": 0.198,
+          "per1000": 0.417
+        },
+        "fpReductionPct": 70.3
+      },
+      {
+        "lambda": 0.8,
+        "wallMultiple": 3,
+        "surge": 2.2,
+        "baseline": {
+          "flags": 720,
+          "tp": 57,
+          "fp": 663,
+          "precision": 0.079,
+          "recallSpoof": 1,
+          "recallFlicker": 0.952,
+          "recall": 0.983,
+          "f1": 0.147,
+          "per1000": 1.333
+        },
+        "composite": {
+          "flags": 181,
+          "tp": 22,
+          "fp": 159,
+          "precision": 0.122,
+          "recallSpoof": 0.514,
+          "recallFlicker": 0.143,
+          "recall": 0.379,
+          "f1": 0.184,
+          "per1000": 0.335
+        },
+        "fpReductionPct": 76
+      },
+      {
+        "lambda": 0.2,
+        "wallMultiple": 4,
+        "surge": 1,
+        "baseline": {
+          "flags": 427,
+          "tp": 57,
+          "fp": 370,
+          "precision": 0.133,
+          "recallSpoof": 1,
+          "recallFlicker": 0.952,
+          "recall": 0.983,
+          "f1": 0.235,
+          "per1000": 0.791
+        },
+        "composite": {
+          "flags": 196,
+          "tp": 41,
+          "fp": 155,
+          "precision": 0.209,
+          "recallSpoof": 0.892,
+          "recallFlicker": 0.381,
+          "recall": 0.707,
+          "f1": 0.323,
+          "per1000": 0.363
+        },
+        "fpReductionPct": 58.1
+      },
+      {
+        "lambda": 0.2,
+        "wallMultiple": 4,
+        "surge": 1.5,
+        "baseline": {
+          "flags": 427,
+          "tp": 57,
+          "fp": 370,
+          "precision": 0.133,
+          "recallSpoof": 1,
+          "recallFlicker": 0.952,
+          "recall": 0.983,
+          "f1": 0.235,
+          "per1000": 0.791
+        },
+        "composite": {
+          "flags": 132,
+          "tp": 34,
+          "fp": 98,
+          "precision": 0.258,
+          "recallSpoof": 0.784,
+          "recallFlicker": 0.238,
+          "recall": 0.586,
+          "f1": 0.358,
+          "per1000": 0.244
+        },
+        "fpReductionPct": 73.5
+      },
+      {
+        "lambda": 0.2,
+        "wallMultiple": 4,
+        "surge": 1.8,
+        "baseline": {
+          "flags": 427,
+          "tp": 57,
+          "fp": 370,
+          "precision": 0.133,
+          "recallSpoof": 1,
+          "recallFlicker": 0.952,
+          "recall": 0.983,
+          "f1": 0.235,
+          "per1000": 0.791
+        },
+        "composite": {
+          "flags": 113,
+          "tp": 30,
+          "fp": 83,
+          "precision": 0.265,
+          "recallSpoof": 0.703,
+          "recallFlicker": 0.19,
+          "recall": 0.517,
+          "f1": 0.351,
+          "per1000": 0.209
+        },
+        "fpReductionPct": 77.6
+      },
+      {
+        "lambda": 0.2,
+        "wallMultiple": 4,
+        "surge": 2.2,
+        "baseline": {
+          "flags": 427,
+          "tp": 57,
+          "fp": 370,
+          "precision": 0.133,
+          "recallSpoof": 1,
+          "recallFlicker": 0.952,
+          "recall": 0.983,
+          "f1": 0.235,
+          "per1000": 0.791
+        },
+        "composite": {
+          "flags": 90,
+          "tp": 25,
+          "fp": 65,
+          "precision": 0.278,
+          "recallSpoof": 0.649,
+          "recallFlicker": 0.048,
+          "recall": 0.431,
+          "f1": 0.338,
+          "per1000": 0.167
+        },
+        "fpReductionPct": 82.4
+      },
+      {
+        "lambda": 0.4,
+        "wallMultiple": 4,
+        "surge": 1,
+        "baseline": {
+          "flags": 427,
+          "tp": 57,
+          "fp": 370,
+          "precision": 0.133,
+          "recallSpoof": 1,
+          "recallFlicker": 0.952,
+          "recall": 0.983,
+          "f1": 0.235,
+          "per1000": 0.791
+        },
+        "composite": {
+          "flags": 207,
+          "tp": 41,
+          "fp": 166,
+          "precision": 0.198,
+          "recallSpoof": 0.892,
+          "recallFlicker": 0.381,
+          "recall": 0.707,
+          "f1": 0.309,
+          "per1000": 0.383
+        },
+        "fpReductionPct": 55.1
+      },
+      {
+        "lambda": 0.4,
+        "wallMultiple": 4,
+        "surge": 1.5,
+        "baseline": {
+          "flags": 427,
+          "tp": 57,
+          "fp": 370,
+          "precision": 0.133,
+          "recallSpoof": 1,
+          "recallFlicker": 0.952,
+          "recall": 0.983,
+          "f1": 0.235,
+          "per1000": 0.791
+        },
+        "composite": {
+          "flags": 142,
+          "tp": 33,
+          "fp": 109,
+          "precision": 0.232,
+          "recallSpoof": 0.757,
+          "recallFlicker": 0.238,
+          "recall": 0.569,
+          "f1": 0.33,
+          "per1000": 0.263
+        },
+        "fpReductionPct": 70.5
+      },
+      {
+        "lambda": 0.4,
+        "wallMultiple": 4,
+        "surge": 1.8,
+        "baseline": {
+          "flags": 427,
+          "tp": 57,
+          "fp": 370,
+          "precision": 0.133,
+          "recallSpoof": 1,
+          "recallFlicker": 0.952,
+          "recall": 0.983,
+          "f1": 0.235,
+          "per1000": 0.791
+        },
+        "composite": {
+          "flags": 121,
+          "tp": 28,
+          "fp": 93,
+          "precision": 0.231,
+          "recallSpoof": 0.649,
+          "recallFlicker": 0.19,
+          "recall": 0.483,
+          "f1": 0.313,
+          "per1000": 0.224
+        },
+        "fpReductionPct": 74.9
+      },
+      {
+        "lambda": 0.4,
+        "wallMultiple": 4,
+        "surge": 2.2,
+        "baseline": {
+          "flags": 427,
+          "tp": 57,
+          "fp": 370,
+          "precision": 0.133,
+          "recallSpoof": 1,
+          "recallFlicker": 0.952,
+          "recall": 0.983,
+          "f1": 0.235,
+          "per1000": 0.791
+        },
+        "composite": {
+          "flags": 98,
+          "tp": 23,
+          "fp": 75,
+          "precision": 0.235,
+          "recallSpoof": 0.595,
+          "recallFlicker": 0.048,
+          "recall": 0.397,
+          "f1": 0.295,
+          "per1000": 0.181
+        },
+        "fpReductionPct": 79.7
+      },
+      {
+        "lambda": 0.5,
+        "wallMultiple": 4,
+        "surge": 1,
+        "baseline": {
+          "flags": 427,
+          "tp": 57,
+          "fp": 370,
+          "precision": 0.133,
+          "recallSpoof": 1,
+          "recallFlicker": 0.952,
+          "recall": 0.983,
+          "f1": 0.235,
+          "per1000": 0.791
+        },
+        "composite": {
+          "flags": 220,
+          "tp": 42,
+          "fp": 178,
+          "precision": 0.191,
+          "recallSpoof": 0.892,
+          "recallFlicker": 0.429,
+          "recall": 0.724,
+          "f1": 0.302,
+          "per1000": 0.407
+        },
+        "fpReductionPct": 51.9
+      },
+      {
+        "lambda": 0.5,
+        "wallMultiple": 4,
+        "surge": 1.5,
+        "baseline": {
+          "flags": 427,
+          "tp": 57,
+          "fp": 370,
+          "precision": 0.133,
+          "recallSpoof": 1,
+          "recallFlicker": 0.952,
+          "recall": 0.983,
+          "f1": 0.235,
+          "per1000": 0.791
+        },
+        "composite": {
+          "flags": 157,
+          "tp": 35,
+          "fp": 122,
+          "precision": 0.223,
+          "recallSpoof": 0.757,
+          "recallFlicker": 0.333,
+          "recall": 0.603,
+          "f1": 0.326,
+          "per1000": 0.291
+        },
+        "fpReductionPct": 67
+      },
+      {
+        "lambda": 0.5,
+        "wallMultiple": 4,
+        "surge": 1.8,
+        "baseline": {
+          "flags": 427,
+          "tp": 57,
+          "fp": 370,
+          "precision": 0.133,
+          "recallSpoof": 1,
+          "recallFlicker": 0.952,
+          "recall": 0.983,
+          "f1": 0.235,
+          "per1000": 0.791
+        },
+        "composite": {
+          "flags": 134,
+          "tp": 28,
+          "fp": 106,
+          "precision": 0.209,
+          "recallSpoof": 0.622,
+          "recallFlicker": 0.238,
+          "recall": 0.483,
+          "f1": 0.292,
+          "per1000": 0.248
+        },
+        "fpReductionPct": 71.4
+      },
+      {
+        "lambda": 0.5,
+        "wallMultiple": 4,
+        "surge": 2.2,
+        "baseline": {
+          "flags": 427,
+          "tp": 57,
+          "fp": 370,
+          "precision": 0.133,
+          "recallSpoof": 1,
+          "recallFlicker": 0.952,
+          "recall": 0.983,
+          "f1": 0.235,
+          "per1000": 0.791
+        },
+        "composite": {
+          "flags": 109,
+          "tp": 23,
+          "fp": 86,
+          "precision": 0.211,
+          "recallSpoof": 0.568,
+          "recallFlicker": 0.095,
+          "recall": 0.397,
+          "f1": 0.275,
+          "per1000": 0.202
+        },
+        "fpReductionPct": 76.8
+      },
+      {
+        "lambda": 0.6,
+        "wallMultiple": 4,
+        "surge": 1,
+        "baseline": {
+          "flags": 427,
+          "tp": 57,
+          "fp": 370,
+          "precision": 0.133,
+          "recallSpoof": 1,
+          "recallFlicker": 0.952,
+          "recall": 0.983,
+          "f1": 0.235,
+          "per1000": 0.791
+        },
+        "composite": {
+          "flags": 232,
+          "tp": 42,
+          "fp": 190,
+          "precision": 0.181,
+          "recallSpoof": 0.892,
+          "recallFlicker": 0.429,
+          "recall": 0.724,
+          "f1": 0.29,
+          "per1000": 0.43
+        },
+        "fpReductionPct": 48.6
+      },
+      {
+        "lambda": 0.6,
+        "wallMultiple": 4,
+        "surge": 1.5,
+        "baseline": {
+          "flags": 427,
+          "tp": 57,
+          "fp": 370,
+          "precision": 0.133,
+          "recallSpoof": 1,
+          "recallFlicker": 0.952,
+          "recall": 0.983,
+          "f1": 0.235,
+          "per1000": 0.791
+        },
+        "composite": {
+          "flags": 166,
+          "tp": 35,
+          "fp": 131,
+          "precision": 0.211,
+          "recallSpoof": 0.757,
+          "recallFlicker": 0.333,
+          "recall": 0.603,
+          "f1": 0.313,
+          "per1000": 0.307
+        },
+        "fpReductionPct": 64.6
+      },
+      {
+        "lambda": 0.6,
+        "wallMultiple": 4,
+        "surge": 1.8,
+        "baseline": {
+          "flags": 427,
+          "tp": 57,
+          "fp": 370,
+          "precision": 0.133,
+          "recallSpoof": 1,
+          "recallFlicker": 0.952,
+          "recall": 0.983,
+          "f1": 0.235,
+          "per1000": 0.791
+        },
+        "composite": {
+          "flags": 143,
+          "tp": 28,
+          "fp": 115,
+          "precision": 0.196,
+          "recallSpoof": 0.622,
+          "recallFlicker": 0.238,
+          "recall": 0.483,
+          "f1": 0.279,
+          "per1000": 0.265
+        },
+        "fpReductionPct": 68.9
+      },
+      {
+        "lambda": 0.6,
+        "wallMultiple": 4,
+        "surge": 2.2,
+        "baseline": {
+          "flags": 427,
+          "tp": 57,
+          "fp": 370,
+          "precision": 0.133,
+          "recallSpoof": 1,
+          "recallFlicker": 0.952,
+          "recall": 0.983,
+          "f1": 0.235,
+          "per1000": 0.791
+        },
+        "composite": {
+          "flags": 114,
+          "tp": 21,
+          "fp": 93,
+          "precision": 0.184,
+          "recallSpoof": 0.514,
+          "recallFlicker": 0.095,
+          "recall": 0.362,
+          "f1": 0.244,
+          "per1000": 0.211
+        },
+        "fpReductionPct": 74.9
+      },
+      {
+        "lambda": 0.8,
+        "wallMultiple": 4,
+        "surge": 1,
+        "baseline": {
+          "flags": 427,
+          "tp": 57,
+          "fp": 370,
+          "precision": 0.133,
+          "recallSpoof": 1,
+          "recallFlicker": 0.952,
+          "recall": 0.983,
+          "f1": 0.235,
+          "per1000": 0.791
+        },
+        "composite": {
+          "flags": 247,
+          "tp": 41,
+          "fp": 206,
+          "precision": 0.166,
+          "recallSpoof": 0.838,
+          "recallFlicker": 0.476,
+          "recall": 0.707,
+          "f1": 0.269,
+          "per1000": 0.457
+        },
+        "fpReductionPct": 44.3
+      },
+      {
+        "lambda": 0.8,
+        "wallMultiple": 4,
+        "surge": 1.5,
+        "baseline": {
+          "flags": 427,
+          "tp": 57,
+          "fp": 370,
+          "precision": 0.133,
+          "recallSpoof": 1,
+          "recallFlicker": 0.952,
+          "recall": 0.983,
+          "f1": 0.235,
+          "per1000": 0.791
+        },
+        "composite": {
+          "flags": 183,
+          "tp": 34,
+          "fp": 149,
+          "precision": 0.186,
+          "recallSpoof": 0.703,
+          "recallFlicker": 0.381,
+          "recall": 0.586,
+          "f1": 0.282,
+          "per1000": 0.339
+        },
+        "fpReductionPct": 59.7
+      },
+      {
+        "lambda": 0.8,
+        "wallMultiple": 4,
+        "surge": 1.8,
+        "baseline": {
+          "flags": 427,
+          "tp": 57,
+          "fp": 370,
+          "precision": 0.133,
+          "recallSpoof": 1,
+          "recallFlicker": 0.952,
+          "recall": 0.983,
+          "f1": 0.235,
+          "per1000": 0.791
+        },
+        "composite": {
+          "flags": 160,
+          "tp": 28,
+          "fp": 132,
+          "precision": 0.175,
+          "recallSpoof": 0.595,
+          "recallFlicker": 0.286,
+          "recall": 0.483,
+          "f1": 0.257,
+          "per1000": 0.296
+        },
+        "fpReductionPct": 64.3
+      },
+      {
+        "lambda": 0.8,
+        "wallMultiple": 4,
+        "surge": 2.2,
+        "baseline": {
+          "flags": 427,
+          "tp": 57,
+          "fp": 370,
+          "precision": 0.133,
+          "recallSpoof": 1,
+          "recallFlicker": 0.952,
+          "recall": 0.983,
+          "f1": 0.235,
+          "per1000": 0.791
+        },
+        "composite": {
+          "flags": 131,
+          "tp": 22,
+          "fp": 109,
+          "precision": 0.168,
+          "recallSpoof": 0.514,
+          "recallFlicker": 0.143,
+          "recall": 0.379,
+          "f1": 0.233,
+          "per1000": 0.243
+        },
+        "fpReductionPct": 70.5
+      },
+      {
+        "lambda": 0.2,
+        "wallMultiple": 5,
+        "surge": 1,
+        "baseline": {
+          "flags": 192,
+          "tp": 57,
+          "fp": 135,
+          "precision": 0.297,
+          "recallSpoof": 1,
+          "recallFlicker": 0.952,
+          "recall": 0.983,
+          "f1": 0.456,
+          "per1000": 0.356
+        },
+        "composite": {
+          "flags": 116,
+          "tp": 41,
+          "fp": 75,
+          "precision": 0.353,
+          "recallSpoof": 0.892,
+          "recallFlicker": 0.381,
+          "recall": 0.707,
+          "f1": 0.471,
+          "per1000": 0.215
+        },
+        "fpReductionPct": 44.4
+      },
+      {
+        "lambda": 0.2,
+        "wallMultiple": 5,
+        "surge": 1.5,
+        "baseline": {
+          "flags": 192,
+          "tp": 57,
+          "fp": 135,
+          "precision": 0.297,
+          "recallSpoof": 1,
+          "recallFlicker": 0.952,
+          "recall": 0.983,
+          "f1": 0.456,
+          "per1000": 0.356
+        },
+        "composite": {
+          "flags": 88,
+          "tp": 34,
+          "fp": 54,
+          "precision": 0.386,
+          "recallSpoof": 0.784,
+          "recallFlicker": 0.238,
+          "recall": 0.586,
+          "f1": 0.466,
+          "per1000": 0.163
+        },
+        "fpReductionPct": 60
+      },
+      {
+        "lambda": 0.2,
+        "wallMultiple": 5,
+        "surge": 1.8,
+        "baseline": {
+          "flags": 192,
+          "tp": 57,
+          "fp": 135,
+          "precision": 0.297,
+          "recallSpoof": 1,
+          "recallFlicker": 0.952,
+          "recall": 0.983,
+          "f1": 0.456,
+          "per1000": 0.356
+        },
+        "composite": {
+          "flags": 79,
+          "tp": 30,
+          "fp": 49,
+          "precision": 0.38,
+          "recallSpoof": 0.703,
+          "recallFlicker": 0.19,
+          "recall": 0.517,
+          "f1": 0.438,
+          "per1000": 0.146
+        },
+        "fpReductionPct": 63.7
+      },
+      {
+        "lambda": 0.2,
+        "wallMultiple": 5,
+        "surge": 2.2,
+        "baseline": {
+          "flags": 192,
+          "tp": 57,
+          "fp": 135,
+          "precision": 0.297,
+          "recallSpoof": 1,
+          "recallFlicker": 0.952,
+          "recall": 0.983,
+          "f1": 0.456,
+          "per1000": 0.356
+        },
+        "composite": {
+          "flags": 64,
+          "tp": 25,
+          "fp": 39,
+          "precision": 0.391,
+          "recallSpoof": 0.649,
+          "recallFlicker": 0.048,
+          "recall": 0.431,
+          "f1": 0.41,
+          "per1000": 0.119
+        },
+        "fpReductionPct": 71.1
+      },
+      {
+        "lambda": 0.4,
+        "wallMultiple": 5,
+        "surge": 1,
+        "baseline": {
+          "flags": 192,
+          "tp": 57,
+          "fp": 135,
+          "precision": 0.297,
+          "recallSpoof": 1,
+          "recallFlicker": 0.952,
+          "recall": 0.983,
+          "f1": 0.456,
+          "per1000": 0.356
+        },
+        "composite": {
+          "flags": 121,
+          "tp": 41,
+          "fp": 80,
+          "precision": 0.339,
+          "recallSpoof": 0.892,
+          "recallFlicker": 0.381,
+          "recall": 0.707,
+          "f1": 0.458,
+          "per1000": 0.224
+        },
+        "fpReductionPct": 40.7
+      },
+      {
+        "lambda": 0.4,
+        "wallMultiple": 5,
+        "surge": 1.5,
+        "baseline": {
+          "flags": 192,
+          "tp": 57,
+          "fp": 135,
+          "precision": 0.297,
+          "recallSpoof": 1,
+          "recallFlicker": 0.952,
+          "recall": 0.983,
+          "f1": 0.456,
+          "per1000": 0.356
+        },
+        "composite": {
+          "flags": 92,
+          "tp": 33,
+          "fp": 59,
+          "precision": 0.359,
+          "recallSpoof": 0.757,
+          "recallFlicker": 0.238,
+          "recall": 0.569,
+          "f1": 0.44,
+          "per1000": 0.17
+        },
+        "fpReductionPct": 56.3
+      },
+      {
+        "lambda": 0.4,
+        "wallMultiple": 5,
+        "surge": 1.8,
+        "baseline": {
+          "flags": 192,
+          "tp": 57,
+          "fp": 135,
+          "precision": 0.297,
+          "recallSpoof": 1,
+          "recallFlicker": 0.952,
+          "recall": 0.983,
+          "f1": 0.456,
+          "per1000": 0.356
+        },
+        "composite": {
+          "flags": 82,
+          "tp": 28,
+          "fp": 54,
+          "precision": 0.341,
+          "recallSpoof": 0.649,
+          "recallFlicker": 0.19,
+          "recall": 0.483,
+          "f1": 0.4,
+          "per1000": 0.152
+        },
+        "fpReductionPct": 60
+      },
+      {
+        "lambda": 0.4,
+        "wallMultiple": 5,
+        "surge": 2.2,
+        "baseline": {
+          "flags": 192,
+          "tp": 57,
+          "fp": 135,
+          "precision": 0.297,
+          "recallSpoof": 1,
+          "recallFlicker": 0.952,
+          "recall": 0.983,
+          "f1": 0.456,
+          "per1000": 0.356
+        },
+        "composite": {
+          "flags": 67,
+          "tp": 23,
+          "fp": 44,
+          "precision": 0.343,
+          "recallSpoof": 0.595,
+          "recallFlicker": 0.048,
+          "recall": 0.397,
+          "f1": 0.368,
+          "per1000": 0.124
+        },
+        "fpReductionPct": 67.4
+      },
+      {
+        "lambda": 0.5,
+        "wallMultiple": 5,
+        "surge": 1,
+        "baseline": {
+          "flags": 192,
+          "tp": 57,
+          "fp": 135,
+          "precision": 0.297,
+          "recallSpoof": 1,
+          "recallFlicker": 0.952,
+          "recall": 0.983,
+          "f1": 0.456,
+          "per1000": 0.356
+        },
+        "composite": {
+          "flags": 125,
+          "tp": 42,
+          "fp": 83,
+          "precision": 0.336,
+          "recallSpoof": 0.892,
+          "recallFlicker": 0.429,
+          "recall": 0.724,
+          "f1": 0.459,
+          "per1000": 0.231
+        },
+        "fpReductionPct": 38.5
+      },
+      {
+        "lambda": 0.5,
+        "wallMultiple": 5,
+        "surge": 1.5,
+        "baseline": {
+          "flags": 192,
+          "tp": 57,
+          "fp": 135,
+          "precision": 0.297,
+          "recallSpoof": 1,
+          "recallFlicker": 0.952,
+          "recall": 0.983,
+          "f1": 0.456,
+          "per1000": 0.356
+        },
+        "composite": {
+          "flags": 97,
+          "tp": 35,
+          "fp": 62,
+          "precision": 0.361,
+          "recallSpoof": 0.757,
+          "recallFlicker": 0.333,
+          "recall": 0.603,
+          "f1": 0.452,
+          "per1000": 0.18
+        },
+        "fpReductionPct": 54.1
+      },
+      {
+        "lambda": 0.5,
+        "wallMultiple": 5,
+        "surge": 1.8,
+        "baseline": {
+          "flags": 192,
+          "tp": 57,
+          "fp": 135,
+          "precision": 0.297,
+          "recallSpoof": 1,
+          "recallFlicker": 0.952,
+          "recall": 0.983,
+          "f1": 0.456,
+          "per1000": 0.356
+        },
+        "composite": {
+          "flags": 86,
+          "tp": 28,
+          "fp": 58,
+          "precision": 0.326,
+          "recallSpoof": 0.622,
+          "recallFlicker": 0.238,
+          "recall": 0.483,
+          "f1": 0.389,
+          "per1000": 0.159
+        },
+        "fpReductionPct": 57
+      },
+      {
+        "lambda": 0.5,
+        "wallMultiple": 5,
+        "surge": 2.2,
+        "baseline": {
+          "flags": 192,
+          "tp": 57,
+          "fp": 135,
+          "precision": 0.297,
+          "recallSpoof": 1,
+          "recallFlicker": 0.952,
+          "recall": 0.983,
+          "f1": 0.456,
+          "per1000": 0.356
+        },
+        "composite": {
+          "flags": 71,
+          "tp": 23,
+          "fp": 48,
+          "precision": 0.324,
+          "recallSpoof": 0.568,
+          "recallFlicker": 0.095,
+          "recall": 0.397,
+          "f1": 0.357,
+          "per1000": 0.131
+        },
+        "fpReductionPct": 64.4
+      },
+      {
+        "lambda": 0.6,
+        "wallMultiple": 5,
+        "surge": 1,
+        "baseline": {
+          "flags": 192,
+          "tp": 57,
+          "fp": 135,
+          "precision": 0.297,
+          "recallSpoof": 1,
+          "recallFlicker": 0.952,
+          "recall": 0.983,
+          "f1": 0.456,
+          "per1000": 0.356
+        },
+        "composite": {
+          "flags": 129,
+          "tp": 42,
+          "fp": 87,
+          "precision": 0.326,
+          "recallSpoof": 0.892,
+          "recallFlicker": 0.429,
+          "recall": 0.724,
+          "f1": 0.449,
+          "per1000": 0.239
+        },
+        "fpReductionPct": 35.6
+      },
+      {
+        "lambda": 0.6,
+        "wallMultiple": 5,
+        "surge": 1.5,
+        "baseline": {
+          "flags": 192,
+          "tp": 57,
+          "fp": 135,
+          "precision": 0.297,
+          "recallSpoof": 1,
+          "recallFlicker": 0.952,
+          "recall": 0.983,
+          "f1": 0.456,
+          "per1000": 0.356
+        },
+        "composite": {
+          "flags": 100,
+          "tp": 35,
+          "fp": 65,
+          "precision": 0.35,
+          "recallSpoof": 0.757,
+          "recallFlicker": 0.333,
+          "recall": 0.603,
+          "f1": 0.443,
+          "per1000": 0.185
+        },
+        "fpReductionPct": 51.9
+      },
+      {
+        "lambda": 0.6,
+        "wallMultiple": 5,
+        "surge": 1.8,
+        "baseline": {
+          "flags": 192,
+          "tp": 57,
+          "fp": 135,
+          "precision": 0.297,
+          "recallSpoof": 1,
+          "recallFlicker": 0.952,
+          "recall": 0.983,
+          "f1": 0.456,
+          "per1000": 0.356
+        },
+        "composite": {
+          "flags": 88,
+          "tp": 28,
+          "fp": 60,
+          "precision": 0.318,
+          "recallSpoof": 0.622,
+          "recallFlicker": 0.238,
+          "recall": 0.483,
+          "f1": 0.384,
+          "per1000": 0.163
+        },
+        "fpReductionPct": 55.6
+      },
+      {
+        "lambda": 0.6,
+        "wallMultiple": 5,
+        "surge": 2.2,
+        "baseline": {
+          "flags": 192,
+          "tp": 57,
+          "fp": 135,
+          "precision": 0.297,
+          "recallSpoof": 1,
+          "recallFlicker": 0.952,
+          "recall": 0.983,
+          "f1": 0.456,
+          "per1000": 0.356
+        },
+        "composite": {
+          "flags": 69,
+          "tp": 21,
+          "fp": 48,
+          "precision": 0.304,
+          "recallSpoof": 0.514,
+          "recallFlicker": 0.095,
+          "recall": 0.362,
+          "f1": 0.331,
+          "per1000": 0.128
+        },
+        "fpReductionPct": 64.4
+      },
+      {
+        "lambda": 0.8,
+        "wallMultiple": 5,
+        "surge": 1,
+        "baseline": {
+          "flags": 192,
+          "tp": 57,
+          "fp": 135,
+          "precision": 0.297,
+          "recallSpoof": 1,
+          "recallFlicker": 0.952,
+          "recall": 0.983,
+          "f1": 0.456,
+          "per1000": 0.356
+        },
+        "composite": {
+          "flags": 130,
+          "tp": 41,
+          "fp": 89,
+          "precision": 0.315,
+          "recallSpoof": 0.838,
+          "recallFlicker": 0.476,
+          "recall": 0.707,
+          "f1": 0.436,
+          "per1000": 0.241
+        },
+        "fpReductionPct": 34.1
+      },
+      {
+        "lambda": 0.8,
+        "wallMultiple": 5,
+        "surge": 1.5,
+        "baseline": {
+          "flags": 192,
+          "tp": 57,
+          "fp": 135,
+          "precision": 0.297,
+          "recallSpoof": 1,
+          "recallFlicker": 0.952,
+          "recall": 0.983,
+          "f1": 0.456,
+          "per1000": 0.356
+        },
+        "composite": {
+          "flags": 102,
+          "tp": 34,
+          "fp": 68,
+          "precision": 0.333,
+          "recallSpoof": 0.703,
+          "recallFlicker": 0.381,
+          "recall": 0.586,
+          "f1": 0.425,
+          "per1000": 0.189
+        },
+        "fpReductionPct": 49.6
+      },
+      {
+        "lambda": 0.8,
+        "wallMultiple": 5,
+        "surge": 1.8,
+        "baseline": {
+          "flags": 192,
+          "tp": 57,
+          "fp": 135,
+          "precision": 0.297,
+          "recallSpoof": 1,
+          "recallFlicker": 0.952,
+          "recall": 0.983,
+          "f1": 0.456,
+          "per1000": 0.356
+        },
+        "composite": {
+          "flags": 91,
+          "tp": 28,
+          "fp": 63,
+          "precision": 0.308,
+          "recallSpoof": 0.595,
+          "recallFlicker": 0.286,
+          "recall": 0.483,
+          "f1": 0.376,
+          "per1000": 0.169
+        },
+        "fpReductionPct": 53.3
+      },
+      {
+        "lambda": 0.8,
+        "wallMultiple": 5,
+        "surge": 2.2,
+        "baseline": {
+          "flags": 192,
+          "tp": 57,
+          "fp": 135,
+          "precision": 0.297,
+          "recallSpoof": 1,
+          "recallFlicker": 0.952,
+          "recall": 0.983,
+          "f1": 0.456,
+          "per1000": 0.356
+        },
+        "composite": {
+          "flags": 73,
+          "tp": 22,
+          "fp": 51,
+          "precision": 0.301,
+          "recallSpoof": 0.514,
+          "recallFlicker": 0.143,
+          "recall": 0.379,
+          "f1": 0.336,
+          "per1000": 0.135
+        },
+        "fpReductionPct": 62.2
+      }
+    ]
+  },
+  "sensitivity": {
+    "volumeCouplingOff": {
+      "flags": 70,
+      "tp": 17,
+      "fp": 53,
+      "precision": 0.243,
+      "recallSpoof": 0.432,
+      "recallFlicker": 0.048,
+      "recall": 0.293,
+      "f1": 0.266,
+      "per1000": 0.13
+    },
+    "volumeSignalDisabled": {
+      "flags": 62,
+      "tp": 17,
+      "fp": 45,
+      "precision": 0.274,
+      "recallSpoof": 0.432,
+      "recallFlicker": 0.048,
+      "recall": 0.293,
+      "f1": 0.283,
+      "per1000": 0.115
+    }
+  },
+  "assumptions": {
+    "volumeCoupling": {
+      "spoof_wall": 0.7,
+      "flicker": 0.7,
+      "benign_fill_wall": 0.9,
+      "benign_displacement": 0.1,
+      "backgroundBurstsPerDay": 2
+    },
+    "surgeWindowMin": 15,
+    "spreadWindow": 120,
+    "note": "Order-book imbalance and spread are computed from the synthetic book itself. Volume is generated separately and its link to labelled episodes (volumeCoupling) is an ASSUMPTION; sensitivity.volumeCouplingOff shows the composite without it. All signals use data available at the flag time only (no look-ahead). Synthetic replay — not evidence about real-market manipulation."
+  }
 }

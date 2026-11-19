@@ -48,7 +48,8 @@ begin
 end $$;
 
 /** any signed-in user: is the alert daemon alive? Aggregate operational fields only (no rule or symbol counts). */
-create or replace function public.daemon_health()
+drop function if exists public.daemon_health();   -- re-runnable even after docs/WEEK11_CAPSTONE_SCHEMA.sql widened the result
+create function public.daemon_health()
 returns table (id text, age_ms bigint, last_tick_age_ms int, feed_status text, reconnects int, started_at timestamptz, version text)
 language sql stable security definer set search_path = public as $$
   select h.id, (extract(epoch from (now() - h.beat_at)) * 1000)::bigint, h.last_tick_age_ms, h.feed_status, h.reconnects, h.started_at, h.version

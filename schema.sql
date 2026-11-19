@@ -636,14 +636,6 @@ begin
     reconnects = excluded.reconnects, rules = excluded.rules, symbols = excluded.symbols, started_at = excluded.started_at, version = excluded.version;
 end $$;
 
-/** any signed-in user: is the alert daemon alive? Aggregate operational fields only. */
-create or replace function public.daemon_health()
-returns table (id text, age_ms bigint, last_tick_age_ms int, feed_status text, reconnects int, started_at timestamptz, version text)
-language sql stable security definer set search_path = public as $$
-  select h.id, (extract(epoch from (now() - h.beat_at)) * 1000)::bigint, h.last_tick_age_ms, h.feed_status, h.reconnects, h.started_at, h.version
-    from public.daemon_heartbeat h where auth.uid() is not null order by h.id
-$$;
-
 -- leader lease (HA): one active daemon, the others stand by; every comparison uses the DATABASE clock
 create table if not exists public.daemon_leases (
   lease_name  text primary key check (lease_name ~ '^[a-z0-9-]{1,40}$'),
@@ -654,6 +646,18 @@ create table if not exists public.daemon_leases (
 );
 alter table public.daemon_leases enable row level security;          -- no policies: reachable only through the SECURITY DEFINER functions
 revoke all on public.daemon_leases from anon, authenticated;
+
+/** any signed-in user: is the alert daemon alive? Aggregate operational fields only. Week 11 adds the leader-lease fencing epoch and its remaining life (DB clock). */
+drop function if exists public.daemon_health();
+create function public.daemon_health()
+returns table (id text, age_ms bigint, last_tick_age_ms int, feed_status text, reconnects int, started_at timestamptz, version text, lease_epoch bigint, lease_ttl_ms bigint)
+language sql stable security definer set search_path = public as $$
+  select h.id, (extract(epoch from (now() - h.beat_at)) * 1000)::bigint, h.last_tick_age_ms, h.feed_status, h.reconnects, h.started_at, h.version,
+         l.epoch, (extract(epoch from (l.expires_at - now())) * 1000)::bigint
+    from public.daemon_heartbeat h left join public.daemon_leases l on l.lease_name = 'alert-daemon'
+   where auth.uid() is not null order by h.id
+$$;
+
 
 /** acquired = true → caller is leader until expires_at (renew before then); false → someone else holds an unexpired lease */
 create or replace function public.acquire_daemon_lease(p_lease_name text, p_holder_id text, p_ttl_seconds int)
@@ -756,6 +760,9 @@ create table if not exists public.depth_flags (
   label      text not null default 'Heuristic Flag / Possible Manipulation Pattern' check (label = 'Heuristic Flag / Possible Manipulation Pattern'),
   flagged_at timestamptz not null default now()
 );
+-- which signals corroborated the flag (obi / volume / spread); NULL = single-rule baseline flag. Written when the daemon runs with DEPTH_CONFIRM=1
+alter table public.depth_flags add column if not exists confirmed_by text[]
+  check (confirmed_by is null or confirmed_by <@ array['obi','volume','spread']::text[]);
 create index if not exists depth_flags_symbol_time on public.depth_flags (symbol, flagged_at desc);
 create index if not exists depth_flags_time        on public.depth_flags (flagged_at desc);
 alter table public.depth_flags enable row level security;

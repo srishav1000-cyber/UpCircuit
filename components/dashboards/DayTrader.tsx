@@ -2,6 +2,7 @@
 
 import { Card, Meter, Stat, ZONE } from '../ui';
 import { OrderImbalanceGauge } from './OrderImbalanceGauge';
+import { SlippageCard } from './SlippageCard';
 import { CircuitPredictor } from '../CircuitPredictor';
 import { BandChart, BarChart, CARD_GRID, WIDE } from './charts';
 import { C, alpha } from '@/lib/theme';
@@ -106,6 +107,7 @@ export function DayTraderDashboard({ engine, quote, mode, favorites, onAskAI, on
       </div>
 
       <OrderImbalanceGauge bids={engine.depth.bids} asks={engine.depth.asks} symbol={quote.symbol} live={engine.depthReal} />
+      <SlippageCard engine={engine} symbol={quote.symbol} className={WIDE} />
       <CircuitPredictor engine={engine} onSelect={onSelect} />
       <OrbCard engine={engine} symbol={quote.symbol} />
       <SurgeMeter engine={engine} mode={mode} />
