@@ -13,6 +13,10 @@ import { AlertDeliveryLog } from './AlertDeliveryLog';
 import { SlippageCard } from './SlippageCard';
 import { ThresholdExplorer, type ExplorerData } from './ThresholdExplorer';
 import { AuditExport } from './AuditExport';
+import { DeskSymbolSwitcher } from './DeskSymbolSwitcher';
+import { SignalAttributionCard } from './SignalAttributionCard';
+import { DefenseGuideDrawer } from '../DefenseGuideDrawer';
+import type { Instrument } from '@/lib/types';
 import { EodDigestCard } from './EodDigestCard';
 import { RuleSandbox } from './RuleSandbox';
 import { topFiveImbalance, obiValue } from '@/lib/depthImbalance';
@@ -110,7 +114,7 @@ function BacktestCurveCard({ symbol, profile, volume, sessionFlags }: { symbol: 
           {synth && <p className="mt-1 text-[10px] leading-snug" style={{ color: LO }} data-testid="desk-bt-caveat">Synthetic data: precision depends on the assumed book noise and describes agreement with the generator’s own pattern definition — not how often real markets are manipulated.</p>}
         </div>
       </div>
-      {bt && bt !== 'none' && bt.data ? <div className="px-3 pb-3"><ThresholdExplorer data={bt} /></div> : null}
+      {bt && bt !== 'none' && bt.data ? <div className="space-y-3 px-3 pb-3"><SignalAttributionCard data={bt} /><ThresholdExplorer data={bt} /></div> : null}
     </section>
   );
 }
@@ -125,10 +129,13 @@ export interface SurveillanceWorkspaceProps {
   feed: Omit<FeedHealthStatusProps, 'cloud' | 'variant' | 'className'>;
   cloud: CloudClient | null;
   onOpenStock: (symbol: string) => void;
+  /** searchable universe + a handler that only changes the active symbol (no research modal) — together they enable the inline switcher */
+  instruments?: Instrument[];
+  onSwitchSymbol?: (symbol: string) => void;
   className?: string;
 }
 
-export function SurveillanceWorkspace({ engine, symbol, feed, cloud, onOpenStock, className = '' }: SurveillanceWorkspaceProps) {
+export function SurveillanceWorkspace({ engine, symbol, feed, cloud, onOpenStock, instruments, onSwitchSymbol, className = '' }: SurveillanceWorkspaceProps) {
   const [rules, setRules] = useState<AlertRuleRow[]>([]);
   const [baselines, setBaselines] = useState<Record<string, VolumeBaselineRow>>({});
   const [stored, setStored] = useState<DepthFlagRow[]>([]);
@@ -251,11 +258,17 @@ export function SurveillanceWorkspace({ engine, symbol, feed, cloud, onOpenStock
           <h2 className="text-[15px] font-bold text-ink"><span style={{ color: GOLD }}>◆</span> Surveillance desk</h2>
           <p className="text-[12px] text-muted">Feed health, circuit proximity, volume surges, order-book imbalance and alert delivery in one view.</p>
         </div>
-        <FeedHealthStatus {...feed} cloud={cloud} variant="pill" className="ml-auto" />
+        <div className="ml-auto flex flex-wrap items-center gap-2">
+          {instruments && onSwitchSymbol && <DeskSymbolSwitcher instruments={instruments} symbol={symbol} onSwitch={onSwitchSymbol} />}
+          <FeedHealthStatus {...feed} cloud={cloud} variant="pill" />
+        </div>
       </header>
 
-      <FeedHealthStatus {...feed} cloud={cloud} variant="panel" className="mb-3" />
+      <DefenseGuideDrawer className="mb-3" />
+      <div id="desk-sec-daemon"><FeedHealthStatus {...feed} cloud={cloud} variant="panel" className="mb-3" /></div>
       <AuditExport engine={engine} symbol={symbol} feed={feed} cloud={cloud} digest={digestShown} flags={flags} profile={profileRef.current} surge15={volWin.current.ratio(symbol, profileRef.current, Date.now(), engine.quotes.get(symbol)?.volume ?? 0)} className="mb-3" />
+
+      <RuleSandbox className="mb-3" />
 
       <div className="grid gap-3 lg:grid-cols-2">
         {/* circuit proximity */}
@@ -327,7 +340,7 @@ export function SurveillanceWorkspace({ engine, symbol, feed, cloud, onOpenStock
           <SlippageCard engine={engine} symbol={symbol} />
         </div>
 
-        <section className={pane} data-testid="desk-flags" aria-label="Heuristic depth flags">
+        <section id="desk-sec-obi" className={pane} data-testid="desk-flags" aria-label="Heuristic depth flags">
           <PaneHead icon={<Waves size={14} />} title="Depth flags" right={<span data-testid="desk-flags-tag" className="rounded border px-1.5 py-0.5 text-[10px] font-bold uppercase" style={{ borderColor: GOLD, color: GOLD }}>Heuristic</span>} />
           <div className="p-3">
             {!flags.length ? (
@@ -357,7 +370,6 @@ export function SurveillanceWorkspace({ engine, symbol, feed, cloud, onOpenStock
       </div>
 
       <EodDigestCard className="mt-3" input={digestInput} marketOpen={isMarketOpen(Date.now())} onDigest={setDigestShown} />
-      <RuleSandbox className="mt-3" />
 
       <div className="mt-3">
         <BacktestCurveCard

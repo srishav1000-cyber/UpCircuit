@@ -25,10 +25,10 @@ const WORD: Record<Light, string> = { green: 'Healthy', yellow: 'Watch', red: 'W
 /** Fundamentals + provenance tag: real value → [Yahoo Fundamentals], missing → [N/A]. Never estimated. */
 function Cell({ label, value, kind, label2, title }: { label: string; value: string; kind: SourceKind; label2?: string; title?: string }) {
   return (
-    <div className="rounded border border-line bg-bg px-2.5 py-2" data-testid="pm-cell" data-field={label} data-kind={kind} title={title}>
+    <div className="min-w-0 overflow-hidden rounded border border-line bg-bg px-2.5 py-2" data-testid="pm-cell" data-field={label} data-kind={kind} title={title}>
       <div className="text-[10px] font-medium uppercase tracking-wider text-muted">{label}</div>
       <div className={`num mt-0.5 text-[15px] font-semibold ${kind === 'na' ? 'text-muted' : 'text-ink'}`}>{value}</div>
-      <div className="mt-1"><DataBadge kind={kind} label={label2} /></div>
+      <div className="mt-1 flex min-w-0"><DataBadge kind={kind} label={label2} /></div>
     </div>
   );
 }

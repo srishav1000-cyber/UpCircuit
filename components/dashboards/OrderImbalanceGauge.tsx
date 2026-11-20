@@ -27,6 +27,8 @@ export interface OrderImbalanceGaugeProps {
   symbol: string;
   /** false → the live SmartAPI depth stream is not in use: render N/A, never a stale or invented book */
   live: boolean;
+  /** scripted replay book: tagged Computed Math instead of SmartAPI Live */
+  simulated?: boolean;
   /** optional rule thresholds to mark on the dial (the magnitude you set: above = +x, below = −x) */
   thresholds?: { above?: number; below?: number };
   className?: string;
@@ -36,7 +38,7 @@ export interface OrderImbalanceGaugeProps {
  * Top-5 depth order-imbalance gauge. imbalance = (Σ bid qty − Σ ask qty) ÷ (Σ bid qty + Σ ask qty) over the best five levels of each side.
  * It describes RESTING orders only — they can be cancelled before they trade — so it is a heuristic, not a prediction (and the card says so).
  */
-export function OrderImbalanceGauge({ bids, asks, symbol, live, thresholds, className = '' }: OrderImbalanceGaugeProps) {
+export function OrderImbalanceGauge({ bids, asks, symbol, live, simulated = false, thresholds, className = '' }: OrderImbalanceGaugeProps) {
   const imb = useMemo(() => (live ? topFiveImbalance(bids, asks) : null), [live, bids, asks]);
   // Raw (equal-weighted) vs Weighted (w_i = exp(−0.5·(i−1))) — a per-viewer display choice, remembered when storage allows
   const [mode, setMode] = useState<ObiMode>('raw');
@@ -52,7 +54,7 @@ export function OrderImbalanceGauge({ bids, asks, symbol, live, thresholds, clas
   return (
     <Card
       title={`Depth imbalance · ${symbol}`}
-      badges={[imb ? 'smartapi' : 'na']}
+      badges={[imb ? (simulated ? 'computed' : 'smartapi') : 'na']}
       className={className}
       right={<span data-testid="imb-tag" className="rounded-full border border-accent/50 bg-accent/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-accent">Top-5 Depth Heuristic Indicator</span>}
     >

@@ -76,6 +76,7 @@ export function SearchBox({ instruments, onSelect, inputRef, priceOf }: Props) {
         </svg>
         <input
           ref={inputRef}
+          data-testid="search-input"
           value={q}
           onChange={(e) => {
             setQ(e.target.value);

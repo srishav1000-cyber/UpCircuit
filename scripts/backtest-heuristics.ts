@@ -38,6 +38,7 @@ export interface BacktestResult {
   modes?: SweepResult['modes'];
   sweep?: Pick<SweepResult, 'axes' | 'fixed' | 'cells'>;
   sensitivity?: SweepResult['sensitivity'];
+  ablation?: SweepResult['ablation'];
   assumptions?: SweepResult['assumptions'];
 }
 
@@ -333,6 +334,24 @@ function compositeFlags(c: Cand[], surge: (i: number) => number | null, lambdaId
   }
   return out;
 }
+/** ablation: keep a candidate when `pick(hits)` holds, where hits are the corroborating signals that fire on it (confirmation BEFORE the cooldown, as in the composite) */
+export type AblationId = 'baseline' | 'obi_only' | 'volume_only' | 'spread_only' | 'obi_and_volume' | 'composite';
+const ABLATION: { id: AblationId; label: string; signals: string; pick: (h: string[]) => boolean }[] = [
+  { id: 'baseline', label: 'Resting wall / flicker alone (baseline)', signals: 'wall or add/cancel rule only', pick: () => true },
+  { id: 'obi_only', label: 'Order-book imbalance OBI_λ alone', signals: 'rule + |OBI_λ| ≥ 0.35', pick: (h) => h.includes('obi') },
+  { id: 'volume_only', label: '15-min volume surge R(t) alone', signals: 'rule + R(t) ≥ 1.8', pick: (h) => h.includes('volume') },
+  { id: 'spread_only', label: 'Spread widening alone', signals: 'rule + spread ≥ 1.5× median', pick: (h) => h.includes('spread') },
+  { id: 'obi_and_volume', label: 'OBI_λ and R(t) both', signals: 'rule + OBI_λ + R(t)', pick: (h) => h.includes('obi') && h.includes('volume') },
+  { id: 'composite', label: 'Multi-Signal Confirmed composite', signals: 'rule + any 2 of 3 signals', pick: (h) => h.length >= CONFIRM_PARAMS.MIN_SIGNALS },
+];
+function ablationFlags(c: Cand[], surge: (i: number) => number | null, lambdaIdx: number, pick: (h: string[]) => boolean): DepthFlag[] {
+  const gate = makeCooldown(), out: DepthFlag[] = [];
+  for (const x of c) {
+    const conf = confirmFlag({ obi: Number.isNaN(x.obi[lambdaIdx]) ? null : x.obi[lambdaIdx], volRatio: surge(x.i), spreadRatio: x.spreadRatio });
+    if (pick(conf.hits) && gate(x.f, x.f.ts)) out.push(x.f);
+  }
+  return out;
+}
 const cmp = (b: Metrics, c: Metrics) => ({
   precisionBefore: b.precision, precisionAfter: c.precision, fpBefore: b.fp, fpAfter: c.fp, fpReductionPct: b.fp ? round(((b.fp - c.fp) / b.fp) * 100, 1) : null,
   recallBefore: b.recall, recallAfter: c.recall, recallDelta: b.recall !== null && c.recall !== null ? round(c.recall - b.recall) : null,
@@ -344,12 +363,14 @@ export interface SweepResult {
   cells: { lambda: number; wallMultiple: number; surge: number; baseline: Metrics; composite: Metrics; fpReductionPct: number | null }[];
   modes: { baseline: Metrics; confirmed_composite: Metrics & { params: Record<string, number> }; comparison: ReturnType<typeof cmp> };
   sensitivity: { volumeCouplingOff: Metrics; volumeSignalDisabled: Metrics };
+  /** signal attribution: each corroborating signal on its own vs together, at the default thresholds */
+  ablation: { id: AblationId; label: string; signals: string; metrics: Metrics }[];
   assumptions: { volumeCoupling: VolumeCoupling; surgeWindowMin: number; spreadWindow: number; note: string };
 }
 export function runSweep(snaps: Snapshot[], episodes: Episode[], vol: Float64Array | null, volOff: Float64Array | null): SweepResult {
   const surge = makeSurgeLookup(snaps, vol), surgeOff = makeSurgeLookup(snaps, volOff);
   const cells: SweepResult['cells'] = [];
-  let headline: SweepResult['modes'] | null = null, sens: SweepResult['sensitivity'] | null = null;
+  let headline: SweepResult['modes'] | null = null, sens: SweepResult['sensitivity'] | null = null, abl: SweepResult['ablation'] | null = null;
   const defL = LAMBDAS.indexOf(CONFIRM_PARAMS.LAMBDA as (typeof LAMBDAS)[number]);
   for (const wm of WALL_MULTS) {
     const cand = collect(snaps, wm);
@@ -363,6 +384,7 @@ export function runSweep(snaps: Snapshot[], episodes: Episode[], vol: Float64Arr
     if (wm === FLAG_PARAMS.WALL_MULT) {
       const comp = metrics(compositeFlags(cand, surge, defL, { surgeMin: CONFIRM_PARAMS.SURGE_MIN }), snaps.length, episodes);
       headline = { baseline: base, confirmed_composite: { ...comp, params: { lambda: CONFIRM_PARAMS.LAMBDA, wallMultiple: wm, obiMin: CONFIRM_PARAMS.OBI_MIN, surgeMin: CONFIRM_PARAMS.SURGE_MIN, spreadMult: CONFIRM_PARAMS.SPREAD_MULT, minSignals: CONFIRM_PARAMS.MIN_SIGNALS } }, comparison: cmp(base, comp) };
+      abl = ABLATION.map((a) => ({ id: a.id, label: a.label, signals: a.signals, metrics: metrics(ablationFlags(cand, surge, defL, a.pick), snaps.length, episodes) }));
       sens = {
         volumeCouplingOff: metrics(compositeFlags(cand, surgeOff, defL, { surgeMin: CONFIRM_PARAMS.SURGE_MIN }), snaps.length, episodes),
         volumeSignalDisabled: metrics(compositeFlags(cand, surge, defL, { surgeMin: CONFIRM_PARAMS.SURGE_MIN, useVolume: false }), snaps.length, episodes),
@@ -372,7 +394,7 @@ export function runSweep(snaps: Snapshot[], episodes: Episode[], vol: Float64Arr
   return {
     axes: { lambda: [...LAMBDAS], wallMultiple: [...WALL_MULTS], surge: [...SURGES] },
     fixed: { obiMin: CONFIRM_PARAMS.OBI_MIN, spreadMult: CONFIRM_PARAMS.SPREAD_MULT, minSignals: CONFIRM_PARAMS.MIN_SIGNALS },
-    cells, modes: headline!, sensitivity: sens!,
+    cells, modes: headline!, sensitivity: sens!, ablation: abl!,
     assumptions: {
       volumeCoupling: DEFAULT_COUPLING, surgeWindowMin: SURGE_WINDOW_MIN, spreadWindow: CONFIRM_PARAMS.SPREAD_WINDOW,
       note: 'Order-book imbalance and spread are computed from the synthetic book itself. Volume is generated separately and its link to labelled episodes (volumeCoupling) is an ASSUMPTION; sensitivity.volumeCouplingOff shows the composite without it. All signals use data available at the flag time only (no look-ahead). Synthetic replay — not evidence about real-market manipulation.',
@@ -433,7 +455,7 @@ async function main(): Promise<void> {
     console.log(`\nconfirmed_composite (λ ${CONFIRM_PARAMS.LAMBDA}, wall ×${FLAG_PARAMS.WALL_MULT}, R ≥ ${CONFIRM_PARAMS.SURGE_MIN}, ≥ ${CONFIRM_PARAMS.MIN_SIGNALS} of 3 signals)`);
     console.log(`  precision ${pc(m.baseline.precision)} → ${pc(m.confirmed_composite.precision)} · FP ${m.baseline.fp} → ${m.confirmed_composite.fp} (−${m.comparison.fpReductionPct} %) · recall ${pc(m.baseline.recall)} → ${pc(m.confirmed_composite.recall)} · flags/1000 ${m.baseline.per1000} → ${m.confirmed_composite.per1000}`);
     console.log(`  if volume is NOT coupled to episodes: precision ${pc(sw.sensitivity.volumeCouplingOff.precision)}, recall ${pc(sw.sensitivity.volumeCouplingOff.recall)} · volume signal disabled: precision ${pc(sw.sensitivity.volumeSignalDisabled.precision)}, recall ${pc(sw.sensitivity.volumeSignalDisabled.recall)}`);
-    Object.assign(res, { schemaVersion: 2, modes: sw.modes, sweep: { axes: sw.axes, fixed: sw.fixed, cells: sw.cells }, sensitivity: sw.sensitivity, assumptions: sw.assumptions });
+    Object.assign(res, { schemaVersion: 2, modes: sw.modes, sweep: { axes: sw.axes, fixed: sw.fixed, cells: sw.cells }, sensitivity: sw.sensitivity, ablation: sw.ablation, assumptions: sw.assumptions });
   }
   if (out) { writeFileSync(out, JSON.stringify(res, null, 2) + '\n'); console.log(`wrote ${out}`); }
 }

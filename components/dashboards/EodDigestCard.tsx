@@ -34,7 +34,7 @@ export function EodDigestCard({ input, marketOpen, onDigest, className = '' }: {
               </tbody></table>
             </div>
             <div>
-              <h4 className="mb-1 text-[11px] font-semibold text-ink">Highest order-book imbalance · OBI<sub>λ</sub></h4>
+              <h4 className="mb-1 text-[11px] font-semibold text-ink">Highest order-book imbalance · OBI_λ</h4>
               <table className="w-full"><thead><tr><th className={th}>Symbol</th><th className={th}>OBI</th><th className={th}>At (IST)</th></tr></thead><tbody data-testid="eod-obi">
                 {d.topObi.length ? d.topObi.map((x) => <tr key={x.symbol}><td className="font-bold text-ink">{x.symbol}</td><td className="num" title={x.basis === 'flag_corroboration_only' ? 'A flag was corroborated by OBI; the reading itself is not persisted' : undefined}>{signed(x.obi)}</td><td className="num text-muted">{ist(x.at)}</td></tr>) : <tr><td colSpan={3} className="text-muted">N/A — depth snapshots are not persisted</td></tr>}
               </tbody></table>

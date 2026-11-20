@@ -69,7 +69,7 @@ export function AuditExport({ engine, symbol, feed, cloud = null, flags, profile
   }
 
   return (
-    <div className={className} data-testid="audit-export">
+    <div id="desk-sec-audit" className={className} data-testid="audit-export">
       <button type="button" onClick={run} disabled={busy} data-testid="audit-export-btn" className="inline-flex items-center gap-1.5 rounded-lg border border-white/15 bg-white/[0.04] px-3 py-1.5 text-[12px] font-semibold text-ink hover:bg-white/[0.08] disabled:opacity-50">
         <FileDown size={14} aria-hidden /> Export Surveillance Audit Pack (JSON + Printable Report)
       </button>

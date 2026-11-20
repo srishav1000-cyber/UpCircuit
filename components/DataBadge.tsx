@@ -18,14 +18,14 @@ export function DataBadge({ kind, label }: { kind: SourceKind; label?: string })
   useEffect(() => { if (kind !== 'baseline') return; setNow(Date.now()); const t = setInterval(() => setNow(Date.now()), 60_000); return () => clearInterval(t); }, [kind]);
   if (kind === 'baseline') label = label ?? (now === null ? s.label : baselineLabel(now));
   return (
-    <span data-testid={`badge-${kind}`} title={s.tip} className={`inline-flex shrink-0 items-center whitespace-nowrap rounded border px-1 py-px text-[9px] font-semibold normal-case tracking-normal ${s.cls}`}>
-      [{label ?? s.label}]
+    <span data-testid={`badge-${kind}`} title={`${label ?? s.label} — ${s.tip}`} className={`inline-flex min-w-0 max-w-full items-center whitespace-nowrap rounded border px-1.5 py-px text-[10px] font-semibold normal-case tracking-normal ${s.cls}`}>
+      <span className="min-w-0 truncate">[{label ?? s.label}]</span>
     </span>
   );
 }
 
 export function DataBadges({ kinds }: { kinds: SourceKind[] }) {
-  return <span className="inline-flex flex-wrap items-center gap-1">{kinds.map((k) => <DataBadge key={k} kind={k} />)}</span>;
+  return <span className="inline-flex min-w-0 max-w-full flex-wrap items-center gap-1">{kinds.map((k) => <DataBadge key={k} kind={k} />)}</span>;
 }
 
 /** Live-stream-derived values are SmartAPI only while the feed is live; otherwise they come from Yahoo. */

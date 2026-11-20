@@ -196,7 +196,7 @@ test('wiring: cards in the Surveillance Desk, badge in Retail + Executive/Instit
   assert.match(readFileSync('components/dashboards/Retail.tsx', 'utf8'), /<HoldingsSurveillanceBadge/);
   assert.match(readFileSync('components/PortfolioRiskEngine.tsx', 'utf8'), /Holdings Surveillance &amp; Liquidity Risk/);
   assert.match(readFileSync('components/dashboards/Executive.tsx', 'utf8'), /<PortfolioRiskEngine[^>]*selected=/);
-  assert.match(readFileSync('components/dashboards/RuleSandbox.tsx', 'utf8'), /Simulate Live Market Burst/);
+  assert.match(readFileSync('lib/sandboxState.ts', 'utf8'), /Simulate Live Market Burst/);
   const pkg = JSON.parse(readFileSync('package.json', 'utf8')); assert.match(pkg.scripts.test, /tests\/week11-final\.test\.ts/); assert.match(pkg.scripts.test, /tests\/week11-capstone\.test\.ts/);
   const rd = readFileSync('README.md', 'utf8'); assert.match(rd, /Final Defense Demo Guide/); assert.match(rd, /After-Hours Replay/);
   assert.ok(existsSync('scripts/eod-digest.ts'));

@@ -245,7 +245,7 @@ function StatusPill({ mode, conn, liveReason }: { mode: FeedMode; conn: FeedConn
 }
 
 /** Below 1400 px the three analytical actions collapse into one menu. */
-function ActionsMenu({ symbol, watchlisted, activeAlerts, onDeepResearch, onToggleWatchlist, onSetAlert, onOpenWatchlist, className = '' }: Pick<Props, 'symbol' | 'watchlisted' | 'activeAlerts' | 'onDeepResearch' | 'onToggleWatchlist' | 'onSetAlert' | 'onOpenWatchlist'> & { className?: string }) {
+function ActionsMenu({ symbol, watchlisted, activeAlerts, onDeepResearch, onToggleWatchlist, onSetAlert, onOpenWatchlist, onSwitchSymbol, className = '' }: Pick<Props, 'symbol' | 'watchlisted' | 'activeAlerts' | 'onDeepResearch' | 'onToggleWatchlist' | 'onSetAlert' | 'onOpenWatchlist'> & { onSwitchSymbol?: () => void; className?: string }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const close = useCallback(() => setOpen(false), []);
@@ -264,6 +264,7 @@ function ActionsMenu({ symbol, watchlisted, activeAlerts, onDeepResearch, onTogg
       {open && (
         <div role="menu" className="absolute right-0 top-full z-50 mt-1 w-56 rounded-md border border-line bg-panel py-1 text-[13px] shadow-2xl shadow-black/40">
           <div className="border-b border-line px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted">{symbol}</div>
+          {onSwitchSymbol && <button role="menuitem" data-testid="switch-symbol" onClick={run(onSwitchSymbol)} className="flex w-full items-center justify-between border-b border-line px-3 py-2 text-left text-ink hover:bg-line"><span>⇄ Switch Symbol…</span><kbd className="rounded border border-line px-1 text-[10px] text-muted">/</kbd></button>}
           <button role="menuitem" onClick={run(onDeepResearch)} className="block w-full px-3 py-2 text-left text-ink hover:bg-line">🔍 Deep Research</button>
           <button role="menuitem" onClick={run(onOpenWatchlist ?? onToggleWatchlist)} className="block w-full px-3 py-2 text-left text-ink hover:bg-line">{onOpenWatchlist ? '⭐ Watchlist' : watchlisted ? '⭐ In Watchlist (remove)' : '⭐ Add to Watchlist'}</button>
           <button role="menuitem" onClick={run(onSetAlert)} className="flex w-full items-center justify-between px-3 py-2 text-left text-ink hover:bg-line">
@@ -348,7 +349,13 @@ function AvatarMenu({ mode, conn, liveReason, onPlans }: { mode: FeedMode; conn:
 
 
 export function Navbar({ view, onView, persona, onPersona, onPlans, audioOn = true, onToggleAudio, circuitCount = 0, onOpenCircuitLog, demo, indices, instruments, onSelect, onOpenIndex, symbol, watchlisted, activeAlerts, onDeepResearch, onToggleWatchlist, onSetAlert, searchRef, mode, liveReason, conn, onOpenWatchlist, priceOf, onOpenImport, onAsk, showCompliance = false, onPalette }: Props) {
-  const actionProps = { symbol, watchlisted, activeAlerts, onDeepResearch, onToggleWatchlist, onSetAlert, onOpenWatchlist };
+  /** the "/" shortcut as a menu item: focus whichever search box is on screen (there is one per breakpoint row) */
+  const switchSymbol = () => {
+    const boxes = Array.from(document.querySelectorAll<HTMLInputElement>('input[data-testid="search-input"]'));
+    const el = boxes.find((b) => b.offsetParent !== null) ?? searchRef.current;
+    el?.focus(); el?.select();
+  };
+  const actionProps = { symbol, watchlisted, activeAlerts, onDeepResearch, onToggleWatchlist, onSetAlert, onOpenWatchlist, onSwitchSymbol: switchSymbol };
   return (
     <header className="relative">
       <div className="flex h-[52px] items-center gap-2 border-b border-line bg-panel px-3 md:gap-3">

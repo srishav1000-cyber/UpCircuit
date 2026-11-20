@@ -4,8 +4,10 @@ import { useState } from 'react';
 import type { CloudClient } from '@/lib/cloud';
 import { ROLE_INFO, can, opsTabs, type AppRole, type OpsTab } from '@/lib/rbac';
 import { SurveillanceRegister } from './SurveillanceRegister';
+import { OfflineSurveillance } from './dashboards/OfflineSurveillance';
 import { SurveillanceWorkspace } from './dashboards/SurveillanceWorkspace';
 import type { MarketEngine } from '@/lib/market';
+import type { Instrument } from '@/lib/types';
 import { AlertDeliveryLog } from './dashboards/AlertDeliveryLog';
 import { FeedHealthStatus, type FeedHealthStatusProps } from './dashboards/FeedHealthStatus';
 import { AlertRuleManager } from './AlertRuleManager';
@@ -15,7 +17,7 @@ import { AiSignoffs } from './AiSignoffs';
 import { PredictionBacktest } from './PredictionBacktest';
 
 type Tab = OpsTab | 'desk';
-export interface DeskProps { engine: MarketEngine; symbol: string; version?: number }
+export interface DeskProps { engine: MarketEngine; symbol: string; version?: number; instruments?: Instrument[]; onSwitchSymbol?: (symbol: string) => void }
 const LABEL: Record<Tab, string> = { desk: '◆ Surveillance desk', register: '🛡 Surveillance register', rules: '⏰ Alert rules', audit: '🔗 Audit trail', ai: '🤖 AI sign-offs', backtest: '📈 Prediction back-test', users: '👥 Users & roles' };
 
 export function ComplianceWorkspace({ cloud, userId, role, onOpenStock, backtestSymbols = [], feed, desk }: { desk?: DeskProps; feed?: Omit<FeedHealthStatusProps, 'cloud' | 'variant' | 'className'>; cloud: CloudClient | null; userId: string | null; role: AppRole | null; onOpenStock: (s: string) => void; backtestSymbols?: string[] }) {
@@ -33,13 +35,16 @@ export function ComplianceWorkspace({ cloud, userId, role, onOpenStock, backtest
       </header>
       {feed && !desk && <FeedHealthStatus {...feed} cloud={cloud} variant="panel" className="mb-4" />}
       {!cloud || !userId || !role ? (
-        <div data-testid="compliance-unavailable" className="rounded-lg border border-line bg-panel p-6 text-center text-[13px] text-muted">The governance workspace needs a Supabase account (roles, the shared register and the audit log live in the database). Demo / local accounts run without it.</div>
+        <>
+          <div data-testid="compliance-unavailable" className="rounded-lg border border-line bg-panel p-4 text-center text-[13px] text-muted">The governance tabs (shared register, alert rules, audit trail, users &amp; roles) and live feed health need a Supabase account — roles and records live in the database. Demo / local accounts get the surveillance lab below.</div>
+          <OfflineSurveillance className="mt-4" />
+        </>
       ) : (
         <>
           <nav className="mb-4 flex gap-1 overflow-x-auto border-b border-line" role="tablist" aria-label="Compliance sections">
             {tabs.map((t) => <button key={t} role="tab" aria-selected={active === t} data-testid={`tab-${t}`} onClick={() => setTab(t)} className={`whitespace-nowrap border-b-2 px-3 py-2 text-[13px] font-semibold ${active === t ? 'border-accent text-accent' : 'border-transparent text-muted hover:text-ink'}`}>{LABEL[t]}</button>)}
           </nav>
-          {active === 'desk' && desk && feed && <SurveillanceWorkspace engine={desk.engine} symbol={desk.symbol} version={desk.version} feed={feed} cloud={cloud} onOpenStock={onOpenStock} />}
+          {active === 'desk' && desk && feed && <SurveillanceWorkspace engine={desk.engine} symbol={desk.symbol} version={desk.version} feed={feed} cloud={cloud} onOpenStock={onOpenStock} instruments={desk.instruments} onSwitchSymbol={desk.onSwitchSymbol} />}
           {active === 'register' && <SurveillanceRegister cloud={cloud} role={role} onOpenStock={onOpenStock} />}
           {active === 'rules' && <><AlertRuleManager cloud={cloud} userId={userId} /><AlertDeliveryLog cloud={cloud} /></>}
           {active === 'audit' && <AuditTrail cloud={cloud} canVerify={can(role, 'audit.verify')} canExport={can(role, 'audit.export')} />}
