@@ -1,6 +1,9 @@
 'use client';
 
+import { useEffect, useMemo, useState } from 'react';
 import { Card } from './ui';
+import { useCloud } from '@/hooks/useCloud';
+import { holdingsSurveillance, REASON_TEXT, type SurvFlag, type SurvLevel } from '@/lib/analytics/portfolioSurveillance';
 import { DataBadge } from './DataBadge';
 import { fmt } from '@/lib/format';
 import { portfolioRisk, type RiskZone } from '@/lib/analytics/portfolioRisk';
@@ -25,8 +28,47 @@ function Bars({ rows, zone, testid }: { rows: { key: string; pct: number }[]; zo
   );
 }
 
+const SURV_TONE: Record<SurvLevel, string> = { high: 'border-down/40 bg-down/15 text-down', watch: 'border-warn/40 bg-warn/15 text-warn', clear: 'border-up/40 bg-up/15 text-up', na: 'border-line bg-bg text-muted' };
+
+/** "Holdings Surveillance & Liquidity Risk": holdings + MY FOCUS names vs recent heuristic flags (daemon-recorded, signed-in accounts), circuit proximity (≤ 2 %) and the visible 5-level exit depth.
+ *  Exit depth can only be checked for the stock whose order book is streaming (`selected`); every other holding reports "depth N/A" instead of a guess. A screening aid, not advice. */
+export function HoldingsSurveillanceBadge({ engine, holdings, focus = [], selected, className = '' }: { engine: MarketEngine; holdings: Holding[]; focus?: string[]; selected?: string; className?: string }) {
+  const { cloud } = useCloud();
+  const [flags, setFlags] = useState<SurvFlag[] | null>(null);
+  useEffect(() => {
+    if (!cloud) { setFlags(null); return; }
+    let on = true;
+    const load = () => cloud.listDepthFlags(60).then((r) => { if (on) setFlags(r.map((x) => ({ symbol: x.symbol, ts: Date.parse(x.flagged_at), confirmed: Array.isArray(x.confirmed_by) && x.confirmed_by.length >= 2 }))); }).catch(() => undefined);
+    void load();
+    const t = setInterval(load, 30_000);
+    return () => { on = false; clearInterval(t); };
+  }, [cloud]);
+  const list = useMemo(() => [...holdings.map((h) => ({ symbol: h.symbol, qty: h.qty, focus: focus.includes(h.symbol) })), ...focus.filter((f) => !holdings.some((h) => h.symbol === f)).map((f) => ({ symbol: f, qty: 0, focus: true }))], [holdings, focus]);
+  const sum = holdingsSurveillance({
+    holdings: list, now: Date.now(), flags: flags ?? [],
+    quotes: (s) => engine.quotes.get(s),
+    depth: (s) => (engine.depthReal && selected === s ? engine.depth : null),
+  });
+  if (!list.length) return null;
+  const shown = sum.rows.filter((r) => r.level === 'high' || r.level === 'watch').slice(0, 4);
+  return (
+    <div data-testid="holdings-surv" data-level={sum.level} className={`rounded border px-2.5 py-2 text-[11px] ${SURV_TONE[sum.level]} ${className}`}>
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="font-bold uppercase tracking-wide">Holdings Surveillance &amp; Liquidity Risk</span>
+        <span data-testid="holdings-surv-label" className="font-semibold">{sum.label}</span>
+        <span className="ml-auto text-[10px] opacity-80">{flags === null ? 'flags: sign in for daemon flags' : `flags: last 30 min`} · exit depth checked for {sum.depthChecked}/{list.length}</span>
+      </div>
+      {shown.length > 0 && (
+        <ul className="mt-1 space-y-0.5" data-testid="holdings-surv-rows">
+          {shown.map((r) => <li key={r.symbol} data-level={r.level}><b>{r.symbol}</b>{r.focus ? ' ★' : ''} — {r.reasons.map((x) => REASON_TEXT[x]).join('; ')}</li>)}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 /** Institutional risk diagnostics on the user's holdings: stock + sector HHI, β vs NIFTY 50, Sharpe, and a colour-coded concentration badge. Recomputed on every render, so it follows holdings and live prices. */
-export function PortfolioRiskEngine({ engine, holdings, className = '' }: { engine: MarketEngine; holdings: Holding[]; className?: string }) {
+export function PortfolioRiskEngine({ engine, holdings, selected, focus, className = '' }: { engine: MarketEngine; holdings: Holding[]; selected?: string; focus?: string[]; className?: string }) {
   const positions = holdings.map((h) => {
     const q = engine.quotes.get(h.symbol);
     return { symbol: h.symbol, sector: q?.sector ?? 'Others', value: h.qty * (q?.ltp ?? h.avg) };
@@ -37,6 +79,7 @@ export function PortfolioRiskEngine({ engine, holdings, className = '' }: { engi
   if (!r.stocks.length) {
     return (
       <Card title="Portfolio risk engine · HHI, β & Sharpe" className={className}>
+        <HoldingsSurveillanceBadge engine={engine} holdings={holdings} focus={focus} selected={selected} className="mb-2" />
         <p className="text-[11px] text-muted" data-testid="risk-engine-empty">Import or add holdings to measure stock and sector concentration, beta vs NIFTY 50 and Sharpe.</p>
       </Card>
     );
@@ -51,6 +94,7 @@ export function PortfolioRiskEngine({ engine, holdings, className = '' }: { engi
       right={<span data-testid="risk-badge" data-zone={r.badge.zone} className={`num rounded border px-1.5 py-0.5 text-[10px] font-bold tracking-wide ${BADGE[r.badge.zone]}`}>{r.badge.label}</span>}
     >
       <div data-testid="risk-engine" className="space-y-3">
+        <HoldingsSurveillanceBadge engine={engine} holdings={holdings} focus={focus} selected={selected} />
         <div className="grid gap-4 md:grid-cols-2">
           <div>
             <div className="flex items-baseline gap-2">

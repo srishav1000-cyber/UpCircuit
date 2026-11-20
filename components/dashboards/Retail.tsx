@@ -9,6 +9,7 @@ import { fmt, fmtInt, fmtPct, fmtSigned, fmtSignedRupee, tone } from '@/lib/form
 import { cumulativeReturnPct, dividendForecast, portfolioDiagnostics, portfolioSummary, portfolioValueSeries, rsi14 } from '@/lib/analytics';
 import { IST_OFFSET } from '@/lib/market';
 import { ExportReport } from '../ExportReport';
+import { HoldingsSurveillanceBadge } from '../PortfolioRiskEngine';
 import type { DashboardProps } from './types';
 
 const WINDOWS = [
@@ -92,6 +93,7 @@ export function RetailDashboard({ engine, quote, closes1D, holdings, favorites, 
         <ExportReport symbol={quote.symbol} engine={engine} holdings={holdings} mode={mode} />
         <span className="text-[11px] text-muted">Report covers {quote.symbol}</span>
       </div>
+      <HoldingsSurveillanceBadge engine={engine} holdings={holdings} focus={favorites} selected={quote.symbol} className={WIDE} />
       <div className={`grid grid-cols-2 gap-2 xl:grid-cols-3 ${WIDE}`}>
         <Stat label="Current value" value={`₹${fmt(s.current)}`} sub={`Invested ₹${fmt(s.invested)}`} />
         <Stat label="Total P&L" value={fmtSignedRupee(s.pnl)} valueClass={tone(s.pnl)} sub={fmtPct(s.pnlPct)} hint="Σ(LTP × Qty) − Invested" />

@@ -9,6 +9,7 @@ import type { DaemonBeat } from './feedHealth';
 import type { QuietHours } from './quietHours';
 import type { ExitRisk } from './analytics/slippage';
 import type { DepthLevel } from './types';
+import type { EodDigest } from './eodDigest';
 
 export const DOSSIER_SCHEMA = 'upcircuit.surveillance-audit/1';
 export const DOSSIER_FRAMING = 'White-box transparency record: the rule logic, parameters and formulas below are the ones that produced the figures shown. UpCircuit is an analytics and educational telemetry tool, not a SEBI-registered Investment Adviser or Research Analyst; nothing here is investment advice. Heuristic flags are patterns in resting orders, never proof of manipulation or of anyone’s intent.';
@@ -29,6 +30,8 @@ export interface DossierInput {
   volume: { cumulative: number | null; expectedByNow: number | null; multiple: number | null; surge15: number | null; profileSessions: number | null };
   exitRisk: ExitRisk | null;
   flags: (Pick<DepthFlag, 'symbol' | 'kind' | 'side' | 'severity' | 'ts' | 'detail' | 'label'> & { confirmation?: { confirmed: boolean; hits: string[] } | null; source?: string })[];
+  /** the Daily Market Surveillance Digest as shown on the desk (live data or the labelled replay); null = not available */
+  digest?: EodDigest | null;
   backtest: { precision?: number | null; recall?: Record<string, { rate?: number | null } | undefined>; data?: { snapshots?: number }; modes?: unknown; sensitivity?: unknown; assumptions?: unknown; config?: Record<string, unknown> } | null;
 }
 
@@ -93,6 +96,7 @@ export interface AuditDossier {
     flags: { symbol: string; pattern: string; side: string; severity: string; at: string; tag: string; corroboratedBy: string[]; source: string | null; detail: string; label: string }[];
     heuristicSummary: { total: number; confirmed: number; baseline: number };
   };
+  dailyDigest: EodDigest | null;
   methodology: {
     rules: { wallDetection: string; addCancelDetection: string; confirmation: string; cooldown: string };
     parameters: { flag: typeof FLAG_PARAMS; confirmation: typeof CONFIRM_PARAMS };
@@ -154,6 +158,7 @@ export function buildDossier(i: DossierInput): AuditDossier {
       circuitLock: { formula: `warn if LTP is within ${1.5}% of the upper or lower circuit price, or if the order-book side an exit would consume holds < 25% of its session median depth`, risk: i.exitRisk },
       flags, heuristicSummary: { total: flags.length, confirmed: flags.filter((f) => f.tag === 'Multi-Signal Confirmed').length, baseline: flags.filter((f) => f.tag === 'Baseline Flag').length },
     },
+    dailyDigest: i.digest ?? null,
     methodology: {
       rules: {
         wallDetection: `a level holding ≥ ${FLAG_PARAMS.WALL_MULT}× the median of the other top-5 levels on its side, ≥ ${FLAG_PARAMS.WALL_MIN_QTY} shares and ≥ ${Math.round(FLAG_PARAMS.WALL_MIN_SHARE * 100)}% of that side's top-5 quantity ("elevated" at ≥ ${FLAG_PARAMS.WALL_MULT_HIGH}×)`,
@@ -238,7 +243,13 @@ ${tbl(['Level', 'Weight wᵢ', 'Bid qty', 'Ask qty'], s.orderBookImbalance.level
 <h3>Heuristic flags — ${s.heuristicSummary.confirmed} Multi-Signal Confirmed · ${s.heuristicSummary.baseline} Baseline</h3>
 ${tbl(['At', 'Symbol', 'Pattern', 'Side', 'Severity', 'Tag', 'Corroborated by', 'Source'], s.flags.map((f) => [f.at, f.symbol, f.pattern, f.side, f.severity, f.tag, f.corroboratedBy.join(' + ') || '—', f.source]))}
 <p class="muted">${esc(m.flagDisclaimer)}</p>
-<h2>6 · White-box methodology</h2>
+<h2>6 · Daily market surveillance digest</h2>
+${d.dailyDigest ? `<p>${esc(d.dailyDigest.banner)} · ${esc(d.dailyDigest.date)}</p>
+${tbl(['Symbol', 'Peak R(t)', 'At'], d.dailyDigest.topSurges.map((x) => [x.symbol, `${x.peakRt}×`, x.at]))}
+${tbl(['Symbol', 'OBI_λ', 'At', 'Basis'], d.dailyDigest.topObi.map((x) => [x.symbol, x.obi, x.at, x.basis === 'reading' ? 'reading' : 'flag corroboration only']))}
+${tbl(['Symbol', 'Circuit', 'Price', 'At'], d.dailyDigest.circuitTouches.map((x) => [x.symbol, x.direction, x.price, x.at]))}
+<p>Flags: ${d.dailyDigest.suppression.total} total · ${d.dailyDigest.suppression.confirmed} Multi-Signal Confirmed · ${d.dailyDigest.suppression.baselineOnly} Baseline-only · suppression ratio ${na(d.dailyDigest.suppression.suppressedPct === null ? null : `${d.dailyDigest.suppression.suppressedPct} %`)}</p><p class="muted">${esc(d.dailyDigest.suppression.note)}</p>` : '<p>N/A</p>'}
+<h2>7 · White-box methodology</h2>
 <ul><li><b>Wall:</b> ${esc(m.rules.wallDetection)}</li><li><b>Add/cancel:</b> ${esc(m.rules.addCancelDetection)}</li><li><b>Confirmation:</b> ${esc(m.rules.confirmation)}</li><li><b>Cooldown:</b> ${esc(m.rules.cooldown)}</li></ul>
 ${tbl(['Formula', 'Definition'], Object.entries(m.formulas))}
 <p><b>Backtest.</b> ${esc(m.backtest.description)} Baseline precision ${na(m.backtest.precision)}, recall spoof_wall ${na(m.backtest.recall.spoof_wall)} / flicker ${na(m.backtest.recall.flicker)} over ${na(m.backtest.snapshots)} snapshots; the full baseline-vs-confirmed comparison, sensitivity runs and assumptions are in the JSON file.</p>

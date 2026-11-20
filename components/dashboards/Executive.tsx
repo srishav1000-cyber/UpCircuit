@@ -45,7 +45,7 @@ function useSentiment(): Sentiment | null | 'error' {
   return s;
 }
 
-export function ExecutiveDashboard({ engine, holdings, onSelect }: DashboardProps) {
+export function ExecutiveDashboard({ engine, holdings, favorites, quote, onSelect }: DashboardProps) {
   const sentiment = useSentiment();
   const all = Array.from(engine.quotes.values());
   const b = breadth(all);
@@ -138,7 +138,7 @@ export function ExecutiveDashboard({ engine, holdings, onSelect }: DashboardProp
         <Stat label="Diversification index" value={diversification.toFixed(2)} valueClass={diversification > 0.8 ? 'text-up' : diversification > 0.6 ? 'text-ink' : 'text-down'} sub="1 − HHI/10 000" />
       </div>
 
-      <PortfolioRiskEngine engine={engine} holdings={holdings} className={WIDE} />
+      <PortfolioRiskEngine engine={engine} holdings={holdings} focus={favorites} selected={quote.symbol} className={WIDE} />
       <RiskPanel engine={engine} holdings={holdings} />
       <VarCard engine={engine} holdings={holdings} className={WIDE} />
       <DrawdownCard engine={engine} holdings={holdings} className={WIDE} />

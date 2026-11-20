@@ -10,13 +10,14 @@ import { buildDossier, dossierFileName, dossierToHtml, sealDossier, type Dossier
 import { slippageReport, defaultQty } from '@/lib/analytics/slippage';
 import { expectedVolume, type IntradayProfile } from '@/lib/volumeBaseline';
 import type { DepthFlag } from '@/lib/heuristicFlags';
+import type { EodDigest } from '@/lib/eodDigest';
 import type { FeedHealthStatusProps } from './FeedHealthStatus';
 
 type FlagIn = DossierInput['flags'][number];
 export interface AuditExportProps {
   engine: MarketEngine; symbol: string; feed: FeedHealthStatusProps; cloud?: CloudClient | null;
   flags: (DepthFlag & { source?: string })[];
-  profile: IntradayProfile | null; surge15: number | null; className?: string;
+  profile: IntradayProfile | null; surge15: number | null; digest?: EodDigest | null; className?: string;
 }
 
 function download(name: string, text: string, type: string) {
@@ -25,7 +26,7 @@ function download(name: string, text: string, type: string) {
   setTimeout(() => URL.revokeObjectURL(url), 2000);
 }
 
-export function AuditExport({ engine, symbol, feed, cloud = null, flags, profile, surge15, className = '' }: AuditExportProps) {
+export function AuditExport({ engine, symbol, feed, cloud = null, flags, profile, surge15, digest = null, className = '' }: AuditExportProps) {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
 
@@ -53,7 +54,7 @@ export function AuditExport({ engine, symbol, feed, cloud = null, flags, profile
         volume: { cumulative: q?.volume ?? null, expectedByNow: ev?.expected ?? null, multiple: ev && q && q.volume > 0 ? q.volume / ev.expected : null, surge15, profileSessions: profile?.sessions ?? null },
         exitRisk: rep && rep.status === 'ok' ? rep.exit : null,
         flags: flags.map((f): FlagIn => ({ symbol: f.symbol, kind: f.kind, side: f.side, severity: f.severity, ts: f.ts, detail: f.detail, label: f.label, confirmation: f.confirmation ?? null, source: f.source })),
-        backtest: bt,
+        backtest: bt, digest,
       };
       const sealed = await sealDossier(buildDossier(input));
       download(dossierFileName(now), JSON.stringify(sealed, null, 2), 'application/json');

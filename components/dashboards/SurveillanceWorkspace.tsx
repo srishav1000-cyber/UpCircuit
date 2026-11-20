@@ -13,6 +13,13 @@ import { AlertDeliveryLog } from './AlertDeliveryLog';
 import { SlippageCard } from './SlippageCard';
 import { ThresholdExplorer, type ExplorerData } from './ThresholdExplorer';
 import { AuditExport } from './AuditExport';
+import { EodDigestCard } from './EodDigestCard';
+import { RuleSandbox } from './RuleSandbox';
+import { topFiveImbalance, obiValue } from '@/lib/depthImbalance';
+import { isMarketOpen } from '@/lib/market';
+import { istDate } from '@/lib/auditDossier';
+import type { DigestInput, EodDigest } from '@/lib/eodDigest';
+import type { CircuitEvent } from '@/lib/cloud';
 
 // Dark slate canvas with gold (attention) and teal (healthy / live) accents; everything else uses the theme tokens.
 const GOLD = '#d4a64a';
@@ -131,6 +138,10 @@ export function SurveillanceWorkspace({ engine, symbol, feed, cloud, onOpenStock
   const volWin = useRef(new VolumeWindow());
   const profileRef = useRef<IntradayProfile | null>(null);
   const symRef = useRef(symbol);
+  /* the day's observations for the digest: peak R(t) / OBI of the selected stock and first circuit touches seen in this browser session, plus today's register rows */
+  const peaks = useRef({ surge: new Map<string, { symbol: string; rt: number; at: number }>(), obi: new Map<string, { symbol: string; value: number; at: number }>(), touch: new Map<string, DigestInput['circuit'][number]>(), samples: 0 });
+  const [register, setRegister] = useState<CircuitEvent[]>([]);
+  const [digestShown, setDigestShown] = useState<EodDigest | null>(null);
 
   /* the selected stock's intraday profile feeds R(t) for the multi-signal confirmation */
   useEffect(() => {
@@ -167,16 +178,37 @@ export function SurveillanceWorkspace({ engine, symbol, feed, cloud, onOpenStock
     return () => { on = false; clearInterval(t); };
   }, [cloud]);
 
+  /* today's circuit register rows (refreshed every minute) */
+  useEffect(() => {
+    if (!cloud) return;
+    let on = true;
+    const load = () => cloud.listRegister(100).then((r) => { if (on) setRegister(r); }).catch(() => undefined);
+    void load();
+    const t = setInterval(load, 60_000);
+    return () => { on = false; clearInterval(t); };
+  }, [cloud]);
+
   /* browser-side detection on the selected stock's live depth, sampled twice a second (the daemon sees every tick; this view sees a sample) */
   useEffect(() => {
     if (symRef.current !== symbol) { tracker.current.reset(); volWin.current.clear(); symRef.current = symbol; setLive([]); }
     const t = setInterval(() => {
       force((n) => (n + 1) % 1_000_000);
       const q = engine.quotes.get(symbol);
+      if (isMarketOpen(Date.now())) {                                  // circuit touches across every quote the terminal holds (first touch of the day kept)
+        for (const x of engine.quotes.values()) {
+          const dir = x.upperCircuit > 0 && x.ltp >= x.upperCircuit ? 'UPPER' : x.lowerCircuit > 0 && x.ltp > 0 && x.ltp <= x.lowerCircuit ? 'LOWER' : null;
+          if (dir && !peaks.current.touch.has(`${x.symbol}|${dir}`)) peaks.current.touch.set(`${x.symbol}|${dir}`, { symbol: x.symbol, direction: dir, price: x.ltp, at: Date.now(), source: 'session' });
+        }
+      }
       if (!engine.depthReal || !q || !(q.ltp > 0)) return;
       const nowMs = Date.now();
       if (q.volume > 0) volWin.current.push(symbol, nowMs, q.volume);
-      const fresh = tracker.current.observe(symbol, engine.depth, q.ltp, nowMs, { volRatio: q.volume > 0 ? volWin.current.ratio(symbol, profileRef.current, nowMs, q.volume) : null });
+      const rt = q.volume > 0 ? volWin.current.ratio(symbol, profileRef.current, nowMs, q.volume) : null;
+      const imb = topFiveImbalance(engine.depth.bids, engine.depth.asks);
+      peaks.current.samples++;
+      if (rt !== null && rt > (peaks.current.surge.get(symbol)?.rt ?? -1)) peaks.current.surge.set(symbol, { symbol, rt, at: nowMs });
+      if (imb) { const v = obiValue(imb, 'weighted'); if (Math.abs(v) > Math.abs(peaks.current.obi.get(symbol)?.value ?? -1)) peaks.current.obi.set(symbol, { symbol, value: v, at: nowMs }); }
+      const fresh = tracker.current.observe(symbol, engine.depth, q.ltp, nowMs, { volRatio: rt });
       if (fresh.length) setLive((cur) => [...fresh.map((f) => ({ ...f, source: 'browser' as const })), ...cur].slice(0, 20));
     }, 500);
     return () => clearInterval(t);
@@ -201,6 +233,15 @@ export function SurveillanceWorkspace({ engine, symbol, feed, cloud, onOpenStock
     return rows.filter((f) => { const k = `${f.key}|${Math.floor(f.ts / 60_000)}`; if (seen.has(k)) return false; seen.add(k); return true; }).slice(0, 12);
   }, [live, stored]);
 
+  const digestInput: DigestInput | null = (() => {
+    const today = istDate(Date.now()), pk = peaks.current;
+    const fl = flags.filter((f) => istDate(f.ts) === today).map((f) => ({ symbol: f.symbol, kind: f.kind, side: f.side, at: f.ts, confirmed: !!f.confirmation?.confirmed, hits: f.confirmation?.hits ?? [], obi: f.confirmation?.obi ?? null, volRatio: f.confirmation?.volRatio ?? null, origin: f.source }));
+    const reg = register.filter((c) => c.trade_date === today).map((c) => ({ symbol: c.symbol, direction: c.direction, price: c.price, at: Date.parse(c.detected_at), source: c.source }));
+    const circuit = [...reg, ...pk.touch.values()];
+    if (!fl.length && !pk.surge.size && !pk.obi.size && !circuit.length) return null;
+    return { date: today, source: 'live', flags: fl, surges: [...pk.surge.values()], obi: [...pk.obi.values()], circuit, ticks: pk.samples };
+  })();
+
   const onSel = useCallback((s: string) => onOpenStock(s), [onOpenStock]);
 
   return (
@@ -214,7 +255,7 @@ export function SurveillanceWorkspace({ engine, symbol, feed, cloud, onOpenStock
       </header>
 
       <FeedHealthStatus {...feed} cloud={cloud} variant="panel" className="mb-3" />
-      <AuditExport engine={engine} symbol={symbol} feed={feed} cloud={cloud} flags={flags} profile={profileRef.current} surge15={volWin.current.ratio(symbol, profileRef.current, Date.now(), engine.quotes.get(symbol)?.volume ?? 0)} className="mb-3" />
+      <AuditExport engine={engine} symbol={symbol} feed={feed} cloud={cloud} digest={digestShown} flags={flags} profile={profileRef.current} surge15={volWin.current.ratio(symbol, profileRef.current, Date.now(), engine.quotes.get(symbol)?.volume ?? 0)} className="mb-3" />
 
       <div className="grid gap-3 lg:grid-cols-2">
         {/* circuit proximity */}
@@ -314,6 +355,9 @@ export function SurveillanceWorkspace({ engine, symbol, feed, cloud, onOpenStock
           </div>
         </section>
       </div>
+
+      <EodDigestCard className="mt-3" input={digestInput} marketOpen={isMarketOpen(Date.now())} onDigest={setDigestShown} />
+      <RuleSandbox className="mt-3" />
 
       <div className="mt-3">
         <BacktestCurveCard

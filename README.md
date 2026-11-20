@@ -134,6 +134,25 @@ Without Docker: `npm run daemon`. On Render, deploy as a Docker web service from
 - **Surveillance Audit Pack.** Button in the Surveillance Desk downloads `upcircuit-surveillance-audit-<YYYY-MM-DD>.json` (SHA-256 sealed, secrets redacted) and opens a printable report. It is a white-box record of rules and readings, not investment advice and not a statement of regulatory compliance.
 - Optional: `DEPTH_CONFIRM=1` on the daemon stores `depth_flags.confirmed_by`; apply `docs/WEEK11_CAPSTONE_SCHEMA.sql` (or the root `schema.sql`) first.
 
+## Final Defense Demo Guide (Market Open vs. After-Hours Replay)
+
+Every feature can be verified at any hour; the table says what each one shows live (09:15–15:30 IST, Mon–Fri) and what it shows otherwise. Nothing below needs a paid service.
+
+| Feature (Surveillance Desk unless stated) | Market open | After hours / weekend |
+|---|---|---|
+| **Daily Market Surveillance Digest** | This session's peak R(t), OBI, circuit touches, flags, plus the day's persisted circuit register / daemon flags | Same data if any was persisted; otherwise the labelled **REPLAY** digest. "Show replay digest" forces it |
+| **Alert & rule sandbox → "Simulate Live Market Burst"** | Works identically (own private state, never touches live quotes or stored records) | Same — press it, pick RELIANCE / TCS / INFY, watch R(t), the OBI gauge, `Baseline Flag` vs `Multi-Signal Confirmed`, and the *simulated* push + chime |
+| **Holdings Surveillance & Liquidity Risk** (Retail lens; Executive and Institutional lenses via the risk engine) | Holdings + MY FOCUS vs flags (30 min), circuit proximity ≤ 2 %, visible exit depth for the stock being viewed | Circuit proximity from the last quotes; exit depth and flags show N/A rather than guesses |
+| **Slippage & circuit-lock exit risk** | VWAP fill over live 5-level depth | N/A with the reason |
+| **Threshold & Sensitivity Explorer**, backtest | Same (precomputed `public/backtest-heuristics.json`) | Same |
+| **Export Surveillance Audit Pack** | JSON (SHA-256 sealed) + printable report incl. the digest | Same; depth-derived fields N/A |
+
+**3-minute walkthrough.** (1) Open the Surveillance Desk → *Simulate Live Market Burst* at 4× speed. At ≈ 5 min of replay time R(t) becomes available; at 8 min TCS shows a **Baseline** wall (OBI only, normal volume — suppressed); at 10 min RELIANCE shows a **Multi-Signal Confirmed** wall (OBI + volume) and a simulated push; at 21 min INFY touches the upper circuit. (2) Scroll to the Digest — the same events are summarised with the suppression ratio. (3) Open Retail → the holdings badge. (4) *Export Surveillance Audit Pack*.
+
+**CLI.** `npm run eod:digest -- --offline` prints the deterministic replay digest; with `NEXT_PUBLIC_SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` in the environment (never committed) and a date that has persisted data, `npm run eod:digest -- --date 2026-11-18 --out digest.json` summarises that day from `market_ticks`, `circuit_events` and `depth_flags`.
+
+**Honest limits.** The replay is synthetic and labelled so everywhere. The suppression ratio is the share of single-rule flags the filter would not alert on — a filtering ratio, not a measured false-positive rate (the labelled figure is the synthetic backtest's). Order-book depth is not persisted, so a past day's digest has no OBI readings (flags that OBI corroborated are still listed). Without a median volume profile, R(t) in the digest uses the session-average pace and says so. The sandbox's "push" is a local chime and an on-screen row; nothing is sent to any device. Heuristic flags are patterns in resting orders, not proof of manipulation, and nothing here is investment advice.
+
 ## Verification
 
 ```bash
