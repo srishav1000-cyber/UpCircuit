@@ -268,7 +268,7 @@ export function SurveillanceWorkspace({ engine, symbol, feed, cloud, onOpenStock
       <div id="desk-sec-daemon"><FeedHealthStatus {...feed} cloud={cloud} variant="panel" className="mb-3" /></div>
       <AuditExport engine={engine} symbol={symbol} feed={feed} cloud={cloud} digest={digestShown} flags={flags} profile={profileRef.current} surge15={volWin.current.ratio(symbol, profileRef.current, Date.now(), engine.quotes.get(symbol)?.volume ?? 0)} className="mb-3" />
 
-      <RuleSandbox className="mb-3" />
+      <RuleSandbox className="mb-3" symbol={symbol} />
 
       <div className="grid gap-3 lg:grid-cols-2">
         {/* circuit proximity */}

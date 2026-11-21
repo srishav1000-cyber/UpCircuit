@@ -155,6 +155,31 @@ Every feature can be verified at any hour; the table says what each one shows li
 
 **Honest limits.** The replay is synthetic and labelled so everywhere. The suppression ratio is the share of single-rule flags the filter would not alert on — a filtering ratio, not a measured false-positive rate (the labelled figure is the synthetic backtest's). Order-book depth is not persisted, so a past day's digest has no OBI readings (flags that OBI corroborated are still listed). Without a median volume profile, R(t) in the digest uses the session-average pace and says so. The sandbox's "push" is a local chime and an on-screen row; nothing is sent to any device. Heuristic flags are patterns in resting orders, not proof of manipulation, and nothing here is investment advice.
 
+## Market DVR — Post-Market Historical Session Replay
+
+After the close (or any time), replay one **actual recorded NSE session (09:15–15:30 IST, 375 one-minute bars)** from *Surveillance Desk → Alert & rule sandbox → "Historical Session Replay (09:15–15:30 IST)"* (the toggle next to "Synthetic Burst Demo", which is unchanged and still the default). The Compliance tab shows the same lab offline.
+
+**API:** `GET /api/market/session-replay?symbol=RELIANCE&date=YYYY-MM-DD[&band=5|10|20][&synthetic=1]` — `date` defaults to the most recent *completed* weekday session (today only after 15:30 IST; NSE holidays are not modelled — the API reports the dates Yahoo actually carries when one is missing). Read-only, `no-store`, rate-limited; it never writes ticks and never touches live quotes.
+
+**Source order & provenance badge** (always shown, e.g. `[Yahoo 1m Intraday Bars]`):
+1. `[Supabase Recorded Ticks]` — persisted `market_ticks` for that symbol + IST date, only if the store is configured, the caller is authorised, and the rows cover ≥ 30 distinct minutes (per-minute OHLC from LTP, volume from cumulative-volume deltas; minutes with no tick are absent).
+2. `[Yahoo 1m Intraday Bars]` — real 1-minute bars (`interval=1m&range=5d`; Yahoo keeps ~7 days, hence the last-5-trading-days picker).
+3. `[Synthetic Fallback]` — a deterministic *generated* session, **only** when you click "Load labelled synthetic demo session" (`synthetic=1`) after both sources failed (e.g. offline tests); an amber banner says it is not market data.
+
+**Frames** (`lib/sessionReplay.ts`, pure): IST time, OHLCV, running cumulative VWAP (typical price × volume), Opening Range (09:15–09:30) high/low with `forming / inside / above / below` state, 15-minute volume surge R(t) via `lib/volumeBaseline.ts` (`windowSurge`), and distance to the circuit limit (≤ 2 % flagged).
+
+**Key Session Moments Log:** exact IST timestamps of Opening Range breakout/breakdown (first of each), R(t) ≥ 1.8 surges (one per excursion), VWAP crosses, and circuit-band approach/touch; click a row to jump the timeline there.
+
+**Playback:** Play/Pause, Reset, scrubber (09:15–15:30), speeds `1× 2× 4× 8× 10×` (multiples of real time — 1× is 6 h 15 min per day) and **5-Min Express** (full day in 300 s = 75×). A minute's bar appears once that minute has closed. All playback state lives in the component; nothing is written anywhere.
+
+**Honest limits**
+- L2 depth heuristics (OBI, walls, add/cancel, spread) need live/recorded depth snapshots; on OHLCV-only replays they are **N/A** and never inferred from candles.
+- R(t) uses the session-average pace of that day's own volume unless a 20-session median profile is supplied (the notes line says which) — coarser than live R(t).
+- Circuit proximity is **N/A** unless a previous close exists (prior Yahoo session) **and** you choose the stock's price band (Yahoo carries no band; many large caps have none).
+- Holidays are not modelled; a missing Yahoo session returns a clear error rather than a substitute.
+
+Tests: `npm run test:replay` (`tests/week11-replay.test.ts`, also part of `npm test`).
+
 ## Verification
 
 ```bash

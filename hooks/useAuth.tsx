@@ -38,7 +38,7 @@ interface Ctx {
   update: (patch: { role?: Role; plan?: PlanId }) => Promise<AuthResult>;
 }
 
-const AuthCtx = createContext<Ctx | null>(null);
+export const AuthCtx = createContext<Ctx | null>(null);
 const REQUIRED = process.env.NEXT_PUBLIC_AUTH_REQUIRED !== 'false';
 const GUEST: User = { id: 'guest', email: 'guest@local', role: 'retail', plan: 'full' };
 

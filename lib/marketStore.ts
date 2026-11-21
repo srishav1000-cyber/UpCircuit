@@ -65,6 +65,18 @@ export async function lastTicks(symbol: string, date: string, n: number): Promis
   return (r ?? []).map(toRow).reverse();
 }
 
+/** One symbol's ticks on `date` (ascending), capped at `cap` rows (paged 1 000 at a time); null when the store is unreachable. */
+export async function symbolDayTicks(symbol: string, date: string, cap = 50_000): Promise<TickRow[] | null> {
+  const rows: TickRow[] = [];
+  for (let off = 0; off < cap; off += 1000) {
+    const page = (await get(`market_ticks?select=symbol,ltp,high,low,volume,ts&symbol=eq.${encodeURIComponent(symbol)}&trading_date=eq.${date}&order=ts.asc&limit=1000&offset=${off}`)) as DbRow[] | null;
+    if (!page) return off === 0 ? null : rows;
+    rows.push(...page.map(toRow));
+    if (page.length < 1000) break;
+  }
+  return rows;
+}
+
 /** Every tick of `date`, symbol → time order, capped at `cap` rows (paged 1 000 at a time). */
 export async function dayTicks(date: string, cap = 100_000): Promise<{ rows: TickRow[]; truncated: boolean } | null> {
   const rows: TickRow[] = [];

@@ -10,12 +10,16 @@ import { flagTag, type DepthFlag } from '@/lib/heuristicFlags';
 import { sandboxReduce, sandboxButtonLabel } from '@/lib/sandboxState';
 import { playChime } from '@/lib/audioAlerts';
 import { unlockAudio } from '@/lib/chime';
+import { SessionReplayPlayer } from './SessionReplayPlayer';
+
+export type SandboxMode = 'synthetic' | 'historical';
 
 const GOLD = '#d4a64a', TEAL = '#2dd4bf';
 const ist = (ms: number) => new Date(ms).toLocaleTimeString('en-GB', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
 const SPEEDS = [{ k: '1×', ms: 400 }, { k: '4×', ms: 100 }, { k: '16×', ms: 25 }] as const;
 
-export function RuleSandbox({ className = '' }: { className?: string }) {
+export function RuleSandbox({ className = '', symbol = 'RELIANCE' }: { className?: string; symbol?: string }) {
+  const [mode, setMode] = useState<SandboxMode>('synthetic');
   const run = useRef<ReplayRunner | null>(null);
   if (!run.current) run.current = new ReplayRunner();
   const [, bump] = useState(0);
@@ -43,7 +47,7 @@ export function RuleSandbox({ className = '' }: { className?: string }) {
     if (r.done) dispatch('finish');
     bump((n) => (n + 1) % 1_000_000);
   }, []);
-  useEffect(() => { if (!playing) return; const t = setInterval(tick, speed.ms); return () => clearInterval(t); }, [playing, speed, tick]);
+  useEffect(() => { if (!playing || mode !== 'synthetic') return; const t = setInterval(tick, speed.ms); return () => clearInterval(t); }, [playing, speed, tick, mode]);
 
   const r = run.current, cur = last.current.get(pick) ?? null, started = r.readings.length > 0;
   const reset = () => { dispatch('reset'); r.reset(); last.current.clear(); setPick('RELIANCE'); bump((n) => n + 1); };
@@ -57,8 +61,14 @@ export function RuleSandbox({ className = '' }: { className?: string }) {
     <section id="desk-sec-sandbox" className={`rounded-xl border border-white/10 bg-white/[0.03] ${className}`} data-testid="rule-sandbox" data-phase={phase} aria-label="Live alert and rule sandbox">
       <header className="flex flex-wrap items-center gap-2 border-b border-white/10 px-3 py-2">
         <FlaskConical size={14} aria-hidden /> <h3 className="text-[13px] font-bold text-ink">Alert &amp; rule sandbox · replay simulator</h3>
-        <span className="rounded border px-1.5 text-[10px] font-bold uppercase" style={{ borderColor: GOLD, color: GOLD }}>Simulation</span>
+        <span className="rounded border px-1.5 text-[10px] font-bold uppercase" style={{ borderColor: mode === 'synthetic' ? GOLD : TEAL, color: mode === 'synthetic' ? GOLD : TEAL }}>{mode === 'synthetic' ? 'Simulation' : 'Recorded session'}</span>
+        <div role="tablist" aria-label="Replay mode" className="ml-auto flex gap-1">
+          {([['synthetic', 'Synthetic Burst Demo'], ['historical', 'Historical Session Replay (09:15–15:30 IST)']] as const).map(([k, label]) => (
+            <button key={k} type="button" role="tab" aria-selected={mode === k} data-testid={`sandbox-mode-${k}`} onClick={() => { if (k === 'historical' && playing) dispatch('toggle'); setMode(k); }} className={`rounded border px-2 py-1 text-[11px] font-semibold ${mode === k ? 'border-white/50 bg-white/[0.1] text-ink' : 'border-white/15 text-muted hover:bg-white/[0.06]'}`}>{label}</button>
+          ))}
+        </div>
       </header>
+      {mode === 'historical' ? <SessionReplayPlayer symbol={symbol} /> : (
       <div className="p-3 text-[12px]">
         <p data-testid="sandbox-disclosure" className="mb-2 text-[11px] text-muted">{REPLAY_DISCLOSURE}</p>
         <div className="flex flex-wrap items-center gap-2">
@@ -107,6 +117,7 @@ export function RuleSandbox({ className = '' }: { className?: string }) {
           {alerts.length ? alerts.map((a, i) => <li key={`${a.t}-${a.kind}-${i}`} data-testid="sandbox-alert" data-kind={a.kind} className="text-[11px]"><span className="num text-muted">{ist(a.t)}</span> <span className="rounded bg-white/10 px-1 text-[9px] font-bold uppercase">simulated push</span> {a.text}</li>) : <li className="text-[11px] text-muted">Rules: R(t) ≥ {SIM_RULES.surge}×, |OBI| ≥ {SIM_RULES.obi}, circuit within 1.5 %, any confirmed flag. Press the button to start.</li>}
         </ul>
       </div>
+      )}
     </section>
   );
 }
